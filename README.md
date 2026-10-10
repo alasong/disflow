@@ -62,8 +62,8 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 226 passed（零第三方依赖）
-python3 scripts/mutation_check.py                 # 变异测试：19/19（验证测试真的有牙）
+python3 -m unittest discover -s tests -t tests    # 237 passed（零第三方依赖）
+python3 scripts/mutation_check.py                 # 变异测试：24/24（验证测试真的有牙）
 ```
 
 ## 结构

@@ -228,6 +228,10 @@ class Engine:
             evidence["scope"] = scope
             evidence["size"] = size
             evidence["budget"] = budget
+            # 空洞通过的门（没东西可验）：记下来，否则“门全过”会被读成“门都验了”
+            evidence["vacuous"] = gates.vacuous_reasons(
+                acceptance=item.get("acceptance"), touch_plan=item.get("touch_plan") or [],
+                introduced=introduced, size=size)
             # 破例必须**记入证据**（显式、可审计），而不是默默放行
             for key in ("scope_waiver", "size_waiver"):
                 waiver = (declarations or {}).get(key)

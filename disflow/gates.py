@@ -176,6 +176,35 @@ def evidence_meta(acceptance: dict | None, cwd: str,
     return ok, why, evidence
 
 
+def vacuous_reasons(*, acceptance: dict | None, touch_plan: list[str],
+                    introduced: list[str] | None, size: dict | None) -> dict[str, str]:
+    """哪些门**没有东西可验**（空洞通过）—— 记进证据，别让“全过”被读成“都验了”。
+
+    空洞**不是失败**：节点本来就可能不需要改文件（如 `evaluate` 节点的写面为空）。
+    但它是**信息**——对作者来说，“作用域门没验到东西”通常意味着本节点
+    没产生可检测的改动；这个信号以前是没有的（真跑循环里 `C6` 的作用域门空转，
+    当时没有任何东西告知）。
+
+    只做“记录 + 报出”，**不改变任何门的通过/拒收结果**。
+    """
+    reasons: dict[str, str] = {}
+    if str((acceptance or {}).get("waiver") or "").strip():
+        reasons["acceptance"] = "显式 waiver：验收命令未执行"
+    if introduced is None:
+        reasons["design_first"] = "无改动集（非 git 仓）：无从比对"
+        reasons["size_budget"] = "无规模读数（非 git 仓）"
+        return reasons
+    if not touch_plan:
+        reasons["design_first"] = "touch_plan 为空：无写面可检查"
+    elif not introduced:
+        reasons["design_first"] = "本节点未引入任何改动（introduced 为空）"
+    if size is None:
+        reasons["size_budget"] = "无规模读数"
+    elif size.get("total") == 0:
+        reasons["size_budget"] = "改动行数为 0"
+    return reasons
+
+
 def resolve_budget(node: dict) -> int:
     """节点预算：`context.size_budget` 优先，否则出厂默认。"""
     raw = (node.get("context") or {}).get("size_budget")

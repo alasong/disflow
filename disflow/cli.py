@@ -93,11 +93,17 @@ def cmd_collect(engine: Engine, args) -> int:
     return 0
 
 
+def _vacuous_line(label: str, vacuous: dict) -> str:
+    """空洞通过的门：一行报出（门没东西可验 ⊊ 门拒收）。"""
+    detail = "；".join(f"{gate}（{reason}）" for gate, reason in sorted(vacuous.items()))
+    return f"⚠️ {label}空洞通过（无东西可验）：{detail}"
+
+
 def cmd_done(engine: Engine, args) -> int:
     declarations = _loads(args.decl) if args.decl else None
     dry = bool(getattr(args, "dry_run", False))
     try:
-        engine.done(args.tree, args.node, declarations, dry_run=dry)
+        outcome = engine.done(args.tree, args.node, declarations, dry_run=dry)
     except GateReject as reject:
         print(f"✗ {'预演会被拒' if dry else '门拒收'} {args.node}：", file=sys.stderr)
         for item in reject.missing:
@@ -105,11 +111,22 @@ def cmd_done(engine: Engine, args) -> int:
         print("契约片段：", file=sys.stderr)
         _dump(reject.contract, file=sys.stderr)
         return 2
+    vacuous = _done_vacuous(outcome, dry, args)
     if dry:
         print(f"✓ 预演通过：{args.node} 的验收/作用域/规模门均会过（**未落事件**）")
-        return 0
-    print(f"✓ {args.node} done（证据已自算落盘）")
+    else:
+        print(f"✓ {args.node} done（证据已自算落盘）")
+    if vacuous:
+        print(_vacuous_line("门", vacuous))
     return 0
+
+
+def _done_vacuous(outcome: dict, dry: bool, args) -> dict:
+    """取本节点的空洞门清单（预演与实写两条路径都能取到）。"""
+    if dry:
+        return ((outcome.get("extra") or {}).get("evidence") or {}).get("vacuous") or {}
+    node = (((outcome.get("trees") or {}).get(args.tree) or {}).get("nodes") or {}).get(args.node)
+    return ((node or {}).get("evidence") or {}).get("vacuous") or {}
 
 
 def cmd_fail(engine: Engine, args) -> int:
@@ -305,7 +322,27 @@ def cmd_close(engine: Engine, args) -> int:
         print(f"✓ 预演通过：{args.tree} 的 tree_closure + tree_coverage 门均会过（**未落事件**）")
         return 0
     print(f"✓ {args.tree} 已关闭（tree_closure + tree_coverage 门通过）")
+    _report_tree_vacuity(engine.tree(args.tree))
     return 0
+
+
+def _report_tree_vacuity(tree: dict) -> None:
+    """关树时汇总“门空洞通过”的节点——否则“门全过”会被读成“门都验了”。
+
+    为何放在 `close`：这是新读者看到的第一屏（看板×N/ N 已关闭）。
+    """
+    total = 0
+    per_gate: dict[str, int] = {}
+    for node in tree.get("nodes", {}).values():
+        if node.get("status") != "done":
+            continue
+        total += 1
+        for gate in ((node.get("evidence") or {}).get("vacuous") or {}):
+            per_gate[gate] = per_gate.get(gate, 0) + 1
+    if not per_gate or not total:
+        return
+    detail = "、".join(f"{gate} {count}" for gate, count in sorted(per_gate.items()))
+    print(f"⚠️ 空洞通过（门无东西可验）：{total} 个 done 节点中的 {detail}")
 
 
 def cmd_reap(engine: Engine, args) -> int:

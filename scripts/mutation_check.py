@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import pathlib
 import shutil
 import subprocess
@@ -119,6 +118,35 @@ MUTATIONS: list[Mutation] = [
      '            if False:\n                raise ValueError("x")',
      "test_edges.py"),
 
+    # ── 空洞通过：记录与报出 ────────────────────────────────────────────
+    ("空洞检测失效（永远返回空）", "disflow/gates.py",
+     '    reasons: dict[str, str] = {}\n'
+     '    if str((acceptance or {}).get("waiver") or "").strip():',
+     '    reasons: dict[str, str] = {}\n'
+     '    if False:',
+     "test_vacuity.py"),
+    ("有写面也标空洞（误报）", "disflow/gates.py",
+     '    if not touch_plan:\n'
+     '        reasons["design_first"] = "touch_plan 为空：无写面可检查"',
+     '    if True:\n'
+     '        reasons["design_first"] = "touch_plan 为空：无写面可检查"',
+     "test_vacuity.py"),
+    ("done 不把空洞写进证据", "disflow/engine.py",
+     '            evidence["vacuous"] = gates.vacuous_reasons(\n'
+     '                acceptance=item.get("acceptance"), '
+     'touch_plan=item.get("touch_plan") or [],\n'
+     '                introduced=introduced, size=size)',
+     '            evidence["vacuous"] = {}',
+     "test_vacuity.py"),
+    ("done 不再报出空洞", "disflow/cli.py",
+     '    if vacuous:\n        print(_vacuous_line("门", vacuous))',
+     '    if False:\n        print(_vacuous_line("门", vacuous))',
+     "test_vacuity.py"),
+    ("close 不再汇总空洞", "disflow/cli.py",
+     '    _report_tree_vacuity(engine.tree(args.tree))',
+     '    pass',
+     "test_vacuity.py"),
+
     # ── CLI 装配层：旗标接线与报文通道 ───────────────────────────────────
     #   ⚠️ pattern 是**声明的覆盖来源**，必须指准：指向不测该行为的文件
     #     会伪造出「漏抓」（实测：close 的 --dry-run 被 test_cli.py 守住，
@@ -135,9 +163,11 @@ MUTATIONS: list[Mutation] = [
 
 def _run_tests(pattern: str) -> int:
     for cache in ROOT.rglob("__pycache__"):
-        # 清不掉就算了：陈旧字节码只会让结果偏保守，不该中断整轮变异
-        with contextlib.suppress(OSError):
+        # 清字节码：陈旧 .pyc 会静默跑旧代码，会让变异结果错得看不出来（实测踩过）
+        try:
             shutil.rmtree(cache)
+        except OSError:
+            continue                     # 清不掉就跳过这一处，不中断整轮
     return subprocess.run(
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "tests",
          "-p", pattern],

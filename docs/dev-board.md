@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 226 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 237 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -58,7 +58,8 @@ V3 的「篡改投影必须被抓」**确实被抓**（exit 1）—— 一致性
 2. ~~**`tree_coverage` 未做**~~ ✅ 已补（v0.2：叶子任务需求已登记 + 可跑判据；非根容器不空壳）。
 3. **§10 的三条偏离**（`global_status` 节点化 / `phase→stage` / `registry` 登记）只在文档登记，未实现。
 4. **二轮未覆盖**（V2 自述）：`diff_size` 的 tracked 已修改文件分支；`contains:`/`regex:` 两种 `expect`。
-5. **分层自检不是闭集**：针脚表式，未登记的业务词仍会漏判（`done` 因与机制终态重名而根本不可判定）——已写进 `design.md` §9.1。
+5. **分层自检不是闭集**：针脚表式，未登记的业务词仍会漏判（`done` 因与机制终态重名而根本不可判定）——已写进 `design.md` §9.1。**实测**：往 `ready.py` 注入 `approver`/`auditor`/`column`/`audit`（均不在针脚表里）→ 自检**照样通过**（漏判）。
+6. **种子看板的两个门是空洞通过的**（本项为补登）：上文“17/17、五道门”中的 `design_first`（作用域）与 `size_budget`（规模）**对 16/16 个 done 节点都没验到任何东西**（这些节点的 `introduced == []`，因为种子脚本是“先改完再造证据”的回填，不是真循环）。真跑的只有 `acceptance` / `tree_closure` / `tree_coverage`。现已由证据字段 `vacuous` + `done`/`close` 的报出机制显式可见（`design.md` §7.5）。
 
 ### 0.1 首次真跑循环（树 `cli-cov`，2026-10-10）
 
