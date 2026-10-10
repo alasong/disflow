@@ -78,6 +78,17 @@ def git(repo: str, *args: str, cwd: str | None = None, check: bool = True) -> su
     return proc
 
 
+def _is_exactly_false(value: object) -> bool:
+    """严格判「恰好是布尔 ``False``」：键缺失（``None``）、``0``、空串都不算。
+
+    为什么不直接写 ``value is False``：``no-identity-operator-on-literals`` 会报。
+    而这条判据的**要点就是严格性**——``not value`` 会把「``executed`` 键整个不见了」
+    也读成通过，那正是本脚本要抓的回归。故先用 ``isinstance`` 钉住「确实是布尔」，
+    再取反：语义与 ``is False`` 等价，且不退化。
+    """
+    return isinstance(value, bool) and not value
+
+
 def _fresh_state_dir() -> str:
     """仓外临时 state dir，并写进 `DISFLOW_STATE_DIR`（worktree 拒绝仓内路径）。"""
     state = tempfile.mkdtemp(prefix="disflow-checks-state-")
@@ -417,7 +428,7 @@ def _b1() -> None:
         res = worktree.reap(spec, "t", repo)
         after = _fingerprint(spec, repo)
         diff = sorted(set(before) ^ set(after)) or [k for k in before if before[k] != after.get(k)]
-        check(before == after and res.get("executed") is False,
+        check(before == after and _is_exactly_false(res.get("executed")),
               f"{state}：未变={before == after} executed={res.get('executed')}"
               + ("" if before == after else f" 差异={diff}"),
               name=f"① {state}：reap 逐字不变更")
@@ -450,7 +461,7 @@ def _b3() -> None:
     res = worktree.reap(spec, "t", repo)
     residual = res["residual"]
     check(bool(residual) and "unmerged-commit" in " ".join(residual[0]["reasons"])
-          and residual[0]["safe_to_drop"] is False,
+          and not residual[0]["safe_to_drop"],
           f"residual={bool(residual)} safe_to_drop={residual[0]['safe_to_drop'] if residual else None} "
           f"reasons={residual[0]['reasons'] if residual else None}")
 
@@ -549,9 +560,9 @@ def _adv1() -> None:
     _finish(eng)
     res = worktree.reap(spec, "t", repo)
     entry = _leak_of(res, "a")
-    ok = (entry is not None and entry["safe_to_drop"] is False
+    ok = (entry is not None and not entry["safe_to_drop"]
           and any(r.startswith("unmerged-commit") for r in entry["reasons"])
-          and bool(entry.get("discard_warnings")) and res["executed"] is False
+          and bool(entry.get("discard_warnings")) and _is_exactly_false(res["executed"])
           and _reachable(repo, sha))
     check(ok, f"entry={entry and {'safe': entry['safe_to_drop'], 'reasons': entry['reasons']}} "
               f"executed={res['executed']} reachable={_reachable(repo, sha)}")
@@ -569,7 +580,7 @@ def _adv2() -> None:
     res = worktree.reap(spec, "t", repo)
     entry = _leak_of(res, "a")
     survived = os.path.exists(os.path.join(wt, "debug.log"))
-    ok = (entry is not None and entry["safe_to_drop"] is False
+    ok = (entry is not None and not entry["safe_to_drop"]
           and any(r.startswith("ignored:") for r in entry["reasons"]) and survived)
     check(ok, f"entry={entry and {'safe': entry['safe_to_drop'], 'reasons': entry['reasons']}} "
               f"survived={survived}")
@@ -586,7 +597,7 @@ def _adv3() -> None:
     _finish(eng)
     res = worktree.reap(spec, "t", repo)
     entry = _entry_of(res, "a")
-    ok = (entry is not None and entry["safe_to_drop"] is False
+    ok = (entry is not None and not entry["safe_to_drop"]
           and any(r.startswith("unmerged-commit") for r in entry["reasons"])
           and _reachable(repo, sha))
     check(ok, f"entry={entry and {'safe': entry['safe_to_drop'], 'reasons': entry['reasons']}} "
@@ -605,7 +616,7 @@ def _adv4() -> None:
     _finish(eng)
     res = worktree.reap(spec, "t", repo)
     entry = _leak_of(res, "a")
-    ok = (entry is not None and entry["safe_to_drop"] is False
+    ok = (entry is not None and not entry["safe_to_drop"]
           and os.path.isdir(wt) and readable)
     check(ok, f"entry={entry and entry['safe_to_drop']} wt_dir_still_there={os.path.isdir(wt)} "
               f"commit_readable_in_wt={readable}")
@@ -682,7 +693,7 @@ def _adv8() -> None:
     res = worktree.reap(spec, "t", repo)
     entry = _leak_of(res, "a")
     warnings = " ".join(entry.get("discard_warnings") or []) if entry else ""
-    ok = (entry is not None and entry["safe_to_drop"] is False
+    ok = (entry is not None and not entry["safe_to_drop"]
           and "未提交的已跟踪改动" in warnings and "被忽略的文件" in warnings
           and "永久丢失" in warnings)
     check(ok, f"reasons={entry['reasons'] if entry else None} warnings={entry.get('discard_warnings') if entry else None}")
