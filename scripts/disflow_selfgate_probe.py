@@ -116,6 +116,12 @@ def _seed(repo: str, state: str, decl: dict[str, Any]) -> None:
         "expand")
 
 
+def _collect(repo: str, state: str) -> None:
+    """走一遍宿主循环契约里 `done` 之前的 `collect`（CLI `done` 无它会拒收）。"""
+    payload = json.dumps({"status": "ok", "summary": "probe", "changed_files": []})
+    _ok(_cli(repo, state, "collect", TREE, NODE, "--result", payload), "collect")
+
+
 def _worktree_path(state: str) -> str:
     return os.path.join(state, "worktrees", TREE, NODE)
 
@@ -159,6 +165,7 @@ def scen_start_before_apply() -> dict[str, Any]:
         _ok(_cli(repo, state, "start", TREE, NODE, "--holder", "probe"), "start")
         _ok(_cli(repo, state, "worktree", "apply", TREE, "--nodes", NODE),
             "worktree apply")
+        _collect(repo, state)                 # 宿主循环契约：done 之前先 collect
         done = _cli(repo, state, "done", TREE, NODE)
         reasons: list[str] = []
         if done.returncode == 0:
@@ -192,6 +199,7 @@ def scen_sees_committed_change() -> dict[str, Any]:
         _git(wt, "add", "-A")
         _git(wt, "-c", "user.name=probe", "-c", "user.email=probe@selfgate",
              "commit", "-qm", "change README")
+        _collect(repo, state)
         done = _cli(repo, state, "done", TREE, NODE)
         ev = _evidence(state)
         introduced = ev.get("introduced")
@@ -203,11 +211,14 @@ def scen_sees_committed_change() -> dict[str, Any]:
             reasons.append(f"done rc={done.returncode}（应通过）：{done.stderr.strip()}")
         if not (isinstance(introduced, list) and "README.md" in introduced):
             reasons.append(f"introduced={introduced!r}（应含 'README.md'，证明门看见已提交改动）")
-        # `size_budget` 在这里空洞是**正常**的：改动已提交，工作区与 HEAD 相同 ⇒ 行数读数 0。
-        # 承重判据是 `design_first` 不能再空洞——它空洞就说明门没看见改动。
+        # 两道门都不该空洞：`design_first` 空洞 = 门没看见改动；`size_budget` 空洞 =
+        # 规模读数恒 0（已提交改动被 `git diff HEAD` 看不见）——正是本探针要钉的 fail-open。
         if isinstance(vacuous, dict) and "design_first" in vacuous:
             reasons.append(f"vacuous 含 design_first={vacuous['design_first']!r}"
                            "（门没看见改动 → 空洞通过）")
+        if isinstance(vacuous, dict) and "size_budget" in vacuous:
+            reasons.append(f"vacuous 含 size_budget={vacuous['size_budget']!r}"
+                           "（已提交改动被读成 0 行 → 规模门空洞）")
         return {"case": "2 · worktree 里改并提交 → 门看得见",
                 "passed": not reasons, "why": reasons,
                 "observed": {"done.rc": done.returncode,
@@ -235,6 +246,7 @@ def scen_acceptance_rejects() -> dict[str, Any]:
         _git(wt, "add", "-A")
         _git(wt, "-c", "user.name=probe", "-c", "user.email=probe@selfgate",
              "commit", "-qm", "delete OLD.txt")
+        _collect(repo, state)
         done = _cli(repo, state, "done", TREE, NODE)
         # 门的验收读数嵌在拒收理由里（`验收未通过：exit=1（期望 0）`）——从中取出原始 exit。
         match = re.search(r"验收未通过：exit=(-?\d+)", done.stderr)
@@ -270,6 +282,7 @@ def scen_worktree_deleted() -> dict[str, Any]:
         wt = _worktree_path(state)
         if not os.path.isdir(wt):
             raise RuntimeError(f"worktree 没建出来：{wt}")
+        _collect(repo, state)
         shutil.rmtree(wt)                     # 模拟 reap / 手工删
         done = _cli(repo, state, "done", TREE, NODE)
         reasons: list[str] = []

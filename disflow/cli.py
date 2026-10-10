@@ -116,11 +116,40 @@ def _vacuous_line(label: str, vacuous: dict) -> str:
     return f"⚠️ {label}空洞通过（无东西可验）：{detail}"
 
 
+def _has_collected(engine: Engine, tree: str, node: str) -> bool | None:
+    """本节点是否已有已落盘的 collect 结果；树/节点不存在 → None（交给门去报）。"""
+    try:
+        nodes = engine.tree(tree)["nodes"]
+    except EngineError:
+        return None
+    if node not in nodes:
+        return None
+    return nodes[node].get("collected") is not None
+
+
 def cmd_done(engine: Engine, args) -> int:
     declarations = _loads(args.decl) if args.decl else None
     dry = bool(getattr(args, "dry_run", False))
+    no_result = str(getattr(args, "no_result", "") or "").strip()
+    # **宿主循环契约**（CLI 层，不是门）：worker 的结果必须先经 `collect` 落盘再 `done`。
+    # 为何在 CLI 而不在引擎：无 collect 的 `done` 是引擎 API 的合法组合（直干型节点不该被逼
+    # 伪造一份自报），而事故发生在**走 CLI 的宿主**——它的 collect 失败时 done 静默落盘，
+    # 于是 collect（worker 上报 block 的唯一通道，FR-15）形同虚设、树上查不到谁干了什么。
+    collected = _has_collected(engine, args.tree, args.node)
+    if collected is False and not no_result:
+        print(f"✗ 拒收 {args.node}：本节点没有已落盘的 collect 结果——", file=sys.stderr)
+        print("  这是宿主循环契约（不是门）：worker 的结果要先经 collect 落盘，"
+              "否则树的读者看不出「谁干了什么」、blocked 提问也无处留痕。", file=sys.stderr)
+        print(f"  先跑：disflow collect {args.tree} {args.node} --result "
+              f"'{{\"status\": \"ok\", \"summary\": \"<一句话>\", "
+              f"\"changed_files\": [\"<路径>\"]}}'", file=sys.stderr)
+        print("  （确实没有 worker 结果时显式破例："
+              f"disflow done {args.tree} {args.node} --no-result \"<具体理由>\"）",
+              file=sys.stderr)
+        return 1
     try:
-        outcome = engine.done(args.tree, args.node, declarations, dry_run=dry)
+        outcome = engine.done(args.tree, args.node, declarations, dry_run=dry,
+                              no_result=no_result)
     except GateReject as reject:
         print(f"✗ {'预演会被拒' if dry else '门拒收'} {args.node}：", file=sys.stderr)
         for item in reject.missing:
@@ -133,6 +162,9 @@ def cmd_done(engine: Engine, args) -> int:
         print(f"✓ 预演通过：{args.node} 的验收/作用域/规模门均会过（**未落事件**）")
     else:
         print(f"✓ {args.node} done（证据已自算落盘）")
+    if collected is False:
+        # 破例已落进事件（evidence.no_result）；stdout 再明说一句：绝不静默。
+        print(f"⚠️ {args.node} 无 worker 结果（--no-result 破例：{no_result}）")
     if vacuous:
         print(_vacuous_line("门", vacuous))
     return 0
@@ -865,6 +897,9 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("--decl", default="",
                       help="声明（JSON 对象，可选）：只放破例/豁免，如 "
                            "{\"scope_waiver\":\"…\"}；证据由引擎自算")
+    node.add_argument("--no-result", default="", metavar="REASON",
+                      help="破例：本节点确实没有 worker 结果（无 collect）时显式放行，"
+                           "理由落进证据（留痕）；不填则无 collect 一律拒收（宿主循环契约）")
     node.add_argument("--dry-run", action="store_true", help="预演：跑全部门但不落事件")
 
     node = add("fail", cmd_fail)

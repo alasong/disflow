@@ -129,6 +129,8 @@ class VacuityReportingTest(DisflowTestCase):
         self._tree_with([{"id": "n", "goal": "g", "touch_plan": ["a.py"],
                           "acceptance": acceptance()}])
         self._run(["start", "t", "n", "--holder", "me"])
+        self._run(["collect", "t", "n", "--result",
+                   '{"status":"ok","summary":"s","changed_files":[]}'])
         code, out, _err = self._run(["done", "t", "n"])
         self.assertEqual(code, 0)
         self.assertIn("⚠️", out)
@@ -145,6 +147,8 @@ class VacuityReportingTest(DisflowTestCase):
         ])
         for node in ("n", "E1", "S1"):
             self._run(["start", "t", node, "--holder", "me"])
+            self._run(["collect", "t", node, "--result",
+                       '{"status":"ok","summary":"s","changed_files":[]}'])
             self._run(["done", "t", node])
         code, out, _err = self._run(["close", "t"])
         self.assertEqual(code, 0)

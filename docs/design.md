@@ -285,7 +285,7 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 | `disflow brief <tree> <node>` | 写全派发契约 | **一次写全**：必填声明 + `question_policy` + `result_contract`（FR-15） |
 | `disflow host-next <tree> [--json]` | 一轮派活的**全部输入**：就绪波次 + 每个就绪节点的完整 brief + `start`/`collect`/`done` 命令 | **纯读**：不落事件、不改状态、不起常驻进程；无就绪时显式报 `complete`/`stuck` |
 | `disflow collect <tree> <node> --result` | 校验结果契约后落盘 | **不写 done**；`status ∈ {ok, failed, blocked}` |
-| `disflow done <tree> <node> --decl` | 跑门 → 通过/拒收 | 证据自算；拒收给缺项 |
+| `disflow done <tree> <node> --decl` | 跑门 → 通过/拒收 | 证据自算；拒收给缺项。**CLI 层**：无已落盘 collect ⇒ 拒收（exit 1），`--no-result "<理由>"` 显式破例且理由落进事件 |
 | `disflow fail/retry/skip <tree> <node>` | 状态操作 | 经同一状态表 |
 | `disflow reap <tree>` | 回收**过期**租约（running → pending） | 显式事件；不自动”看时钟“ |
 | `disflow trees` | 列出所有树 + 是否 closed | 投影，不是第二存储 |
@@ -332,6 +332,8 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 `question_policy` 三层解析（与 `size_budget` 同一形状）：**节点 `context.question_policy`
 > 项目 `disflow.json` > 内建默认**，且是**合并**不是整体替换——节点只声明 `how` 时
 不把 `ask_host` 弄丢（丢掉 = 纪律静默变窄，而 brief 看上去还是「有纪律」）。
+
+**为何 `done` 缺 collect 会被 CLI 拒收（而引擎不拒）。** collect 是 worker 上报 `blocked` 的**唯一**通道：它的 `--result` 是 JSON，宿主 collect 失败（argparse 报错）后若 `done` 照旧静默落盘，就等于让提问通道失效（FR-15 形同虚设，树上也永远看不到「谁干了什么」）。故**契约在 CLI 层强制**：无已落盘的 collect 结果 ⇒ `done` 响亮拒收（exit 1，报文给出那条 `collect` 命令）；确实没有 worker 结果时显式 `--no-result "<理由>"` 破例，理由落进证据。**引擎层不拒收**——无 collect 的 `done` 是引擎 API 的合法组合（直干型节点不该被逼伪造一份自报）；引擎只负责**记账**：每次 `node.done` 都记 `evidence.result_collected`（true/false），缺结果时 stdout 也警告一句。分层判据：引擎是机制，CLI 是宿主入口的纪律；「绝不静默」由事件记账保证。
 
 **工作目录（worktree）：brief 的第四样。** `brief` 还告诉 worker **到哪干活**——新增
 `worktree` 字段：该节点已 `disflow worktree apply` 时给
@@ -507,12 +509,18 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
 
 **`diff_size` 读数**（`size_budget` 的分母）：
 
+0. `start` 记了 `head_sha` 时，以 `git diff --numstat <head_sha>`（**已提交 + 工作区**）
+   ∪ 工作区 numstat 为基准，逐文件取 **max**（不相加：`git diff <sha>` 已含工作区改动）。
 1. 已跟踪文件 → 优先 `git diff HEAD --numstat`（**工作区 + 暂存区** vs 最后一次提交）。
 2. 仓里还没提交 ⇒ 合并「未暂存（`git diff`）+ 已暂存（`git diff --cached`）」。
 3. 不在 numstat 里的路径：**已跟踪 ⇒ 0**（git 已经告诉了我们“净改动为 0”）；
    **未跟踪 ⇒ 数它的全部行数**（git 算不出，按整文件计）。
 
-> 为何强调这两条：第一版用裸 `git diff`，已跟踪文件的**暂存改动对它不可见**，
+> 为何要第 0 条（复用 `head_sha`，与 `git_changed_files` 同一做法）：worker 提交后
+> `HEAD` 已含改动，只看 `git diff HEAD` 它就是 **0** ⇒ `size.total=0`、`vacuous=[size_budget]`
+> ——已提交改动恒被当作「没改动」（宿主实测 4/4 节点如此）。
+>
+> 为何强调第 1/3 条：第一版用裸 `git diff`，已跟踪文件的**暂存改动对它不可见**，
 > 于是落到“数整文件”的兜底——200 行文件改 1 行、`git add` 后被判 200 行（真缺陷，B3 补测时查出）。
 > 同理，把“已跟踪但净改动为 0”误归入兜底也会读成整文件行数。
 
@@ -533,7 +541,7 @@ children 声明里直接给，与 `require`/`relate`/`produce`/`consume` 动词�
 | --- | --- |
 | `acceptance` | 用了 `acceptance.waiver`（命令未执行） |
 | `design_first` | `touch_plan` 为空，或本节点 `introduced` 为空 |
-| `size_budget` | 无规模读数，或改动行数为 0 |
+| `size_budget` | 无规模读数，或**真** 0 行（已提交改动经 `head_sha` 已计入，不再把「提交后看不见」误报成 0） |
 
 **边界**：空洞**不是失败**，本机制**不改变任何门的通过/拒收结果**，只记录 + 报出。
 `done` 与 `close` 各报一行（`close` 还会跨节点汇总，因为那是新读者看到的第一屏）。

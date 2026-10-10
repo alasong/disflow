@@ -319,6 +319,33 @@ def _numstat_vs_head(cwd: str, paths: list[str],
     return merged
 
 
+def _numstat_vs_base(cwd: str, base_sha: str | None, paths: list[str],
+                     cfg: Config = DEFAULTS) -> dict[str, int] | None:
+    """改动量读数：`git diff <base_sha>`（**已提交 + 工作区**）∪ 工作区 numstat。
+
+    为何要 `base_sha`：worker 把活干完就 `git commit` 时 `HEAD` 已含改动 ⇒
+    `git diff HEAD` 是 0 ⇒ `size.total=0`、`vacuous=[size_budget]`——**已提交改动恒被判为空**
+    （宿主实测：4/4 节点 `introduced` 非空而 `size.total=0`）。与 `git_changed_files` 同一做法：
+    并上「相对 `start` 记的 HEAD 的改动」。
+
+    取 **max 而非相加**：`git diff <base_sha>` 比的是 base_sha vs 工作区，**已含**工作区改动，
+    与 `git diff HEAD`（工作区 vs HEAD）相加会把它算两遍。`base_sha` 缺省（旧事件）
+    与无此参数时逐字节一致——只读工作区。
+    """
+    workspace = _numstat_vs_head(cwd, paths, cfg)
+    if not base_sha:
+        return workspace
+    committed = _numstat(cwd, [base_sha], paths, cfg)
+    if committed is None:
+        return workspace
+    if workspace is None:
+        return committed
+    merged = dict(workspace)
+    for path, count in committed.items():
+        merged[path] = max(merged.get(path, 0), count)
+    return merged
+
+
 def _is_tracked(cwd: str, path: str, cfg: Config = DEFAULTS) -> bool:
     """路径是否被 git 跟踪（在索引里）。非 git 仓 / 命令失败 → False。"""
     try:
@@ -330,8 +357,11 @@ def _is_tracked(cwd: str, path: str, cfg: Config = DEFAULTS) -> bool:
 
 
 def diff_size(cwd: str, introduced: list[str] | None,
-              cfg: Config = DEFAULTS) -> dict | None:
+              cfg: Config = DEFAULTS, *, base_sha: str | None = None) -> dict | None:
     """`introduced` 文件的行数变动总计：已跟踪走 `git diff --numstat`，未跟踪数行。
+
+    `base_sha` 透传给 `_numstat_vs_base`：worker 已 `git commit` 时否则恒读 0
+    （`git diff HEAD` 看不见已提交改动 ⇒ `size_budget` 恒空洞）。
 
     非 git 仓 / 无基线 → None（不假装有读数）。
     """
@@ -339,7 +369,7 @@ def diff_size(cwd: str, introduced: list[str] | None,
         return None
     if not introduced:
         return {"total": 0, "per_file": {}}
-    per_file = _numstat_vs_head(cwd, introduced, cfg)
+    per_file = _numstat_vs_base(cwd, base_sha, introduced, cfg)
     if per_file is None:
         return None
     total = sum(per_file.values())

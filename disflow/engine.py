@@ -378,9 +378,22 @@ class Engine:
                            prepare=lambda _: {"result": result})
 
     def done(self, tree: str, node: str, declarations: dict | None = None,
-             dry_run: bool = False) -> dict:
+             dry_run: bool = False, no_result: str = "") -> dict:
+        """跑门 + 落 `node.done`。
+
+        `no_result` 是**破例理由**（对应 CLI 的 `--no-result`）：节点确实没有 worker 结果时
+        显式放行，理由落进证据（`evidence.no_result`）——破例可见，绝不静默。引擎层**不**
+        因为缺 collect 而拒收（那是 CLI 层的宿主循环契约，见 `cli.cmd_done`）：引擎是机制，
+        无 collect 的 `done` 是合法组合；但每次 `node.done` 都记账 `evidence.result_collected`，
+        树的读者永远能看出「这个节点没有 worker 结果」。
+        """
         def prepare(t: dict) -> dict:
             item = self._need(t, node)
+            collected = item.get("collected")
+            reason = str(no_result or "").strip()
+            if reason and collected is not None:
+                raise EngineError(
+                    f"{node} 已有 collect 结果，--no-result 无意义（只在该节点无结果时才需要破例）")
             # 门的**所有** IO 统一走同一个目录（有真 worktree 就在 worktree 里，否则 self.cwd）。
             cwd = self._gate_cwd(tree, node)
             workspace = item.get("workspace") or {}
@@ -428,7 +441,9 @@ class Engine:
             # 也逮得住「同文件被前一节点弄脏、本节点又改」这种差集看不见的情况
             introduced = gates.newly_changed(cwd, baseline, self.cfg, base_sha=base_sha)
             scope = gates.scope_check(item.get("touch_plan") or [], introduced)
-            size = gates.diff_size(cwd, introduced, self.cfg)
+            # 规模读数同样吃 `start` 记的 head_sha：worker 已提交时 `git diff HEAD` 恒为 0，
+            # 不复用 base_sha ⇒ introduced 非空而 size.total=0、vacuous=[size_budget]（宿主实测）。
+            size = gates.diff_size(cwd, introduced, self.cfg, base_sha=base_sha)
             budget = gates.resolve_budget(item, self.cfg)
             evidence["baseline"] = sorted(baseline)
             evidence["introduced"] = introduced
@@ -440,6 +455,11 @@ class Engine:
             evidence["vacuous"] = gates.vacuous_reasons(
                 acceptance=item.get("acceptance"), touch_plan=item.get("touch_plan") or [],
                 introduced=introduced, size=size)
+            # worker 结果的记账（与门的通过/拒收**无关**）：CLI 用它强制宿主循环契约
+            # （无 collect ⇒ 拒收），树的读者用它看出「这个节点没 worker 结果」。
+            evidence["result_collected"] = collected is not None
+            if reason:
+                evidence["no_result"] = reason
             # 破例必须**记入证据**（显式、可审计），而不是默默放行
             for key in ("scope_waiver", "size_waiver"):
                 waiver = (declarations or {}).get(key)
