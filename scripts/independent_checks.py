@@ -148,7 +148,7 @@ def _ev(kind: str, ts: str, slug: str = "t", node: str | None = None) -> dict:
     return event
 
 
-def _nd(i: str, status: str = "pending", points: float | None = None, kind: str = "task") -> dict:
+def _node(i: str, status: str = "pending", points: float | None = None, kind: str = "task") -> dict:
     return {"id": i, "kind": kind, "status": status, "points": points}
 
 
@@ -184,8 +184,8 @@ def _a1c() -> None:
 def _a2() -> None:
     from disflow.metrics import summary
     tree = {"slug": "t", "deadline": None,
-            "nodes": {"a": _nd("a", "done", 3.0), "b": _nd("b", "pending"),
-                      "c": _nd("c", "pending")}}
+            "nodes": {"a": _node("a", "done", 3.0), "b": _node("b", "pending"),
+                      "c": _node("c", "pending")}}
     events = [_ev("tree.init", _iso(2026, 1, 1)), _ev("node.done", _iso(2026, 1, 1), node="a")]
     s = summary(tree, events, slug="t", now_ts=_ep(2026, 1, 11))
     ok = (s["points_total"] == 3.0 and s["points_done"] == 3.0
@@ -198,7 +198,7 @@ def _a2() -> None:
 def _a3() -> None:
     from disflow.metrics import summary
     tree = {"slug": "t", "deadline": None,
-            "nodes": {"g": _nd("g", "pending", 99.0, kind="container"), "a": _nd("a", "pending", 2.0)}}
+            "nodes": {"g": _node("g", "pending", 99.0, kind="container"), "a": _node("a", "pending", 2.0)}}
     s = summary(tree, [_ev("tree.init", _iso(2026, 1, 1))], slug="t", now_ts=_ep(2026, 1, 2))
     check(s["points_total"] == 2.0, f"total={s['points_total']}（container 99 应被忽略）")
 
@@ -207,7 +207,7 @@ def _a3() -> None:
 def _a4() -> None:
     from disflow.metrics import burndown, summary
     tree = {"slug": "t", "deadline": "2026-02-01",
-            "nodes": {"a": _nd("a", "done", 5.0), "b": _nd("b", "pending", 5.0)}}
+            "nodes": {"a": _node("a", "done", 5.0), "b": _node("b", "pending", 5.0)}}
     events = [_ev("tree.init", _iso(2026, 1, 1)), _ev("node.done", _iso(2026, 1, 10), node="a")]
     for label, now in (("截点在完工日之前", _ep(2026, 1, 5)), ("截点在完工日之后", _ep(2026, 1, 20))):
         su = summary(tree, events, slug="t", now_ts=now)
@@ -290,7 +290,7 @@ def _a7() -> None:
 
     from disflow.metrics import summary
     tree = {"slug": "t", "deadline": "2026-03-01",
-            "nodes": {"a": _nd("a", "done", 3.0), "b": _nd("b", "pending")}}
+            "nodes": {"a": _node("a", "done", 3.0), "b": _node("b", "pending")}}
     events = [_ev("tree.init", _iso(2026, 1, 1)), _ev("node.done", _iso(2026, 1, 5), node="a")]
     tree_before, events_before = copy.deepcopy(tree), copy.deepcopy(events)
     r1 = summary(tree, events, slug="t", now_ts=_ep(2026, 1, 10))
@@ -313,7 +313,7 @@ def _a8() -> None:
 def _a8b() -> None:
     from disflow.metrics import NO_START_REASON, summary
     tree = {"slug": "t", "deadline": "2026-03-01",
-            "nodes": {"a": _nd("a", "done", 3.0), "b": _nd("b", "pending")}}
+            "nodes": {"a": _node("a", "done", 3.0), "b": _node("b", "pending")}}
     s = summary(tree, [], slug="t", now_ts=_ep(2026, 1, 10))
     check(s["start_reason"] == NO_START_REASON and s["start_ts"] is None,
           f"start_reason={s['start_reason']!r} start_ts={s['start_ts']}")
@@ -324,7 +324,7 @@ def _a9() -> None:
     # 修正（原物料此处判据写反）：树没配截止日是**正常态、不歧义**，`deadline_reason`
     # 此时应为 None；reason 的用武之地是「树里存了非法值被拒」（见 A9c）。
     from disflow.metrics import summary
-    tree = {"slug": "t", "deadline": None, "nodes": {"a": _nd("a", "pending", 1.0)}}
+    tree = {"slug": "t", "deadline": None, "nodes": {"a": _node("a", "pending", 1.0)}}
     events = [_ev("tree.init", _iso(2026, 1, 1)), _ev("tree.deadline", _iso(2026, 1, 1))]
     s = summary(tree, events, slug="t", now_ts=_ep(2026, 1, 10))
     check(s["deadline"] is None and s["deadline_reason"] is None,
@@ -337,7 +337,7 @@ def _a9c() -> None:
     from disflow.metrics import burndown, summary
     events = [_ev("tree.init", _iso(2026, 1, 1))]
     for badval in ("2026-13-01", "不是日期", "2026/01/01"):
-        tree = {"slug": "t", "deadline": badval, "nodes": {"a": _nd("a", "pending", 1.0)}}
+        tree = {"slug": "t", "deadline": badval, "nodes": {"a": _node("a", "pending", 1.0)}}
         s = summary(tree, events, slug="t", now_ts=_ep(2026, 1, 10))
         b = burndown(tree, events, slug="t", now_ts=_ep(2026, 1, 10))
         ok = (s["deadline"] is None and bool(s["deadline_reason"])

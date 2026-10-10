@@ -182,7 +182,7 @@ class SummaryDeadlineEntryTest(DisflowTestCase):
         self.assertEqual(result["deadline_remaining_days"], 2)
         self.assertIsNone(result["deadline_reason"])
 
-    def test_unparseable_stored_deadline_is_reported_not_silently_ignored(self):
+    def test_unparsable_stored_deadline_is_reported_not_silently_ignored(self):
         """手写事件里的非法 deadline（reducer 不校验）不得被静默忽略——给显式 reason。"""
         events = [
             _event("tree.init", _iso(2025, 1, 1)),
