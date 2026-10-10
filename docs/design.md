@@ -304,6 +304,27 @@ disflow doctor                                     # 自检
 | `org=dev/qa/pm` | `role` | 与 `stage` 解耦 |
 | `iteration` | 一棵父树 | iteration = 有 deadline 的树 |
 
+### 10.1 实现现状（v0.1，经独立验证核对）
+
+导入器 `disflow/import_mgt.py` 与上表的差异（2026-10-10 由独立验证者核对，非实现者自述）：
+
+| 上表约定 | 实现实际 | 判定 |
+| --- | --- | --- |
+| `global_status` → 转为节点 | 不生成节点；置 `status=done`、`stage=verify`、`imported=true` | **简化** |
+| `layer/domain/phase` → `stage`/`relates` | 只写进 `context.mgt`，未映射到 `stage` | **简化** |
+| `depth` | 未使用（层级只由 `parent` 推导） | 一致（`depth` 冗余） |
+| `registry.json` → 投影登记 | 只读 `global_status`，未登记为资产 | **部分** |
+
+其余项（`parent`、`status` 映射、`mode→entry`、`files→touch_plan`、`org→role`、`contains` 丢弃、`blocks/informs`）与上表一致。
+
+**简化理由（不是借口）**：
+
+1. `global_status → 节点`：为**导入的既有数据**批量造审批节点会淹没真实待办；且 `node.import` 已显式标记 `imported:true`，**不声称过门**。「审批即节点」应用在**新任务**（`expand`）上，不是迁移时补造。
+2. `phase→stage`：mgt 的 phase（A/B/C）是**排期批次**，不是 disflow 的 stage（req/design/dev/verify）；强行映射会造出假语义。
+3. `registry.json` 作为登记：v0.1 只做状态迁移，不做资产登记。
+
+→ 三条均列为 v0.2 候选，见 `dev-board.md` §4。
+
 ---
 
 ## 11. 与 flowcore 的关系

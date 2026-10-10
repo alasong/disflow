@@ -391,7 +391,8 @@ def main(argv: list[str] | None = None) -> int:
     engine = Engine()
     try:
         return args.handler(engine, args)
-    except EngineError as exc:
+    except (EngineError, ValueError, OSError) as exc:
+        # ValueError/OSError：事件文件损坏、投影损坏、写失败等 —— 报一行，不抛栈
         print(f"✗ {exc}", file=sys.stderr)
         return 1
 

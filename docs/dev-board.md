@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 58 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 61 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -22,11 +22,21 @@
 
 **门清单（设计 §7）**：`acceptance` ✅ · `design_first` ✅ · `size_budget` ✅ · `tree_closure` ✅。
 
+**独立验证（2026-10-10，3 个 fresh-context 验证者，只读仓库 + 各自临时状态目录）**：
+
+| lane | 结果 | 发现 |
+| --- | --- | --- |
+| V1V2 | PASS（3/3） | 无 |
+| V3 | PASS（3/3） | **真缺陷**：坏事件行以未捕获 `ValueError` traceback 露出 → 已修（`cli.main` 捕获 ValueError/OSError） |
+| V4 | PASS（4/4 断言） | **设计 §10 与实现有偏离** → 已在 `design.md` §10.1 如实登记 |
+
+V3 的「篡改投影必须被抓」**确实被抓**（exit 1）—— 一致性检查不是摆设。
+
 **诚实标注的局限**：
 
-1. **V1–V4 由同一 worker 执行，未独立复跑**（设计 §7 要求验证独立）。判据本身已由测试覆盖，但「独立验证」未满足。
-2. **V4 用合成 fixture**：本机 fat3 `.fat/mgt/` 无 `state.json`，无真实项目可导入。
-3. **`tree_coverage` 未做**（kaa 有：分解过的树必须需求已登记且都有可跑判据）——本设计未纳入 v0.1。
+1. **V4 用合成 fixture**：本机 fat3 `.fat/mgt/` 无 `state.json`，无真实项目可导入。
+2. **`tree_coverage` 未做**（kaa 有：分解过的树必须需求已登记且都有可跑判据）——本设计未纳入 v0.1。
+3. **§10 的三条偏离**（`global_status` 节点化 / `phase→stage` / `registry` 登记）只在文档登记，未实现。
 
 ---
 
@@ -63,10 +73,10 @@
 ### verify
 | id | 目标 | 依赖 | 状态 |
 | --- | --- | --- | --- |
-| V1 | 端到端：含跨子树依赖的树，`drive` 确定性 | D60 | ✅（同 worker） |
-| V2 | 证据门：构造一次假完成，必须被拒 | D70 | ✅（同 worker） |
-| V3 | `state rebuild --check` 一致 | D10 | ✅（同 worker） |
-| V4 | 从 mgt 导入项目，`status` 等价 | D90 | ✅ 合成 fixture |
+| V1 | 端到端：含跨子树依赖的树，`drive` 确定性 | D60 | ✅ 独立 |
+| V2 | 证据门：构造一次假完成，必须被拒 | D70 | ✅ 独立 |
+| V3 | `state rebuild --check` 一致 | D10 | ✅ 独立（有牙） |
+| V4 | 从 mgt 导入项目，`status` 等价 | D90 | ✅ 独立（合成 fixture） |
 
 ### done
 | id | 目标 | 依赖 | 状态 |
@@ -105,6 +115,8 @@
 
 ## 4. 下一步
 
-1. **独立复跑 V1–V4**（换成不同 worker），满足设计 §7。
-2. 补 `size_budget` / `tree_closure` 门。
-3. 若要 v0.2：多棵树（多块板）作用域隔离 + 跨树完成信号。
+1. ~~独立复跑 V1–V4~~ ✅ 已完成（2026-10-10）。
+2. 修 V3 发现：`cli.main` 捕获 `ValueError`/`OSError`（已做，`tests/test_cli.py` 守）。
+3. 补 `tree_coverage` 门（v0.2）。
+4. 实现 §10 的三条偏离（v0.2，若迁移是主打场景）。
+5. v0.2：多棵树（多块板）作用域隔离 + 跨树完成信号。
