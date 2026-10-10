@@ -42,8 +42,7 @@ events.jsonl  ──project()──▶  state.json（原子替换，可从事件
 命令：
 
 ```text
-disflow state rebuild <tree> [--check]   # 从事件重建；--check 比对一致性
-disflow checkpoint <tree>                # 记录事件偏移
+disflow rebuild [--check]                # 从事件重建；--check 比对一致性（无 tree 参数，全库）
 ```
 
 ---
@@ -77,8 +76,10 @@ disflow checkpoint <tree>                # 记录事件偏移
     "waiver": null                 // 可选：非空则显式豁免（理由记入证据）
   },
   "status": "pending",            // 存储态：pending|running|done|failed|skipped
-  "lease": null,                  // {holder, expires_at}
-  "evidence": null                // done 时引擎自填
+  "lease": null,                  // {holder, at, expires_at}
+  "evidence": null,               // done 时引擎自填（验收/改动集/作用域/规模）
+  "skip_reason": null,            // skip 时记下理由
+  "reclaimed": null               // reap 回收过期租约时记下原因
 }
 ```
 
@@ -296,16 +297,30 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
 
 ```text
 disflow init <tree> --goal <g>
+disflow goal <tree> <g>                            # 改目标
 disflow expand <tree> <node> --children '<json>'   # 建树
 disflow require <tree> <node> <dep>                # 建图（写时拒环）
 disflow relate <tree> <node> <node>
-disflow produce/consume …
-disflow start/check/done/fail/retry/skip …
-disflow drive/brief/collect …
-disflow board/tree/graph/status/trees …
-disflow import mgt <path>                          # 迁移（§10）
+disflow produce/consume <tree> <node> <name>
+disflow context <tree> <node> --set '<json>'       # 合并 context（根用声明逃生口）
+disflow start <tree> <node> [--holder H] [--ttl N] [--dry-run]
+disflow collect <tree> <node> --result '<json>'    # 校验结果契约，不写 done
+disflow done <tree> <node> [--decl '<json>'] [--dry-run]
+disflow fail/retry/skip <tree> <node>
+disflow reap <tree>                                # 回收过期租约（running → pending）
+disflow close <tree> [--dry-run]                   # 树级门
+disflow drive <tree> [--json] [--dry-run]          # 只推不跑
+disflow brief <tree> <node>                        # 写全派发契约
+disflow plan <tree>
+disflow board/tree/graph <tree> [--dot] [--stage S]
+disflow status [<tree>] [--json]
+disflow trees                                      # 列出所有树（● = 已 closed）
+disflow rebuild [--check]
+disflow import mgt <path> --tree <T>               # 迁移（§10）
 disflow doctor                                     # 自检
 ```
+
+> 共 27 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
 
 ### 9.1 模块分层与 NFR-2（核心语言中立）
 
