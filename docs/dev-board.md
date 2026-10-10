@@ -12,18 +12,21 @@
 | --- | --- |
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
-| 实现 | D10–D95 全绿（含 D80 视图层、D90 mgt 导入器） |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 52 tests, OK** |
+| 实现 | D10–D95 + D100 全绿 |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 58 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
-| 门验证 | 缺 acceptance / 验收失败 / 改动超出 `touch_plan` → 三种都拒收 |
-| 看板视图 | `board`（按 stage）/ `tree`（按 parent）/ `graph`（按边）三视图同源 |
+| 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
+| 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
+| 看板视图 | `board` / `tree` / `graph` 三视图同源 |
 | 偏离 | 本机无 pytest → 标准库 `unittest`（与 NFR-1 零依赖一致） |
+
+**门清单（设计 §7）**：`acceptance` ✅ · `design_first` ✅ · `size_budget` ✅ · `tree_closure` ✅。
 
 **诚实标注的局限**：
 
 1. **V1–V4 由同一 worker 执行，未独立复跑**（设计 §7 要求验证独立）。判据本身已由测试覆盖，但「独立验证」未满足。
 2. **V4 用合成 fixture**：本机 fat3 `.fat/mgt/` 无 `state.json`，无真实项目可导入。
-3. **`design_first` 门**目前是「改动 ⊆ `touch_plan`」，未含 `size_budget` 与 `tree_closure`。
+3. **`tree_coverage` 未做**（kaa 有：分解过的树必须需求已登记且都有可跑判据）——本设计未纳入 v0.1。
 
 ---
 
@@ -55,6 +58,7 @@
 | W4 | D80 | 视图层 `board/tree/graph` | D20,D30,D40 | ✅ |
 | W5 | D90 | mgt 导入器 | D20,D30 | ✅ |
 | W5 | D95 | CLI 装配 + `doctor` | D60,D70 | ✅ |
+| W6 | D100 | 规模预算门 + 树终止条件门 | D70 | ✅ |
 
 ### verify
 | id | 目标 | 依赖 | 状态 |

@@ -5,8 +5,11 @@
 """
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
+
+from .spec import CLOSURE_ENTRIES, SEDIMENT_ENTRIES, SIZE_BUDGET_DEFAULT
 
 DEFAULT_TIMEOUT = 120
 
@@ -110,3 +113,75 @@ def evidence_meta(acceptance: dict | None, cwd: str,
         "acceptance_why": why,
     }
     return ok, why, evidence
+
+
+def resolve_budget(node: dict) -> int:
+    """节点预算：`context.size_budget` 优先，否则出厂默认。"""
+    raw = (node.get("context") or {}).get("size_budget")
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        return raw
+    return SIZE_BUDGET_DEFAULT
+
+
+def diff_size(cwd: str, introduced: list[str] | None) -> dict | None:
+    """`introduced` 文件的行数变动总计：tracked 走 `git diff --numstat`，untracked 数行。
+
+    非 git 仓 / 无基线 → None（不假装有读数）。
+    """
+    if introduced is None:
+        return None
+    if not introduced:
+        return {"total": 0, "per_file": {}}
+    try:
+        proc = subprocess.run(["git", "-C", cwd, "diff", "--numstat", "--", *introduced],
+                              capture_output=True, text=True, timeout=30)
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    per_file: dict[str, int] = {}
+    total = 0
+    for line in proc.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        added = int(parts[0]) if parts[0].isdigit() else 0
+        deleted = int(parts[1]) if parts[1].isdigit() else 0
+        per_file[parts[2]] = added + deleted
+        total += added + deleted
+    for path in introduced:
+        if path in per_file:
+            continue
+        full = os.path.join(cwd, path)
+        if not os.path.isfile(full):
+            continue
+        try:
+            with open(full, encoding="utf-8", errors="ignore") as handle:
+                lines = sum(1 for _ in handle)
+        except OSError:
+            continue
+        per_file[path] = lines
+        total += lines
+    return {"total": total, "per_file": per_file}
+
+
+def tree_closure_check(tree: dict) -> tuple[bool, list[str]]:
+    """树级终止条件门：树里必须有 done 的收益验证 **且** 经验沉淀。
+
+    逃生口：树根 `context.closure = "not_applicable: <具体理由>"`（理由不能为空）。
+    """
+    nodes = tree.get("nodes", {})
+    root = nodes.get(tree.get("root"))
+    closure = ""
+    if isinstance(root, dict):
+        closure = str((root.get("context") or {}).get("closure") or "")
+    if closure.startswith("not_applicable:") and closure.split(":", 1)[1].strip():
+        return True, []
+    done_entries = {node.get("entry") for node in nodes.values()
+                    if node.get("kind") == "task" and node.get("status") == "done"}
+    missing: list[str] = []
+    if not (set(CLOSURE_ENTRIES) & done_entries):
+        missing.append("缺 done 的收益验证节点（entry=evaluate）")
+    if not (set(SEDIMENT_ENTRIES) & done_entries):
+        missing.append("缺 done 的经验沉淀节点（entry=reflect|standardize）")
+    return (not missing), missing

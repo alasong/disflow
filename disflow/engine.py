@@ -159,17 +159,25 @@ class Engine:
             # 只归因「开工后被引入」的改动，忽略开工前就存在的脏文件（他人改动）
             introduced = None if changed is None else [f for f in changed if f not in baseline]
             scope = gates.scope_check(item.get("touch_plan") or [], introduced)
+            size = gates.diff_size(self.cwd, introduced)
+            budget = gates.resolve_budget(item)
             evidence["baseline"] = sorted(baseline)
             evidence["introduced"] = introduced
             evidence["scope"] = scope
+            evidence["size"] = size
+            evidence["budget"] = budget
             contract = {"node": node, "acceptance": item.get("acceptance"),
-                        "touch_plan": item.get("touch_plan"),
-                        "expect": "acceptance 命令通过，且改动落在 touch_plan 内"}
+                        "touch_plan": item.get("touch_plan"), "size_budget": budget,
+                        "expect": "验收命令通过；改动落在 touch_plan 内；改动行数不超预算"}
             missing: list[str] = []
             if not ok:
                 missing.append(f"验收未通过：{why}")
             if scope["checked"] and scope["violations"]:
                 missing.append(f"改动超出 touch_plan：{scope['violations']}")
+            if (size is not None and size["total"] > budget
+                    and not (declarations or {}).get("size_waiver")):
+                missing.append(f"规模超预算：{size['total']} 行 > {budget} 行"
+                               f"（可声明 size_waiver 破例）")
             if missing:
                 raise GateReject(missing, contract)
             return {"evidence": evidence, "declarations": declarations or {}}
@@ -194,6 +202,24 @@ class Engine:
         return self._write("node.import", tree=tree, node=node,
                            guard=lambda t: self._need(t, node),
                            prepare=lambda _: {"status": status, "note": note})
+
+    def annotate(self, tree: str, node: str, context: dict) -> dict:
+        """合并节点 `context`（供后代继承；树根用它声明 `closure`）。"""
+        return self._write("node.context", tree=tree, node=node,
+                           guard=lambda t: self._need(t, node),
+                           prepare=lambda _: {"context": context})
+
+    def close(self, tree: str) -> dict:
+        """树级终止条件门：有 done 的收益验证与经验沉淀，或根声明 `not_applicable: <理由>`。"""
+        def prepare(t: dict) -> dict:
+            ok, missing = gates.tree_closure_check(t)
+            if not ok:
+                raise GateReject(missing, {
+                    "tree": tree,
+                    "expect": "有 done 的 evaluate 与 reflect/standardize，"
+                              "或 root.context.closure='not_applicable: <理由>'"})
+            return {}
+        return self._write("tree.close", tree=tree, prepare=prepare)
 
     # ── 推进面（只读）──────────────────────────────────────────────────────
 

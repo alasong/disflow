@@ -149,6 +149,16 @@ def _on_node_import(state: dict, event: dict) -> None:
     node["evidence"] = {"imported": True, "note": event.get("note", "")}
 
 
+def _on_node_context(state: dict, event: dict) -> None:
+    """合并节点 context（供后代继承 / 树根声明 closure）。"""
+    node = _node(state, event["slug"], event["node"])
+    node.setdefault("context", {}).update(event.get("context") or {})
+
+
+def _on_tree_close(state: dict, event: dict) -> None:
+    state["trees"][event["slug"]]["closed"] = True
+
+
 _HANDLERS = {
     "tree.init": _on_tree_init,
     "tree.goal": _on_tree_goal,
@@ -164,4 +174,6 @@ _HANDLERS = {
     "node.retry": _on_node_retry,
     "node.skip": _on_node_skip,
     "node.import": _on_node_import,
+    "node.context": _on_node_context,
+    "tree.close": _on_tree_close,
 }

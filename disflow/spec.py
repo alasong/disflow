@@ -27,11 +27,19 @@ STAGES: tuple[str, ...] = ("req", "design", "dev", "verify", "done")
 # 负责方（role）—— 与 stage 独立
 ROLES: tuple[str, ...] = ("dev", "qa", "pm")
 
+# 规模预算（门 `size_budget`）：节点开工后引入的改动行数上限（可用 node.context.size_budget 覆盖）
+SIZE_BUDGET_DEFAULT: int = 400
+
+# 树级终止条件门（`tree_closure`）：树里必须有 done 的收益验证 + 经验沉淀
+CLOSURE_ENTRIES: tuple[str, ...] = ("evaluate",)
+SEDIMENT_ENTRIES: tuple[str, ...] = ("reflect", "standardize")
+
 # 事件 kind 闭集（投影 reducer 只认这些；出现未知 kind 即报错）
 EVENT_KINDS: tuple[str, ...] = (
     "tree.init", "tree.goal",
-    "node.expand", "node.require", "node.relate", "node.import",
+    "node.expand", "node.require", "node.relate", "node.import", "node.context",
     "asset.produce", "asset.consume",
     "node.start", "node.collect", "node.done",
     "node.fail", "node.retry", "node.skip",
+    "tree.close",
 )

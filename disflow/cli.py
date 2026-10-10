@@ -248,6 +248,26 @@ def cmd_import(engine: Engine, args) -> int:
     return 0
 
 
+def cmd_context(engine: Engine, args) -> int:
+    engine.annotate(args.tree, args.node, _loads(args.set))
+    print(f"✓ {args.node} context 已合并")
+    return 0
+
+
+def cmd_close(engine: Engine, args) -> int:
+    try:
+        engine.close(args.tree)
+    except GateReject as reject:
+        print(f"✗ 树终止条件门拒收 {args.tree}：")
+        for item in reject.missing:
+            print(f"  - {item}")
+        print("契约片段：")
+        _dump(reject.contract)
+        return 2
+    print(f"✓ {args.tree} 已关闭（终止条件门通过）")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="disflow", description="任务分发流引擎（只推不跑）")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -352,6 +372,14 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("what")
     node.add_argument("path")
     node.add_argument("--tree", required=True)
+
+    node = add("context", cmd_context)
+    node.add_argument("tree")
+    node.add_argument("node")
+    node.add_argument("--set", required=True)
+
+    node = add("close", cmd_close)
+    node.add_argument("tree")
 
     add("doctor", cmd_doctor)
     return parser

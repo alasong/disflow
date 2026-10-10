@@ -39,6 +39,10 @@ python3 -m disflow.cli graph demo [--dot]  # 按边
 # 从 mgt 导入
 python3 -m disflow.cli import mgt <project-root> --tree imported
 
+# 树级：合并 context / 终止条件门
+python3 -m disflow.cli context demo root --set '{"closure": "not_applicable: <理由>"}'
+python3 -m disflow.cli close demo          # 需 done 的 evaluate + reflect/standardize
+
 python3 -m disflow.cli doctor
 ```
 
@@ -53,7 +57,7 @@ python3 -m disflow.cli drive disflow-v0.1
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 52 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 58 passed（零第三方依赖）
 ```
 
 ## 结构
@@ -66,7 +70,7 @@ disflow/
   graph.py        # requires/relates + 环检测
   ready.py        # ready() / 波次打包 / 卡死
   context.py      # brief() 上下文投影
-  gates.py        # 验收门 + 证据 + 作用域
+  gates.py        # 验收门 + 证据 + 作用域 + 规模预算 + 树终止条件
   dispatch.py     # drive/brief/collect（只推不跑）
   views.py        # board/tree/graph（同源视图）
   import_mgt.py   # mgt 导入器
@@ -78,5 +82,5 @@ scripts/          # seed_dev_board.py
 
 ## 状态
 
-v0.1 完成（14/15，仅 PM1 审批未做）：52 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、`doctor` 全绿。
-已知局限见 `docs/dev-board.md` §0（V1–V4 未独立复跑、V4 用合成 fixture、缺 `size_budget`/`tree_closure` 门）。
+v0.1 完成（16/17，仅 PM1 审批未做）：58 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、四道门（acceptance/design_first/size_budget/tree_closure）、`doctor` 全绿。
+已知局限见 `docs/dev-board.md` §0（V1–V4 未独立复跑、V4 用合成 fixture、`tree_coverage` 未做）。

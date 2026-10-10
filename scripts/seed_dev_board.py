@@ -24,6 +24,7 @@ TEST_ENGINE = "python3 -m unittest discover -s tests -t tests -p test_engine.py"
 TEST_VIEWS = "python3 -m unittest discover -s tests -t tests -p test_views.py"
 TEST_IMPORT = "python3 -m unittest discover -s tests -t tests -p test_import_mgt.py"
 TEST_E2E = "python3 -m unittest discover -s tests -t tests -p test_e2e.py"
+TEST_GATES = "python3 -m unittest discover -s tests -t tests -p test_gates.py"
 REBUILD_CHECK = "python3 -m disflow.cli rebuild --check"
 
 
@@ -47,12 +48,17 @@ NODES: list[tuple[str, str, str, str, list[str], str | None]] = [
     ("V2", "证据门：构造一次假完成，必须被拒", "verify", "qa", ["D70"], TEST_ENGINE),
     ("V3", "state rebuild --check 一致", "verify", "qa", ["D10"], REBUILD_CHECK),
     ("V4", "从 mgt 导入项目，status 等价（合成 fixture）", "verify", "qa", ["D90"], TEST_IMPORT),
-    ("PM1", "批准发布 v0.1", "verify", "pm", ["V1", "V2", "V3", "V4"], None),
+    ("E1", "收益验证：v0.1 相对 mgt 的改进可复现", "verify", "qa", ["D95"], TEST_E2E),
+    ("S1", "经验沉淀：本轮回写的判据固化为门", "verify", "pm", ["D70"], TEST_GATES),
+    ("PM1", "批准发布 v0.1", "verify", "pm", ["V1", "V2", "V3", "V4", "E1", "S1"], None),
 ]
+
+# 开工模板（entry）—— tree_closure 门靠它识别 evaluate / reflect|standardize
+ENTRY: dict[str, str] = {"E1": "evaluate", "S1": "standardize"}
 
 # 已实现且验证通过、可以 done 的节点（其余留 pending，供后续 drive 推进）
 DONE_NODES = ["D10", "D20", "D30", "D40", "D50", "D60", "D70", "D80", "D90", "D95",
-              "V1", "V2", "V3", "V4"]
+              "V1", "V2", "V3", "V4", "E1", "S1"]
 
 # 写面（供波次打包；同波不重叠者才并行）
 TARGETS: dict[str, list[str]] = {
@@ -70,6 +76,8 @@ TARGETS: dict[str, list[str]] = {
     "V2": ["tests/test_gate_reject.py"],
     "V3": ["tests/test_rebuild.py"],
     "V4": ["tests/test_import_mgt.py"],
+    "E1": ["tests/test_e2e.py"],
+    "S1": ["docs/design.md"],
     "PM1": ["docs/"],
 }
 
@@ -84,6 +92,7 @@ def main() -> int:
     engine.init_tree(tree, GOAL)
     engine.expand(tree, "root", [
         {"id": node_id, "goal": goal, "stage": stage, "role": role,
+         "entry": ENTRY.get(node_id, ""),
          "touch_plan": TARGETS.get(node_id, ["."]), "acceptance": acc(cmd)}
         for node_id, goal, stage, role, _deps, cmd in NODES
     ])
@@ -104,6 +113,13 @@ def main() -> int:
 
     result = engine.drive(tree)
     print(f"\n就绪波次：{result['ready_wave']}  卡死：{result['stuck']}")
+
+    try:
+        engine.close(tree)
+        print(f"✓ {tree} 已关闭（tree_closure 门通过）")
+    except (EngineError, GateReject) as exc:
+        print(f"✗ 关闭未通过：{exc}", file=sys.stderr)
+        return 1
     return 0
 
 
