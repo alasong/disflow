@@ -125,16 +125,19 @@ disflow checkpoint <tree>                # 记录事件偏移
 ```text
 ready(n) := kind(n) == task
           ∧ status(n) == pending
-          ∧ ∀ d ∈ requires(n): status(d) == done        # 图入边
+          ∧ ∀ d ∈ requires(n): status(d) ∈ TERMINAL      # 图入边（done 或 skipped）
           ∧ ∀ t ∈ awaits(n): t ∈ closed                 # 跨树完成信号
           ∧ lease(n) == null                            # 未被告占用
           # lease 自带 expires_at；**过期不会自动放行**：
           # 靠显式 `disflow reap <tree>` 置回 pending（就绪判定不看时钟，保持纯函数）
           ∧ 无环（写入时已保证）
 
-blocked_by(n) := [ d ∈ requires(n) : status(d) != done ]
+blocked_by(n) := [ d ∈ requires(n) : status(d) ∉ TERMINAL ]
                  ⊕ [ "@"+t : t ∈ awaits(n) ∧ t ∉ closed ]
 ```
+
+> `TERMINAL = (done, skipped)`（`core.py`）。即：**一个前置被 `skip` 掉，不再阻塞后继**——
+> 「这条前置被显式放弃了」，与「还没做」是两回事。此前文档写 `status(d) == done`，与实现不符，已按实现修正。
 
 **唯一性**（FR-11）：分发器和 worker 调**同一份** `ready`；两面不分叉。
 
@@ -321,6 +324,13 @@ disflow doctor                                     # 自检
 **允许留在核心的机制词**：`requires`/`relates`（边种）、`container`/`task`（分型）、
 `pending`/`running`/`done`/`failed`/`skipped`（状态）、`lease`、`awaits`（跨树完成信号 = 机制）。
 
+**自检的已知边界（诚实标注）**：
+
+1. 针脚表 + 单词边界，**不是业务词闭集推导**——未登记的业务词会漏判。故 `MatcherSelfTest`
+   用合成样本证明尺子本身有效（而非靠「仓库恰好干净」）。
+2. **`done` 不可判定**：它既是视图列取值、又是机制终态（`core.TERMINAL`），故不入针脚。
+3. 本节只守「核心不认业务词 + 依赖单向」；它**不**证明业务层设计正确。
+
 ---
 
 ## 10. mgt 迁移映射（FR-28/29）
@@ -354,6 +364,14 @@ disflow doctor                                     # 自检
 | `registry.json` → 投影登记 | 只读 `global_status`，未登记为资产 | **部分** |
 
 其余项（`parent`、`status` 映射、`mode→entry`、`files→touch_plan`、`org→role`、`contains` 丢弃、`blocks/informs`）与上表一致。
+
+**导入的降级报告（NFR-7 不静默降级的口径）**：被丢弃/写不进去的边不静默——它们在导入结果里逐条列出：
+
+- `dropped_deps`：如 `contains` 之类按设计丢弃的边；
+- `skipped_edges`：**写不进去**的边（如反向边会成环，被写时拒环拦下）；
+- CLI 仍返回 0（导入整体成功），降级**可见但不阻断**。
+
+> 独立验证（lane V4）实测：含环 fixture 导入后 `skipped_edges` 含「加边即成环」原因，图里只留单向边（DAG 保持）。若需要「有降级即非零退出」，那是另一条策略，v0.1 未做。
 
 **简化理由（不是借口）**：
 

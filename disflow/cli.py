@@ -271,16 +271,20 @@ def cmd_context(engine: Engine, args) -> int:
 
 
 def cmd_close(engine: Engine, args) -> int:
+    dry = bool(getattr(args, "dry_run", False))
     try:
-        engine.close(args.tree)
+        engine.close(args.tree, dry_run=dry)
     except GateReject as reject:
-        print(f"✗ 树级门拒收 {args.tree}：")
+        print(f"✗ {'预演会被拒' if dry else '树级门拒收'} {args.tree}：")
         for item in reject.missing:
             print(f"  - {item}")
         print("契约片段：")
         _dump(reject.contract)
         return 2
-    print(f"✓ {args.tree} 已关闭（终止条件门通过）")
+    if dry:
+        print(f"✓ 预演通过：{args.tree} 的 tree_closure + tree_coverage 门均会过（**未落事件**）")
+        return 0
+    print(f"✓ {args.tree} 已关闭（tree_closure + tree_coverage 门通过）")
     return 0
 
 

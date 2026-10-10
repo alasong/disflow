@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 98 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 103 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -23,12 +23,26 @@
 | 覆盖门 | `tree_coverage`：叶子任务有 goal + 可跑判据；非根容器有子节点（`close` 串联 `tree_closure`） |
 | 模块分层 | 核心层 = `core`/`store`/`graph`/`ready`（零业务词 + 依赖单向）；`tests/test_layering.py` 逆向自检 |
 | 预演 | `start`/`done`/`close`/`drive` 支持 `--dry-run`：门照跑、**零事件**（`tests/test_dryrun.py`） |
-| 需求覆盖 | `docs/requirements.md` §7 逐条审计 FR/NFR（2 项 ◐ 已登记） |
+| 需求覆盖 | `docs/requirements.md` §7 逐条审计 FR/NFR —— **FR-1..29 + NFR-1..7 全覆盖（0 项 ◐）** |
+| 预演盲点 | `close --dry-run` 曾经 CLI 漏传 `dry_run` 真关树（V3 抳出）→ 已修 + **CLI 层回归测试** |
 | 偏离 | 本机无 pytest → 标准库 `unittest`（与 NFR-1 零依赖一致） |
 
 **门清单（设计 §7）**：`acceptance` ✅ · `design_first` ✅ · `size_budget` ✅ · `tree_closure` ✅ · `tree_coverage` ✅。
 
-**独立验证（2026-10-10，3 个 fresh-context 验证者，只读仓库 + 各自临时状态目录）**：
+**独立验证（二轮：2026-10-10，HEAD `46cb2bd`，5 个 fresh-context 只读验证者，各自临时状态目录，零仓库写入）**：
+
+| lane | 范围 | 结果 | 发现 |
+| --- | --- | --- | --- |
+| V1 | 就绪/波次/`drive` **逐字节**确定性/容器不派发/`awaits` 门控 | PASS 4/4 | 文档漂移：§3 写 `requires` 需 `done`，实现是 `TERMINAL`（`skip` 也不阻塞）→ 已修文档 |
+| V2 | 六类门必须拒收假完成 + 逃生口空理由照拒 | PASS 6/6 | 无 |
+| V3 | 投影一致/篡改必被抓/**预演零事件**/租约回收 | **FAIL 3/4** | **真缺陷（已修）**：`cmd_close` 漏传 `dry_run` → `close --dry-run` 真关树并落事件；现有测试绕过 CLI 未抳到 |
+| V4 | mgt 迁移等价（合成 fixture） | PASS 4/4 | 无冲突；补充了 `skipped_edges` 降级口径 |
+| V5 | 分层自检**非空转**（临时副本注入） | PASS 4/4 | **自检比声称的弱**：针脚白名单漏 stage/role 取值 → 已加固（单词边界 + `MatcherSelfTest` 自证） |
+
+二轮新增的验证面（相对一轮）：跨树 `awaits`、`tree_coverage`、`waiver`/`require_declarations`、
+`--dry-run` 零事件、租约 `reap`、核心层分层自检。
+
+**一轮（2026-10-10，3 个 fresh-context 验证者）**：
 
 | lane | 结果 | 发现 |
 | --- | --- | --- |
@@ -40,9 +54,11 @@ V3 的「篡改投影必须被抓」**确实被抓**（exit 1）—— 一致性
 
 **诚实标注的局限**：
 
-1. **V4 用合成 fixture**：本机 fat3 `.fat/mgt/` 无 `state.json`，无真实项目可导入。
+1. **V4 用合成 fixture**：本机 fat3 `.fat/mgt/` 无 `state.json`，无真实项目可导入（两轮均如此）。
 2. ~~**`tree_coverage` 未做**~~ ✅ 已补（v0.2：叶子任务需求已登记 + 可跑判据；非根容器不空壳）。
 3. **§10 的三条偏离**（`global_status` 节点化 / `phase→stage` / `registry` 登记）只在文档登记，未实现。
+4. **二轮未覆盖**（V2 自述）：`diff_size` 的 tracked 已修改文件分支；`contains:`/`regex:` 两种 `expect`。
+5. **分层自检不是闭集**：针脚表式，未登记的业务词仍会漏判（`done` 因与机制终态重名而根本不可判定）——已写进 `design.md` §9.1。
 
 ---
 
