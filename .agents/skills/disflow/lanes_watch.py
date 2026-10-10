@@ -343,12 +343,16 @@ def render(show_all=False, verbose=False):
     if others:
         out += ["", f"⚠ 非规范列（不在配置的 stages 内，读时容忍但不静默隐藏）："
                     f"{', '.join(sorted({r['stage'] for r in others}))}"]
-    # 读不到就**明说**：lane 名在投影里找不到对应节点时点名（别默不作声地丢掉）
+    # 读不到就**明说**且**不要只说找不到**：无对应节点的 lane 当时就在跑，屏幕上必须看得到
+    # 它的运行事实（宿主直接跑的 worker：无标签、不猜 goal，但仍要可追踪）。
     known = {r["node"] for r in rows}
     orphans = sorted(n for n in lanes if n not in known)
     if orphans:
-        out += ["", f"⚠ {len(orphans)} 路 lane 在投影里找不到对应节点：{', '.join(orphans)}"
-                    "（不猜一个 goal 顶上）"]
+        out += ["", f"── 非 disflow 节点的 lane（{len(orphans)} 路：宿主直接跑的 worker；"
+                    "按运行事实列出，不挂到任何条目行上）──"]
+        for node_id in orphans:
+            for line in lane_line(lanes[node_id], verbose).splitlines():
+                out.append("  " + line)
     return out
 
 

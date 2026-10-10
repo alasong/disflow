@@ -278,7 +278,7 @@ sh .agents/skills/disflow/lanes_watch.sh once -v       # 在跑 lane 多给命�
 按 **`stage` 归列**（与 `board` 同一份阶段配置）→ 每列分 **running / pending** 两组；lane 名（= 派活时的 `key`，
 即节点 id）join 到对应条目上，就地给「已跑 / 静默 / 消息数」（`-v` 再给最后命令与自报进展）。
 **running 以运行事实为准**（投影 `status` 只在 collect/done 时变，不能当实时状态）。
-**读不到就明说**（`state.json` 缺失 / lane 找不到节点 / 非规范列 ⇒ 点名，绝不猜一个 goal 顶上）。
+**读不到就明说**（`state.json` 缺失 / 非规范列 ⇒ 点名，绝不静默隐藏）；**无对应节点的 lane**（宿主直接跑的 worker：`childId` 不是 disflow 节点 id）**另起一段按运行事实列出**（已跑/静默/消息数，`-v` 加命令与自报进展）——只出现在那一行、不挂到任何条目行上（不猜 goal）。
 
 ⚠ 它读的是 pi 的**内部布局**（`status.json` / `session.jsonl`）——所以它属于**宿主侧工具**，
 住在宿主手册旁边，**不进 `disflow/` 核心**（那会把引擎绑死在 pi 上，破 NFR-2）。

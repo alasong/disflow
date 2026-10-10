@@ -175,13 +175,20 @@ class LanesWatchTest(DisflowTestCase):
         self.assertIn("⌘ bash: grep -n foo tests/x.py", verbose)
         self.assertIn("↳ ⟳ 干活 · 1/3", verbose)
 
-    def test_lane_without_a_matching_node_is_named_not_guessed(self):
+    def test_lane_without_a_matching_node_shows_its_facts_not_a_fake_node(self):
+        """无对应节点的 lane（宿主直接跑的 worker）—— **列出它的运行事实**（用户 2026-10-11
+        实测：「在跑 lane 2 路」却只丢一句「找不到对应节点」⇒ 看不到那两路在跑什么 = 视图说不完整），
+        但**不挂到**任何条目行上（不猜一个 goal 顶上）。"""
         self._write_state()
         self._running_lane(child_id="ghost-node")
         text = self._render()
-        self.assertIn("找不到对应节点", text)
-        self.assertIn("ghost-node", text)
-        self.assertNotIn("▸ lane ghost-node", text, "无对应节点的 lane 不许贴到任何条目行上")
+        self.assertIn("非 disflow 节点的 lane", text)
+        self.assertIn("▸ lane ghost-node", text)
+        lane = next(x for x in text.splitlines() if "lane ghost-node" in x)
+        self.assertIn("running", lane, "要看到它在跑，而不是只说找不到")
+        self.assertIn("已跑", lane)
+        self.assertTrue(lane.startswith("  ▸"), "它自己一段（顶格两空格），不在任何条目行下")
+        self.assertNotIn("◈", text)
 
     # ── 4. 行尾树名（只在多树时）+ 列内父子缩进 ───────────────────────────
 
