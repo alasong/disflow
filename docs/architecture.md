@@ -210,3 +210,28 @@ disflow/
 ```
 
 **四个面 ↔ 模块**：树 = `model` · 图 = `graph` · 看板 = `views` · 分发器 = `dispatch`/`ready`。
+
+## 9. 如何验证本文件的图真能渲染
+
+Mermaid 是**手写的**，编辑器里可能看不出语法错。本文件的 7 张图已**真渲染验证**
+（2026-10-10，7/7 OK，且断言每张 SVG 含其关键标签、无 `Syntax error`、无 `error-icon` 元素）：
+
+```bash
+# mermaid-cli 靠 puppeteer 起浏览器；**必须先指路**，否则报 ChromeLauncher.launch 失败
+# （那不是语法错，是本轮什么都没验证到）
+export PUPPETEER_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# 从本文件抽出所有 mermaid 块逐个渲染
+python3 - <<'PY'
+import re, pathlib
+blocks = re.findall(r"```mermaid\n(.*?)```",
+                    pathlib.Path("docs/architecture.md").read_text(encoding="utf-8"), re.S)
+for i, b in enumerate(blocks, 1):
+    pathlib.Path(f"/tmp/d{i}.mmd").write_text(b, encoding="utf-8")
+PY
+for f in /tmp/d*.mmd; do npx -y @mermaid-js/mermaid-cli -i "$f" -o "${f%.mmd}.svg"; done
+```
+
+GitHub 页面会原生渲染这些图，**不需要**提交 SVG 产物。
+若确实要离线图片，用上面的命令生成（约 1 分钟/张），但请注意：**产物会与源漂移**，
+所以权威源永远是本文件的 ```mermaid 块，而不是任何 `.svg`。
