@@ -22,8 +22,16 @@ def new_node(node_id: str, *, parent: str | None = None, kind: str = "task",
              context: dict | None = None, entry: str = "",
              acceptance: dict | None = None,
              touch_plan: list[str] | None = None,
-             awaits: list[str] | None = None) -> dict:
+             awaits: list[str] | None = None,
+             requires: list[str] | None = None,
+             relates: list[str] | None = None,
+             produces: list[str] | None = None,
+             consumes: list[str] | None = None) -> dict:
     """构造一个 status=pending 的节点（不校验、不入库）。
+
+    四个边字段（`requires`/`relates`/`produces`/`consumes`）**必须在这里收下**：
+    它们在 `validate_node_spec` 里是合法声明，若本函数不接，就会"声明被接受、然后静默丢弃"
+    —— 实测后果是 `requires` 丢了 ⇒ 调度器**乱序派发**（E1 在 B3/B4 未完工时就被推）。
 
     `awaits`：跨树完成信号（等待别的树 `closed`）—— 不是图上的 `requires`。
     """
@@ -32,7 +40,8 @@ def new_node(node_id: str, *, parent: str | None = None, kind: str = "task",
     return {
         "id": node_id, "parent": parent, "kind": kind, "stage": stage, "role": role,
         "goal": goal, "context": dict(context or {}), "entry": entry,
-        "requires": [], "relates": [], "produces": [], "consumes": [],
+        "requires": list(requires or []), "relates": list(relates or []),
+        "produces": list(produces or []), "consumes": list(consumes or []),
         "touch_plan": list(touch_plan or []), "awaits": list(awaits or []),
         "acceptance": dict(acceptance) if acceptance else None,
         "status": "pending", "lease": None, "evidence": None,

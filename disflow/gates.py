@@ -184,24 +184,16 @@ def resolve_budget(node: dict) -> int:
     return SIZE_BUDGET_DEFAULT
 
 
-def diff_size(cwd: str, introduced: list[str] | None) -> dict | None:
-    """`introduced` 文件的行数变动总计：tracked 走 `git diff --numstat`，untracked 数行。
-
-    非 git 仓 / 无基线 → None（不假装有读数）。
-    """
-    if introduced is None:
-        return None
-    if not introduced:
-        return {"total": 0, "per_file": {}}
+def _numstat(cwd: str, args: list[str], paths: list[str]) -> dict[str, int] | None:
+    """跑一次 `git diff <args> --numstat`，返回 `{路径: 增+删}`；命令本身失败返回 None。"""
     try:
-        proc = subprocess.run(["git", "-C", cwd, "diff", "--numstat", "--", *introduced],
+        proc = subprocess.run(["git", "-C", cwd, "diff", *args, "--numstat", "--", *paths],
                               capture_output=True, text=True, timeout=30)
     except OSError:
         return None
     if proc.returncode != 0:
         return None
     per_file: dict[str, int] = {}
-    total = 0
     for line in proc.stdout.splitlines():
         parts = line.split("\t")
         if len(parts) < 3:
@@ -209,10 +201,65 @@ def diff_size(cwd: str, introduced: list[str] | None) -> dict | None:
         added = int(parts[0]) if parts[0].isdigit() else 0
         deleted = int(parts[1]) if parts[1].isdigit() else 0
         per_file[parts[2]] = added + deleted
-        total += added + deleted
+    return per_file
+
+
+def _numstat_vs_head(cwd: str, paths: list[str]) -> dict[str, int] | None:
+    """改动量读数：优先 `git diff HEAD`（**工作区 + 暂存区** vs 最后一次提交）。
+
+    为何不用裸 `git diff`：它比的是「工作区 vs 暂存区」——**已暂存的改动对它不可见**，
+    会静静地落到下面的「数整文件行数」兜底分支。实测：200 行文件改 1 行并 `git add`，
+    裸 `git diff` 返回空 ⇒ 被判 200 行（真缺陷，B3 补测时查出）。
+
+    仓里还没有提交（`HEAD` 不存在）时 `git diff HEAD` 失败，则合并
+    「未暂存（`git diff`）+ 已暂存（`git diff --cached`）」——两者不相交，相加即工作区 vs HEAD。
+    """
+    head = _numstat(cwd, ["HEAD"], paths)
+    if head is not None:
+        return head
+    unstaged = _numstat(cwd, [], paths)
+    staged = _numstat(cwd, ["--cached"], paths)
+    if unstaged is None and staged is None:
+        return None                     # 不是 git 仓：不假装有读数
+    merged: dict[str, int] = {}
+    for part in (unstaged or {}, staged or {}):
+        for path, count in part.items():
+            merged[path] = merged.get(path, 0) + count
+    return merged
+
+
+def _is_tracked(cwd: str, path: str) -> bool:
+    """路径是否被 git 跟踪（在索引里）。非 git 仓 / 命令失败 → False。"""
+    try:
+        proc = subprocess.run(["git", "-C", cwd, "ls-files", "--error-unmatch", "--", path],
+                              capture_output=True, text=True, timeout=10)
+    except OSError:
+        return False
+    return proc.returncode == 0
+
+
+def diff_size(cwd: str, introduced: list[str] | None) -> dict | None:
+    """`introduced` 文件的行数变动总计：已跟踪走 `git diff --numstat`，未跟踪数行。
+
+    非 git 仓 / 无基线 → None（不假装有读数）。
+    """
+    if introduced is None:
+        return None
+    if not introduced:
+        return {"total": 0, "per_file": {}}
+    per_file = _numstat_vs_head(cwd, introduced)
+    if per_file is None:
+        return None
+    total = sum(per_file.values())
     for path in introduced:
         if path in per_file:
             continue
+        if _is_tracked(cwd, path):
+            # git **知道**这个文件，只是相对 HEAD 净改动为 0（否则会出现在 numstat 里）。
+            # 不能因“numstat 没这一条”就数整文件——那会把「暂存后又改回原状」算成整文件行数。
+            per_file[path] = 0
+            continue
+        # 未跟踪的新文件：git 算不出改动量，按它的全部行数计
         full = os.path.join(cwd, path)
         if not os.path.isfile(full):
             continue

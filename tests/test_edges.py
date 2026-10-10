@@ -117,5 +117,118 @@ class EdgeTest(DisflowTestCase):
         self.assertTrue(matched, diffs)
 
 
+class ExpandDeclarationTest(DisflowTestCase):
+    """回归（真缺陷，第二次真跑循环撞上）：`expand` 声明的边字段曾被**静默丢弃**。
+
+    `validate_node_spec` 接受 `requires`/`relates`/`produces`/`consumes`（都在 `NODE_FIELDS` 里），
+    但 `new_node` 根本没这四个参数 → 声明通过了校验、然后什么都不发生。
+
+    后果不是「少个字段」而是**调度乱序**：`requires` 丢了，评估节点在它所评估的工作
+    未完工时就被推进首波——直接毁灭「只推不跑」的前提。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.engine = Engine(cwd=self.tmp)
+        self.engine.init_tree("t", "g")
+
+    def _tree(self) -> dict:
+        return self.engine.load()["trees"]["t"]
+
+    def _events(self) -> int:
+        return len(store.load_events(spec.SPEC))
+
+    @staticmethod
+    def _spec(node_id: str, **extra) -> dict:
+        spec: dict = {"id": node_id, "goal": node_id, "acceptance": acceptance()}
+        spec.update(extra)
+        return spec
+
+    # ── 声明必须生效 ────────────────────────────────────────────────────
+
+    def test_declared_requires_is_not_silently_dropped(self):
+        self.engine.expand("t", "root", [self._spec("A"),
+                                          self._spec("B", requires=["A"])])
+        self.assertEqual(self._tree()["nodes"]["B"]["requires"], ["A"])
+
+    def test_declared_requires_actually_blocks_dispatch(self):
+        """真正的判据：**就绪波次**必须反映出声明的依赖。"""
+        self.engine.expand("t", "root", [self._spec("A"), self._spec("B", requires=["A"]),
+                                          self._spec("E", requires=["A", "B"])])
+        nodes = self._tree()["nodes"]
+        ready = sorted(ready_tasks(nodes, self.engine.closed_trees()))
+        self.assertEqual(ready, ["A"], "只应有 A 就绪；B/E 被依赖阻塞")
+        self.assertEqual(blocked_by(nodes, "E", self.engine.closed_trees()), ["A", "B"])
+
+    def test_declared_relates_produces_consumes_land_in_the_projection(self):
+        self.engine.expand("t", "root", [
+            self._spec("A", produces=["X"]),
+            self._spec("B", consumes=["X"], relates=["A"]),
+        ])
+        tree = self._tree()
+        self.assertEqual(tree["nodes"]["A"]["produces"], ["X"])
+        self.assertEqual(tree["nodes"]["B"]["consumes"], ["X"])
+        self.assertEqual(tree["nodes"]["B"]["relates"], ["A"])
+        self.assertEqual(tree["assets"], {"X": "A"})
+
+    def test_sibling_declaration_order_does_not_matter(self):
+        """同批里「谁先声明」不能影响结果：consumer 写在 producer 前面也要成立。"""
+        self.engine.expand("t", "root", [
+            self._spec("consumer", consumes=["Y"]),
+            self._spec("producer", produces=["Y"]),
+        ])
+        self.assertEqual(self._tree()["nodes"]["consumer"]["consumes"], ["Y"])
+
+    # ── 声明非法必须报错（不是静默丢弃）───────────────────────────────────
+
+    def test_declared_dangling_requires_is_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.engine.expand("t", "root", [self._spec("E", requires=["没有这个"])])
+        self.assertIn("requires 悬空", str(ctx.exception))
+
+    def test_declared_self_requires_is_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.engine.expand("t", "root", [self._spec("F", requires=["F"])])
+        self.assertIn("不能依赖自身", str(ctx.exception))
+
+    def test_declared_cycle_within_one_batch_is_rejected(self):
+        """同批两条声明互相成环 —— 必须在**建齐节点后**的接线阶段拦住。"""
+        with self.assertRaises(ValueError) as ctx:
+            self.engine.expand("t", "root", [self._spec("G", requires=["H"]),
+                                              self._spec("H", requires=["G"])])
+        self.assertIn("成环", str(ctx.exception))
+
+    def test_declared_unregistered_consumes_is_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.engine.expand("t", "root", [self._spec("L", consumes=["没登记"])])
+        self.assertIn("未登记资产", str(ctx.exception))
+
+    def test_declared_dangling_relates_is_rejected(self):
+        """`relates` 是软边、可成环，但**不能悬空**。
+
+        为何单独要这一条：`new_node` 会把 `relates` 写进节点（所以「字段存在」不需要接线代码），
+        接线代码对 `relates` 的**唯一**贡献就是这个悬空校验。不测它，
+        接线函数整个被删也测不出来（变异测试实测：这一条漏抓过一次）。
+        """
+        with self.assertRaises(ValueError) as ctx:
+            self.engine.expand("t", "root", [self._spec("N", relates=["没有这个"])])
+        self.assertIn("relates 悬空", str(ctx.exception))
+
+    def test_rejected_declaration_writes_nothing(self):
+        before = self._events()
+        for _ in range(2):
+            with self.assertRaises(ValueError):
+                self.engine.expand("t", "root", [self._spec("E", requires=["没有这个"])])
+        self.assertEqual(self._events(), before)
+        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        self.assertTrue(matched, diffs)
+
+    def test_declared_edges_are_idempotent_with_the_verbs(self):
+        """声明与动词两条路径不冲突（重复不产生重复边）。"""
+        self.engine.expand("t", "root", [self._spec("A"), self._spec("B", requires=["A"])])
+        self.engine.require("t", "B", "A")
+        self.assertEqual(self._tree()["nodes"]["B"]["requires"], ["A"])
+
+
 if __name__ == "__main__":
     unittest.main()

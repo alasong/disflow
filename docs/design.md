@@ -335,6 +335,41 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
 > 已知不对称（未做）：没有 `unrelate`。`relates` 只是信息边、**不参与就绪判定**，
 > 建错不影响调度，所以优先级低于 `unrequire`。
 
+### 7.4 验收判据与规模读数
+
+**`acceptance.expect` 三分支**（缺省 `exit0`）。两条容易写错、后果很重：
+
+| `expect` | 通过条件 | 易错点 |
+| --- | --- | --- |
+| `exit0` | `exit == 0` | — |
+| `contains:<子串>` | **`exit == 0` 且** 输出包含子串 | 只查子串 ⇒ 命令“打印 ok 然后失败”也能过门 |
+| `regex:<模式>` | **`exit == 0` 且** `re.search(pattern, 输出)` 命中 | 忘了退出码；或误以为是全匹配（实际是 **search**） |
+
+- 输出 = **stdout + stderr 合并**（否则测试框架写 stderr 的断言永远看不到）。
+- 非法 `expect` → **抛 `ValueError`**，不静默放行（静默放行比报错危险得多）。
+- `acceptance.waiver` 非空 ⇒ 不跑命令直接放行，理由进证据（可审计破例）。
+- 证据里 `output_tail` 封顶 2000 字符（否则单条证据能把投影撞爆）。
+
+**`diff_size` 读数**（`size_budget` 的分母）：
+
+1. 已跟踪文件 → 优先 `git diff HEAD --numstat`（**工作区 + 暂存区** vs 最后一次提交）。
+2. 仓里还没提交 ⇒ 合并「未暂存（`git diff`）+ 已暂存（`git diff --cached`）」。
+3. 不在 numstat 里的路径：**已跟踪 ⇒ 0**（git 已经告诉了我们“净改动为 0”）；
+   **未跟踪 ⇒ 数它的全部行数**（git 算不出，按整文件计）。
+
+> 为何强调这两条：第一版用裸 `git diff`，已跟踪文件的**暂存改动对它不可见**，
+> 于是落到“数整文件”的兜底——200 行文件改 1 行、`git add` 后被判 200 行（真缺陷，B3 补测时查出）。
+> 同理，把“已跟踪但净改动为 0”误归入兜底也会读成整文件行数。
+
+**`expand` 的边字段**：`requires` / `relates` / `produces` / `consumes` 可以在 `expand` 的
+children 声明里直接给，与 `require`/`relate`/`produce`/`consume` 动词等价且同一套校验。
+接线在**建齐本批全部节点之后**按「`relates` → `produces` → `consumes` → `requires`」分相进行：
+分相让同批兄弟的**声明顺序无关**（B 声明 `produces X`、A 声明 `consumes X` 两种顺序都成立）。
+
+> 这一条曾是**真缺陷**：`validate_node_spec` 接受这四个字段、`new_node` 却没有对应参数 ⇒
+> 声明通过校验后被**静默丢弃**。后果不是“少个字段”而是**调度乱序**——`requires` 丢了，
+> 评估节点在它要评估的工作未完工时就被推进首波（第二次真跑循环实测）。
+
 ---
 
 ## 8. 角色与阶段（修 mgt 的 P7）

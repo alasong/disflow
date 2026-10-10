@@ -60,8 +60,10 @@ def git_repo(test: DisflowTestCase, files: dict[str, str],
             handle.write(body)
     if commit:
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        # `--allow-empty`：没文件时也要造出 HEAD —— 否则 `git diff HEAD` 会 fatal，
+        # 测不了「已跟踪文件」那条分支（调用方可能只想先要一个干净基准）
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
-                        "commit", "-qm", "init"], cwd=repo, check=True)
+                        "commit", "--allow-empty", "-qm", "init"], cwd=repo, check=True)
     return Engine(cwd=repo), repo
 
 

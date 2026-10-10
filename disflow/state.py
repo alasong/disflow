@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from . import graph
 from .model import new_node, next_id, validate_node_spec
 from .spec import EVENT_KINDS
 
@@ -64,6 +65,7 @@ def _on_node_expand(state: dict, event: dict) -> None:
     tree_name = event["slug"]
     parent = _node(state, tree_name, event["node"])
     tree = state["trees"][tree_name]
+    pending: list[tuple[dict, str]] = []
     for spec in event.get("children", []):
         validate_node_spec(spec)
         node_id = spec.get("id") or next_id(tree["nodes"])
@@ -75,7 +77,58 @@ def _on_node_expand(state: dict, event: dict) -> None:
             role=spec.get("role", "dev"), goal=spec.get("goal", ""),
             context=spec.get("context"), entry=spec.get("entry", ""),
             acceptance=spec.get("acceptance"),
-            touch_plan=spec.get("touch_plan"), awaits=spec.get("awaits"))
+            touch_plan=spec.get("touch_plan"), awaits=spec.get("awaits"),
+            requires=spec.get("requires"), relates=spec.get("relates"),
+            produces=spec.get("produces"), consumes=spec.get("consumes"))
+        pending.append((spec, node_id))
+    # 两阶段 + 分相：先建齐**所有**节点，再接线。否则同批兄弟之间互相声明（B produces X、
+    # A consumes X；或 B requires A）会被误判为「悬空」。分相让同批内的声明顺序无关。
+    _link_relates(tree, pending)
+    _link_produces(tree, pending)
+    _link_consumes(tree, pending)
+    _link_requires(tree, pending)
+
+
+def _declared(spec: dict, key: str) -> list[str]:
+    return [str(item) for item in (spec.get(key) or [])]
+
+
+def _link_relates(tree: dict, pending: list[tuple[dict, str]]) -> None:
+    """`relates` 是软边（可成环）—— 只查两端存在。"""
+    for spec, node_id in pending:
+        for other in _declared(spec, "relates"):
+            if other not in tree["nodes"]:
+                raise ValueError(f"{node_id} relates 悬空：{other}")
+            _append_unique(tree["nodes"][node_id], "relates", other)
+
+
+def _link_produces(tree: dict, pending: list[tuple[dict, str]]) -> None:
+    for spec, node_id in pending:
+        for name in _declared(spec, "produces"):
+            _append_unique(tree["nodes"][node_id], "produces", name)
+            tree["assets"][name] = node_id
+
+
+def _link_consumes(tree: dict, pending: list[tuple[dict, str]]) -> None:
+    """`consumes` 必须指向已登记资产（与 `consume` 动词同一判据）——故在 produces 之后跑。"""
+    for spec, node_id in pending:
+        for name in _declared(spec, "consumes"):
+            if name not in tree["assets"]:
+                raise ValueError(f"{node_id} consumes 未登记资产：{name}")
+            _append_unique(tree["nodes"][node_id], "consumes", name)
+
+
+def _link_requires(tree: dict, pending: list[tuple[dict, str]]) -> None:
+    """`requires` 是调度边 —— 与 `require` 动词同一套校验：拒悬空 / 自环 / 成环。"""
+    for spec, node_id in pending:
+        for dep in _declared(spec, "requires"):
+            if dep not in tree["nodes"]:
+                raise ValueError(f"{node_id} requires 悬空：{dep}")
+            if dep == node_id:
+                raise ValueError(f"{node_id} 不能依赖自身")
+            if graph.would_cycle(tree["nodes"], node_id, dep):
+                raise ValueError(f"加边即成环：{node_id} requires {dep}")
+            _append_unique(tree["nodes"][node_id], "requires", dep)
 
 
 def _append_unique(node: dict, key: str, value: str) -> None:

@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 189 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 226 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -146,6 +146,37 @@ disflow 决定，**无硬编码列表**。
 
 > `rescope` 的对偶是「改声明」，`scope_waiver` 的对偶是 `size_waiver`（破例）——
 > 现在两个门（`design_first` / `size_budget`）形状对称了。
+
+### 0.6 第二次真跑循环（树 `gap-cov`，2026-10-10）：验证「新机制是否真减摩擦」
+
+目的不是再补两个测试，而是回答：**上一轮为一个摩擦加的三套机制，到底有没有用？**
+目标是 backlog 里两条**已验证缺口**（B3 `diff_size` tracked 分支 / B4 `expect` 三分支）。
+
+节点：`D1`（循环中发现的修复）→ `B3` → `B4` → `E1`（变异）→ `S1`（沉淀）。
+
+**循环中抳出 3 个真缺陷**（全部是“声明/输入被接受、然后什么都不发生”这一类）：
+
+| # | 缺陷 | 后果 |
+| --- | --- | --- |
+| 1 | `expand` **静默丢弃** `requires`/`relates`/`produces`/`consumes`（`validate_node_spec` 接受、`new_node` 无此参数） | **调度乱序**：E1 在它要评估的 B3/B4 未完工时就被推进首波 |
+| 2 | 已跟踪文件的**暂存改动**对裸 `git diff --numstat` 不可见 ⇒ 落到“数整文件”兜底 | 200 行文件改 1 行、`git add` 后被判 200 行（规模门误报超预算） |
+| 3 | 已跟踪但**净改动为 0** 的文件也被兜底按整文件计 | 同上（且我自己的测试先写错了预期，被代码纠正） |
+
+**摩擦观测——这正是本轮要的答案：**
+
+| 场景 | 上一轮（无机制） | 本轮（有机制） |
+| --- | --- | --- |
+| `#1` 发现要改 `gates.py`，不在 B3 声明内，**尚未碰** | — | `rescope` **一次成功**，理由入库（`rescope_log`） |
+| 同上，但要改的 `tests/base.py` **已经碰过** | — | `rescope` **按设计拒收**并点名 `scope_waiver` ⇒ 用显式破例，`violations` 照记、理由进 `evidence` |
+| 上一轮同类（`C7` 依赖建反） | 只能 `skip` **整个节点** | （有 `unrequire` 后不会再发生） |
+
+> 结论：三套机制都在**真实摩擦点上**被触发，且都是“一条命令”而非“废掉节点”。
+> 尤其是 `rescope` 的拒绝路径——它拒绝得很对：若允许把已改过的文件事后声明进来，
+> `design_first` 就等于不存在。
+
+**变异测试抳出 2 个「测试自身的洞」**（已补：`test_declared_dangling_relates_is_rejected`、
+`test_per_file_agrees_with_total`）——详见 backlog §B3/B4 已结节。
+可复跑回归口：`python3 scripts/mutation_check.py`（**19/19**，有漏抓则退出码 1）。
 
 ### 0.3 随后修掉的 C4.2 与顺手补的两个可执行检查
 
