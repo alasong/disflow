@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 103 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 156 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -59,6 +59,61 @@ V3 的「篡改投影必须被抓」**确实被抓**（exit 1）—— 一致性
 3. **§10 的三条偏离**（`global_status` 节点化 / `phase→stage` / `registry` 登记）只在文档登记，未实现。
 4. **二轮未覆盖**（V2 自述）：`diff_size` 的 tracked 已修改文件分支；`contains:`/`regex:` 两种 `expect`。
 5. **分层自检不是闭集**：针脚表式，未登记的业务词仍会漏判（`done` 因与机制终态重名而根本不可判定）——已写进 `design.md` §9.1。
+
+### 0.1 首次真跑循环（树 `cli-cov`，2026-10-10）
+
+背景：上面两轮验证都测了「计算的正确性」，却从未测过「分发器真的被用来干活」。
+本轮拿一个**真实目标**（补 CLI 装配层测试）跑完整循环——顺序、门、证据全部由 
+disflow 决定，**无硬编码列表**。
+
+| | 结果 |
+| --- | --- |
+| 树 | `cli-cov`（与 `disflow-v0.1` 并行 = 多块板） |
+| 节点 | C1–C4（测试）· C5–C8（循环中发现的缺陷修复）· E1（收益验证）· S1（沉淀） |
+| 循环是否由 `drive` 驱动 | 是：每次选谁干都读 `drive` 的就绪波次 |
+| 产出 | 4 个新测试文件（48 个用例）、4 处真缺陷修复、1 次变异测试 |
+
+**循环中发现的真缺陷**（不是人造用例）：
+
+| # | 缺陷 | 怎么暴露的 | 后果 |
+| --- | --- | --- | --- |
+| 1 | `cmd_close` 漏传 `dry_run` → `--dry-run` 真关树 | 写 `close --dry-run` 测试 | 与文档矛盾（V3 曾报，但当时测试绕过了 CLI） |
+| 2 | `GateReject` 报文走 **stdout**（`EngineError` 走 stderr） | 断言错误通道 | 脚本 `2>/dev/null` 时把门拒收看成成功 |
+| 3 | `cmd_doctor` 失败报文同样走 stdout | 同上 | 同上 |
+| 4 | `cmd_import` 错误报文无 `✗` 前缀 | 断言报文约定 | 报文不一致（机器不可区分） |
+| 5 | **`store._persist` 先落盘再重投影** | 重复 `expand` 被拒后 | **一次非法写入 = 状态永久不可恢复**（事件流不可再重放） |
+
+> #5 最严重：`project` 才是语义闸门（重复 id / 环 / 悬空引用都在这里抛），
+> 而它跟在 `append_jsonl` **之后**。实测：同一个重复 `expand` 被拒 3 次，
+> 事件流里就多了 3 条重复事件，`rebuild` 直接不可用。修法：先试算后落盘。
+> 被污染的事件流做了一次**手工修复**（剔除 2 条本不该存在的事件，备份为
+> `events.jsonl.poisoned.bak`）——这是 bug 自己破坏了 append-only，不是人为篡改。
+
+**变易测试（E1 的验收）**：把 5 处修复逐个“抖回”缺陷，验证新测试能抓到：
+
+| 变易 | 注入后 | 还原后 |
+| --- | --- | --- |
+| M1 `cmd_close` 漏传 `dry_run` | 失败 ✅ | 通过 |
+| M2 GateReject 回 stdout | 失败 ✅ | 通过 |
+| M3 import 去 `✗` 前缀 | 失败 ✅ | 通过 |
+| M4 `_persist` 回到先落盘 | 失败 ✅ | 通过 |
+
+**捕获率 4/4** —— 新测试有牙，不是摆设。
+
+### 0.2 本轮暴露的产品/流程缺口（已登记 backlog §C4）
+
+| # | 缺口 | 证据 |
+| --- | --- |
+| 1 | **`touch_plan` 建树后不可更新**，且 `design_first` **无逃生口** | 干活时发现需多改一个文件 → 门拒收，但无合法路径改声明 |
+| 2 | **baseline 是文件粒度**：同一文件被两个节点先后修改，第二个节点的 `introduced` 为空 | C6 的 scope 检查空转（C5 先弄脏了 `cli.py`） |
+| 3 | 无 `unrequire`：建错依赖只能 `skip` 整节点 | C7 的 requires 方向建反，只能 skip 并记录 |
+| 4 | **陈旧 `__pycache__` 会静默跑旧代码** | store 修复已落盘但行为仍旧；清字节码后立即生效 |
+
+> #4 值得单独记：当时我差点把「陈旧字节码」误判为「修复无效 / 测试隔离有问题」。
+> 判据：`inspect.getsource` 显示新代码而行为是旧的 → 先清 `__pycache__` 再下结论。
+>
+> **证据边界**：`cli-cov` 树的状态只活在本机 `.disflow/`（已 gitignore）。
+> 本文件记录的是**结果与教训**；树的节点级证据（每节点的 `introduced`/`size`/门报文）是本地产物。
 
 ---
 
