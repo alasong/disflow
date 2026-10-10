@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 240 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 248 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -177,7 +177,32 @@ disflow 决定，**无硬编码列表**。
 
 **变异测试抳出 2 个「测试自身的洞」**（已补：`test_declared_dangling_relates_is_rejected`、
 `test_per_file_agrees_with_total`）——详见 backlog §B3/B4 已结节。
-可复跑回归口：`python3 scripts/mutation_check.py`（**19/19**，有漏抓则退出码 1）。
+可复跑回归口：`python3 scripts/mutation_check.py`（**29/29**，有漏抓则退出码 1）。
+
+### 0.7 python-expert 12 类审查（按“该配置化却硬编码”切入）
+
+跑法：skill 自带的 AST 检查器（+ 人工 4 类）。全仓 **23 处 except 没有漏捕**；
+**未发现 cwd 依赖**；无裸 except / 无 `shell=True` / 无可变默认参数；
+第 12 类（失联检测）不适用（无 daemon，设计如此）。
+
+**抳出的真问题——都是“声明是一套、实现是另一套”**：
+
+| # | 问题 | 后果 |
+| --- | --- | --- |
+| 1 | `NODE_FIELDS` 含 `parent`/`status`/`lease`/`evidence`，而 `new_node` 不收它们 | 声明→校验通过→**静默丢弃**（实测 `status:"done"` 进去仍是 `pending`）。与上一轮的 `requires` **同一 bug 家族** |
+| 2 | `EVENT_KINDS` 与 `_HANDLERS` 两套清单，前者**只管报错文本** | 可静默漂移；报错会列出根本没有 handler 的 kind |
+| 3 | `store.py` 模块顶层 `import fcntl` | 非 POSIX 平台上连 `import disflow` 都失败（只读动词本来可用） |
+
+**已修**：
+
+- 节点字段拆为 **可声明** vs **运行时/派生**；`expand` 声明运行时字段**报错**（不是忽略）。
+  新增 `tests/test_declarations.py` 的**结构性守卫**：`DECLARABLE_FIELDS` 必须与
+  `new_node` 真正接下的参数**逐个相等** ⇒ 这类 bug **结构上不可能再复发**。
+- `spec.EVENT_KINDS` ←→ `state._HANDLERS` 由同一测试钉住相等；报错文本改用 `_HANDLERS`。
+- `fcntl` 改惰性导入；非 POSIX 上**能 import、能读**，只在写时报一句能看懂的错；
+  **不静默降级为不加锁**（那会变成并发写没保护）。Windows 实现已登记 backlog §D3。
+- `store.checkpoint` 等“带过来但不用”的 vendored API 在文件头**明标**，
+  以免读者以为有第二个真相源。
 
 ### 0.3 随后修掉的 C4.2 与顺手补的两个可执行检查
 

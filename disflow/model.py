@@ -7,12 +7,23 @@ from __future__ import annotations
 
 from .spec import KINDS, STORED_STATUS
 
-# 节点字段闭集（expand 输入多出的键即报错）
+# 节点在**投影里**的完整字段集
 NODE_FIELDS: frozenset[str] = frozenset({
     "id", "parent", "kind", "stage", "role", "goal", "context", "entry",
     "requires", "relates", "produces", "consumes", "touch_plan", "acceptance",
     "awaits", "status", "lease", "evidence",
 })
+
+# 运行时/派生字段：由事件流决定，**不允许**在 `expand` 的声明里给
+#   - `parent`：由 expand 的父子关系决定（声明另一个父没有意义）
+#   - `status` / `lease` / `evidence`：由 `node.start` / `collect` / `done` 等事件驱动
+#
+# 为何是**拒收**而不是忽略：忽略就是“声明被接受、然后静默丢弃”——同一个 bug 家族
+# （`requires` 曾经也被静默丢弃，后果是调度乱序）。要么生效，要么报错。
+RUNTIME_FIELDS: frozenset[str] = frozenset({"parent", "status", "lease", "evidence"})
+
+# `expand` 声明可给的字段 = 完整形状 − 运行时字段
+DECLARABLE_FIELDS: frozenset[str] = NODE_FIELDS - RUNTIME_FIELDS
 
 _LIST_FIELDS = ("requires", "relates", "produces", "consumes", "touch_plan", "awaits")
 
@@ -49,10 +60,17 @@ def new_node(node_id: str, *, parent: str | None = None, kind: str = "task",
 
 
 def validate_node_spec(spec: dict) -> None:
-    """校验 expand 传入的子节点声明：字段闭集 + 必需键 + 取值合法。"""
+    """校验 expand 传入的子节点声明：字段闭集 + 拒运行时字段 + 取值合法。"""
     unknown = set(spec) - NODE_FIELDS
     if unknown:
-        raise ValueError(f"节点声明含未定义字段：{sorted(unknown)}（允许：{sorted(NODE_FIELDS)}）")
+        raise ValueError(f"节点声明含未定义字段：{sorted(unknown)}"
+                         f"（可声明：{sorted(DECLARABLE_FIELDS)}）")
+    runtime = set(spec) & RUNTIME_FIELDS
+    if runtime:
+        raise ValueError(
+            f"这些字段由运行时事件决定，不能在 expand 里声明：{sorted(runtime)}"
+            "（声明了也不会生效——`parent` 由 expand 的父子关系决定；"
+            "`status`/`lease` 走 start/fail/retry/skip/reap 动词；`evidence` 由 done 自算）")
     if spec.get("kind", "task") not in KINDS:
         raise ValueError(f"kind 非法：{spec.get('kind')!r}（应为 {KINDS}）")
     for key in _LIST_FIELDS:

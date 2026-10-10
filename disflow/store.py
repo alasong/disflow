@@ -17,6 +17,13 @@
     `load_events` / `append_event` / `checkpoint` / `write_projection` / `rebuild` / `projection_matches`
 `projection_matches` 内部调用 `compare_projection` 做纯 diff —— 高阶层带 IO 与注入，原语层无 IO。
 
+**disflow 侧的偏离（与本仓保持一致所需，两处）**：
+1. `checkpoint` / `read_projection_offset` 等随库带过来，但**本仓零调用方**（保留是为了
+   vendored API 对等，方便日后与上游重新同步；不是功能缺口）。审查（python-expert 第 1 类）
+   把这种“带过来但不用”的标注出来，以免读者以为有第二个真相源。
+2. `file_lock` 里的 `fcntl` 改成了**惰性导入**：顶层导入会让非 POSIX 平台
+   连 `import disflow` 都失败（只读动词本来是可用的）。
+
 **为什么投影由调用方注入**：引擎是通用的，投影形状是每实例机制（不同实例的状态不是同一个
  dict）。把 reducer 当参数传入，避免 lib 把某个实例的投影 schema 硬编码进框架 —— 这正是
 「机制零存储细节」的要求。`append_event` 的 `project` **必填**：不给默认值，避免造出
@@ -29,7 +36,6 @@
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
 import tempfile
@@ -136,7 +142,20 @@ def read_jsonl(path: str) -> list[dict]:
 @contextlib.contextmanager
 def file_lock(directory):
     """跨进程互斥（`flock`）：给「读判定 → 写事件」**整段**用，否则两个会话能各判一次都放行
-    （check-then-act）。同进程重复取锁会自锁 ⇒ 调用方自己不要嵌套取锁；异常路径靠 fd 关闭释放。"""
+    （check-then-act）。同进程重复取锁会自锁 ⇒ 调用方自己不要嵌套取锁；异常路径靠 fd 关闭释放。
+
+    为何 `fcntl` 是**函数内惰性导入**：它在模块顶层导入会让整个包在 Windows 上
+    `import disflow` 就失败——只读动词本来是可用的。惰性化后：能 import、能读、
+    只在真要写时才报一句能看懂的错。**不静默降级为不加锁**：那会变成并发写没保护。
+    （本文件是 vendored 代码，此为 disflow 侧的偏离，见文件头。）
+    """
+    try:
+        import fcntl                     # 仅 POSIX；Windows 走到下面那句报错
+    except ImportError as exc:           # pragma: no cover - 非 POSIX 平台
+        raise OSError(
+            "disflow 的跨进程加锁依赖 POSIX `fcntl.flock`，本平台不支持"
+            "——写操作无法安全进行（读操作不受影响）。"
+            "Windows 的 `msvcrt.locking` 实现尚未提供，已登记在 docs/v0.2-backlog.md") from exc
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, "lock")
     with open(path, "a+") as handle:

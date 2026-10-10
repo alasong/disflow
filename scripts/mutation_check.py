@@ -118,6 +118,28 @@ MUTATIONS: list[Mutation] = [
      '            if False:\n                raise ValueError("x")',
      "test_edges.py"),
 
+    # ── 声明与实现的一致性（本轮审查抳出的三个“两套清单”）──────────────
+    ("声明可给的字段集与 new_node 参数错开", "disflow/model.py",
+     'RUNTIME_FIELDS: frozenset[str] = frozenset({"parent", "status", "lease", "evidence"})',
+     'RUNTIME_FIELDS: frozenset[str] = frozenset({"status", "lease", "evidence"})',
+     "test_declarations.py"),
+    ("运行时字段不再拒收（回到静默丢弃）", "disflow/model.py",
+     '    runtime = set(spec) & RUNTIME_FIELDS\n    if runtime:',
+     '    runtime = set()\n    if runtime:',
+     "test_declarations.py"),
+    ("事件闭集与派发表漂移", "disflow/state.py",
+     '    "node.reclaim": _on_node_reclaim,',
+     '    "node.reclaim": _on_node_reclaim,\n    "node.不存在": _on_node_reclaim,',
+     "test_declarations.py"),
+    ("报错文本退回可漂移的 EVENT_KINDS", "disflow/state.py",
+     '        raise ValueError(f"未知事件 kind：{kind!r}（可派发：{sorted(_HANDLERS)}）")',
+     '        raise ValueError(f"未知事件 kind：{kind!r}（闭集：{sorted(_HANDLERS)}）")',
+     "test_declarations.py"),
+    ("fcntl 恢复顶层导入（非 POSIX 上整包不可导入）", "disflow/store.py",
+     'import contextlib\nimport json',
+     'import contextlib\nimport fcntl\nimport json',
+     "test_declarations.py"),
+
     # ── 空洞通过：记录与报出 ────────────────────────────────────────────
     ("空洞检测失效（永远返回空）", "disflow/gates.py",
      '    reasons: dict[str, str] = {}\n'

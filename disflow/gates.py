@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shlex
 import subprocess
 
@@ -23,7 +24,6 @@ def _check_expect(returncode: int, output: str, expect: str) -> tuple[bool, str]
         ok = returncode == 0 and needle in output
         return ok, f"exit={returncode}；期望包含 {needle!r}"
     if expect.startswith("regex:"):
-        import re
         pattern = expect[len("regex:"):]
         ok = returncode == 0 and re.search(pattern, output) is not None
         return ok, f"exit={returncode}；期望匹配 /{pattern}/"

@@ -83,6 +83,25 @@ disflow rebuild [--check]                # 从事件重建；--check 比对一�
 }
 ```
 
+**字段分两类（声明 vs 运行时）——在本轮审查前它们是混在一起的：**
+
+| 类 | 字段 | 怎么来 |
+| --- | --- | --- |
+| **可声明** | `id` `kind` `stage` `role` `goal` `context` `entry` `requires` `relates` `produces` `consumes` `touch_plan` `awaits` `acceptance` | 在 `expand` 的 children 里给，或用对应动词改 |
+| **运行时/派生** | `parent` `status` `lease` `evidence` | 由事件流决定 |
+
+`expand` 里声明运行时字段会 **报错**（不是忽略）：`parent` 由 expand 的父子关系决定；
+`status`/`lease` 走 `start`/`fail`/`retry`/`skip`/`reap`；`evidence` 由 `done` 自算。
+
+> 为何“报错”而不是“忽略”：忽略就是**声明被接受、然后静默丢弃**——同一个 bug 家族。
+> `requires`/`relates`/`produces`/`consumes` 曾经就是这样被丢弃的（后果是**调度乱序**）。
+> 现在由 `tests/test_declarations.py` 的**结构性守卫**钉住：
+> `DECLARABLE_FIELDS` 必须与 `new_node` 真正接下的参数**逐个相等**——
+> 多一个就报错，而不是等下次有人踩到才发现。
+
+同理，`spec.EVENT_KINDS`（声明）与 `state._HANDLERS`（可派发）由同一测试钉住必须相等；
+`apply_event` 的报错文本改用 `_HANDLERS`（**真正可派发**的集合），不再引用可漂移的声明。
+
 **关键区分（修 mgt 的 P2/P3）：**
 
 | 概念 | 住哪 | 谁写 |
