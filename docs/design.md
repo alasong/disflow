@@ -400,10 +400,24 @@ disflow host-next <tree> [--json]
 同一投影的三种渲染，**不各存一份**：
 
 ```text
-disflow board <tree> [--stage dev]   # 看板：按 stage 分列
-disflow tree  <tree>                 # 树：按 parent 缩进
-disflow graph <tree> [--dot]         # 图：requires/relates
+disflow board <tree> [--stage S] [--json]   # 看板：按 stage 分列 × 列内树层级 × 状态分组
+disflow tree  <tree>                        # 树：按 parent 缩进
+disflow graph <tree> [--dot]                # 图：requires/relates
 ```
+
+**看板布局只有一处实现**（`views.board_layout`，2026-10-11 用户要求「按阶段列出来 + 按树结构的
+类别分层」）：人读态（`board_lines`）与机器态（`board --json`，带 `parent`/`depth`）都是它的渲染，
+宿主侧**运行视图**（并行 lane 的实时进度，`.agents/skills/disflow/lanes_watch.sh`）也从同一份
+数据取「列 + 层级」——**任何一侧都不许再写一套分列/缩进**（同一判据两份实现 ⇒ 两面分叉）。
+
+| 布局判据 | 行为 |
+| --- | --- |
+| **列** | 配置顺序（`spec.STAGES` → `disflow.json` 的 `stages`）**逐列全出**，空列显式 `0/0`；非规范 stage 追加末尾并标注（读时容忍 ≠ 静默隐藏） |
+| **列内层级** | 容器（`kind=container`）是**结构行**（`◦`），任务按 `parent` 缩进；深度按**列内**祖先链算——祖先不在本列时子节点照旧出现（不丢、不负缩进） |
+| **`[req]` 列** | 显示**树自身的目标**（root 容器的 `goal`）；容器**不计入** `done/total`（与 `ready.progress`「容器不量化」同一口径） |
+| **列内状态分组** | `▶ 运行中(holder)` / `· 可派` / `· 待前置(缺哪个 requires)` / `· 被在跑挡住(与谁、重叠路径)` / `✓ 完成` / `— 跳过` / `✗ 失败`——某组只要有一个节点就必须出现 |
+| **可派性同源** | 直接消费 `dispatch.drive` 的读数（`waves` / `deferred` / `blocked`），视图层不重算写面冲突 |
+| **纯读** | 跑 `board` 前后 `events.jsonl` 与 `state.json` **逐字节不变** |
 
 **「多块板」= 多棵树**（FR-22）：每棵树作用域隔离，各有权威分发者（`drive`/`ready` 只看本树节点）。
 跨树依赖**不进图**（FR-23）：降级为 **`awaits` 显式完成信号** —— 节点声明 `awaits: [<tree>]`，
@@ -660,7 +674,7 @@ disflow reopen <tree> [--reason S]                 # 显式撤销 closed（关�
 disflow drive <tree> [--json] [--dry-run]          # 只推不跑
 disflow brief <tree> <node>                        # 写全派发契约
 disflow plan <tree>
-disflow board/tree/graph <tree> [--dot] [--stage S]
+disflow board <tree> [--stage S] [--json]         # 看板：按 stage 分列
 disflow status [<tree>] [--json]
 disflow metrics <tree> [--json]                    # 量化：点数/速度/燃尽/截止余量（只读，§2.4）
 disflow deadline <tree> <YYYY-MM-DD|->             # 迭代边界（声明；逾期不拒任何动词）
@@ -769,7 +783,7 @@ disflow doctor                                     # 自检
 | 时机 | 行为 | 为何 |
 | --- | --- | --- |
 | **写**（`expand`） | 未知值 → 报错，并指出“若这是自定义列，写进 `disflow.json`” | 挡住错别字（之前 `stage:"audti"` 会**静默多出一个看板列**） |
-| **读**（`views.board_lines`） | 未知 stage **容忍**（`order += sorted(...)`） | 事件流可能来自更新的版本/不同配置，视图不能崩 |
+| **读**（`views.board_layout`） | 未知 stage **容忍**（追加在末尾并标注「非规范列」） | 事件流可能来自更新的版本/不同配置，视图不能崩 |
 
 **为何 reducer 不校验**：reducer 一依赖配置，事件流就**不可重放**了——换台机器或改了
 `stages`，重放旧事件会直接失败。「事件流不可重放」比「错别字没当场报」严重得多。

@@ -84,6 +84,7 @@ class CliReadOnlyVerbTest(DisflowTestCase):
                      ["brief", "t", "a"], ["plan", "t"], ["status", "t"],
                      ["status", "t", "--json"], ["status", "--json"],
                      ["board", "t"], ["board", "t", "--stage", "dev"],
+                     ["board", "t", "--json"],
                      ["tree", "t"], ["graph", "t"], ["graph", "t", "--dot"],
                      ["trees"], ["rebuild", "--check"], ["doctor"]):
             code, _out, err = self._run(argv)
@@ -240,6 +241,60 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         self.assertIn("bogus", err)
         for allowed in ("req", "design", "dev", "verify"):
             self.assertIn(allowed, err, "拒收报文必须报出允许的列")
+
+    def test_board_req_column_shows_the_tree_goal(self):
+        """`[req]` 列显示**树自身的目标**（root 容器的 `goal`）——它是需求，不是任务行。"""
+        self._seed()
+        code, out, _err = self._run(["board", "t", "--stage", "req"])
+        self.assertEqual(code, 0)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "[req] 0/0", "容器不计入任务计数（它不是该列的任务行）")
+        self.assertTrue(any("◦ root" in line for line in lines), "root 以结构行出现")
+        self.assertIn("只读测试", out, "[req] 列必须打出树自身的目标")
+
+    def test_board_json_is_the_same_layout_as_the_human_view(self):
+        """`--json` 与人读态**同源**（同一份 `board_layout`），且必须带**层级**（父子/深度）。"""
+        self._seed()
+        code, out, _err = self._run(["board", "t", "--json"])
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(payload["tree"], "t")
+        self.assertEqual([col["stage"] for col in payload["columns"]],
+                         ["req", "design", "dev", "verify"], "列 = 配置顺序（含空列）")
+        rows = [row for col in payload["columns"] for group in col["groups"]
+                for row in group["rows"]]
+        by_id = {row["node"]: row for row in rows}
+        self.assertEqual(by_id["a"]["parent"], "root")
+        self.assertEqual(by_id["a"]["depth"], 0)
+        for row in rows:
+            self.assertIn("parent", row, "运行视图要据此分层：每行必备 parent")
+            self.assertIn("depth", row, "运行视图要据此缩进：每行必备 depth")
+        # 同源：人读态的列头与组标签就是这份 layout 的渲染（顺序、文本都对得上）
+        _code, human, _err = self._run(["board", "t"])
+        self.assertEqual([line for line in human.splitlines() if line.startswith("[")],
+                         [col["header"] for col in payload["columns"]])
+        labels = [group["label"] for col in payload["columns"] for group in col["groups"]]
+        self.assertEqual([line for line in human.splitlines() if line in labels], labels)
+
+    def test_board_is_read_only_byte_for_byte(self):
+        """纯读：跑 `board`（含过滤/非法列/json）前后，`events.jsonl` 与 `state.json`
+        必须**逐字节不变**（比只数事件条数更强：投影被改写也算破）。"""
+        self._seed()
+        paths = [store.events_path(spec.SPEC), store.projection_path(spec.SPEC)]
+
+        def snapshot() -> list[bytes]:
+            out: list[bytes] = []
+            for path in paths:
+                with open(path, "rb") as handle:
+                    out.append(handle.read())
+            return out
+
+        before = snapshot()
+        for argv in (["board", "t"], ["board", "t", "--stage", "dev"],
+                     ["board", "t", "--stage", "design"], ["board", "t", "--json"],
+                     ["board", "t", "--stage", "bogus"]):
+            self._run(argv)
+        self.assertEqual(snapshot(), before, "board 是纯读：两个文件必须逐字节不变")
 
     def test_tree_renders_hierarchy(self):
         self._seed()

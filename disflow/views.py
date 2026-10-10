@@ -1,22 +1,123 @@
 """disflow · 视图层（D80）。
 
 同一投影的三种渲染 —— 看板（按 stage）/ 树（按 parent）/ 图（按边）。**同源**，不各存一份。
+
+看板 = **阶段列 × 树层级**（2026-10-11 用户要求：「看板的运行视图，能按照阶段列出来，
+并且能按树结构的类别分层」）。布局**只有 `board_layout` 一处实现**：人读态（`board_lines`）
+与机器态（`disflow board --json`）都从它渲染，后续宿主的**运行视图**也从同一份数据取
+「列 + 层级 + 状态分组」。**任何一侧都不许再写一套分列/缩进**——本仓已知的「两面分叉」病
+（同一个判据两份实现 ⇒ 两边给出不同答案）正是这条要防的。
 """
 from __future__ import annotations
 
+from .dispatch import drive
 from .model import children_of
 from .spec import STAGES
 
 _MARKS = {"done": "✓", "running": "▶", "failed": "✗", "skipped": "—", "pending": "·"}
+_CONTAINER_MARK = "◦"
+
+# 列内**状态分组**：固定顺序 + 标签。某组无节点则整组不出现；有节点则**必须出现**
+# （绝不静默丢：每个节点恰好落进一组，见 `_group_of`）。
+# `structure`：容器是**结构行**（不是该列的任务行），放在最前——读者先看到骨架再看活。
+# `other`：非规范 status（如 `import` 进来的外来取值）——原样显示，不假装它是六类之一。
+_GROUPS: tuple[tuple[str, str], ...] = (
+    ("structure", "◦ 结构行（容器）"),
+    ("running", "▶ 运行中"),
+    ("ready", "· 可派"),
+    ("blocked", "· 待前置"),
+    ("deferred", "· 被在跑挡住"),
+    ("done", "✓ 完成"),
+    ("skipped", "— 跳过"),
+    ("failed", "✗ 失败"),
+    ("other", "? 非规范状态（原样显示）"),
+)
+_GROUP_LABELS: dict[str, str] = dict(_GROUPS)
 
 
 def _mark(node: dict) -> str:
     return _MARKS.get(node.get("status", "pending"), "?")
 
 
-def board_lines(tree: dict, stage: str | None = None,
-                stages: tuple[str, ...] | None = None) -> list[str]:
-    """看板视图：按 `stage` 分列，只列任务节点（容器是结构，不进板）。
+def _stage_of(node: dict) -> str:
+    """节点所属的列（缺失/未知 stage 归入 `?` 列——读时容忍，**不改写**其值）。"""
+    return str(node.get("stage") or "?")
+
+
+def _column_rows(nodes: dict, root: str | None, name: str) -> list[tuple[str, int]]:
+    """本列里的节点 + **列内深度**（DFS 顺序，父在子前）。
+
+    深度 = 该节点**在本列里**的祖先数。祖先不在本列时不计：子节点照旧出现、深度回到本列
+    顶层（**不许丢、不许负缩进**）——例如容器在 `dev` 列而子节点在 `verify` 列时，子节点
+    在 verify 列里就是顶层。
+
+    root 够不着的节点（`parent` 缺失 / 数据损坏）**兜底追加**：与「非规范 stage 不许丢」
+    同一条纪律——视图对坏数据容忍，但不容忍静默隐藏。
+    """
+    rows: list[tuple[str, int]] = []
+    seen: set[str] = set()
+
+    def walk(node_id: str, depth: int) -> None:
+        if node_id in seen:            # 防环（数据损坏）：宁可少画，不许递归死循环
+            return
+        seen.add(node_id)
+        child_depth = depth
+        if _stage_of(nodes[node_id]) == name:
+            rows.append((node_id, depth))
+            child_depth = depth + 1
+        for child in children_of(nodes, node_id):
+            walk(child, child_depth)
+
+    if root and root in nodes:
+        walk(root, 0)
+    for node_id in sorted(nodes):
+        if node_id not in seen:
+            walk(node_id, 0)
+    return rows
+
+
+def _group_of(node_id: str, node: dict, packable: set[str],
+              deferred: dict[str, str], blocked: dict[str, list[str]]) -> str:
+    """节点的列内状态分组 —— 判据**全部来自 `dispatch.drive`**（可派性与 drive 同源）。
+
+    判定顺序：分型（容器=结构行）→ 终态/运行（存储态）→ 就绪被挡 / 就绪 / 待前置 → 兜底
+    `other`。兜底不是装饰：`import` 能把外来 status 直接写进投影，没有兜底它们会自动消失
+    （正是「静默丢」）。
+    """
+    if node.get("kind") != "task":
+        return "structure"
+    status = str(node.get("status") or "pending")
+    if status in ("running", "done", "skipped", "failed"):
+        return status
+    if node_id in deferred:
+        return "deferred"
+    if node_id in packable:
+        return "ready"
+    if node_id in blocked:
+        return "blocked"
+    return "other"
+
+
+def _detail(node_id: str, node: dict, group: str,
+            deferred: dict[str, str], blocked: dict[str, list[str]]) -> str:
+    """行尾的**可读理由**（谁在跑 / 缺哪个前置 / 与谁重叠哪些路径）——同源取数，不重算。"""
+    if group == "running":
+        holder = (node.get("lease") or {}).get("holder") or "?"
+        return f"holder={holder}"
+    if group == "deferred":
+        return deferred.get(node_id, "")
+    if group == "blocked":
+        return "缺 " + "、".join(blocked.get(node_id) or [])
+    if group == "other":
+        return f"status={node.get('status')!r}（非规范；不静默隐藏）"
+    return ""
+
+
+def board_layout(tree: dict, stage: str | None = None,
+                 stages: tuple[str, ...] | None = None, *,
+                 closed: set[str] | frozenset[str] = frozenset(),
+                 tree_name: str = "") -> dict:
+    """看板布局的**唯一实现**：阶段列 + 列内树层级 + 列内状态分组。
 
     **列定义单一来源**：`stages`（省略取 `spec.STAGES`；CLI 传解析后的 `cfg.stages`，
     于是 `disflow.json` 的 `stages` 就是列的唯一来源 —— 视图层不再抄一份字面量）。
@@ -30,33 +131,98 @@ def board_lines(tree: dict, stage: str | None = None,
     —— 与 `engine._validate_vocabulary` 的「读时容忍」同一条纪律（视图对未知值容忍、不崩），
     但容忍不等于静默隐藏数据。
 
+    **`[req]` 列 = 树自身的目标**：root 是**容器**（`stage=req`，其 `goal` 就是树的目标），
+    它以**结构行**出现，于是需求看得见——改动前 board 明确排除容器（`kind != "task"` 跳过），
+    `[req]` 恒 `0/0`，等于把需求藏了。但容器**不是该列的任务行**：表头计数只数任务，
+    容器不计入 `done/total`（与 `ready.progress` / `metrics`「容器不量化」同一口径）。
+
+    **列内状态分组**：`running / ready / blocked / deferred / done / skipped / failed`
+    （外加 `structure` 结构行与 `other` 兜底）——某组只要有一个节点就必须出现；可派性与
+    `drive` **同源**：直接消费 `dispatch.drive` 的读数（`waves` / `deferred` / `blocked`），
+    视图层**不重算**写面冲突，也不另存一份判据。
+
     **`--stage` 过滤**：只输出被选中的那一列（含非规范值），不泄漏别的列——与改动前一致。
     （CLI 侧的 `--stage` 另按配置闭集**拒收非法列名**，见 `cli.cmd_board`：视图是纯渲染器，
-    对未知值容忍；「用法错误」在 CLI 这层拦。）
-    唯一的差异：被选中的列**没有节点时**，改动前**什么都不打**（与「列名拼错」无法区分），
-    现在打 `[{stage}] 0/0`——与上面的「空列显式显示 0」同一条纪律。
+    对未知值容忍；「用法错误」在 CLI 这层拦。）被选中的列**没有节点时**照旧打 `[{stage}] 0/0`
+    ——改动前什么都不打（与「列名拼错」无法区分）。
+
+    **纯读**：本函数只读投影 + 只做派生计算（`dispatch.drive` 同样不写状态），不落事件。
     """
     columns = tuple(STAGES if stages is None else stages)
-    groups: dict[str, list[tuple[str, dict]]] = {}
-    for node_id, node in sorted(tree["nodes"].items()):
-        if node.get("kind") != "task":
-            continue
-        if stage and node.get("stage") != stage:
-            continue
-        groups.setdefault(str(node.get("stage") or "?"), []).append((node_id, node))
+    nodes = tree["nodes"]
+    root = tree.get("root")
+    # 可派性**与 drive 同源**：直接读 `drive` 的读数（`waves` = 可装波次的候选；`deferred`
+    # = 被在跑节点的写面挡下、带点名理由；`blocked` = 缺哪个前置），视图层一个都不重算。
+    facts = drive(tree_name, tree, closed)
+    packable = {nid for wave in facts["waves"] for nid in wave}
+    deferred = {entry["node"]: entry["why"] for entry in facts.get("deferred") or []}
+    blocked = facts["blocked"]
+
+    present = sorted({_stage_of(node) for node in nodes.values()})
     if stage:                                  # 过滤：只留被选中的那一列
-        order = [s for s in columns if s == stage]
+        order = [name for name in columns if name == stage]
+        if not order and stage in present:     # 读时容忍：未知列取值照样渲染（不崩）
+            order = [stage]
     else:                                      # 全列：配置顺序在前（含空列），非规范在后
-        order = list(columns)
-    order += sorted(s for s in groups if s not in columns)
-    lines: list[str] = []
+        order = list(columns) + [name for name in present if name not in columns]
+
+    columns_out: list[dict] = []
     for name in order:
-        rows = groups.get(name, [])
-        done = sum(1 for _nid, n in rows if n.get("status") in ("done", "skipped"))
-        mark = "  ⚠ 非规范列（不在配置的 stages 内）" if name not in columns else ""
-        lines.append(f"[{name}] {done}/{len(rows)}{mark}")
-        for node_id, node in rows:
-            lines.append(f"  {_mark(node)} {node_id}  {node.get('goal', '')}")
+        rows = _column_rows(nodes, root, name)
+        task_ids = [nid for nid, _depth in rows if nodes[nid].get("kind") == "task"]
+        done = sum(1 for nid in task_ids
+                   if str(nodes[nid].get("status")) in ("done", "skipped"))
+        note = "  ⚠ 非规范列（不在配置的 stages 内）" if name not in columns else ""
+        grouped: dict[str, list[dict]] = {}
+        for node_id, depth in rows:
+            node = nodes[node_id]
+            group = _group_of(node_id, node, packable, deferred, blocked)
+            grouped.setdefault(group, []).append({
+                "node": node_id,
+                "parent": node.get("parent"),
+                "kind": node.get("kind"),
+                "stage": node.get("stage"),
+                "status": node.get("status", "pending"),
+                "depth": depth,
+                "mark": _CONTAINER_MARK if node.get("kind") != "task" else _mark(node),
+                "goal": node.get("goal", ""),
+                "detail": _detail(node_id, node, group, deferred, blocked),
+            })
+        columns_out.append({
+            "stage": name,
+            "canonical": name in columns,
+            "header": f"[{name}] {done}/{len(task_ids)}{note}",
+            "tasks": len(task_ids),
+            "done": done,
+            "groups": [{"group": gid, "label": _GROUP_LABELS[gid], "rows": grouped[gid]}
+                       for gid, _label in _GROUPS if gid in grouped],
+        })
+    return {"tree": tree_name, "root": root, "goal": tree.get("goal", ""),
+            "columns": columns_out}
+
+
+def board_lines(tree: dict, stage: str | None = None,
+                stages: tuple[str, ...] | None = None, *,
+                closed: set[str] | frozenset[str] = frozenset(),
+                tree_name: str = "") -> list[str]:
+    """人读态看板：把 `board_layout`（唯一布局实现）渲染成行 —— 与 `board --json` **同源**。
+
+    行形状：列头 `[<stage>] done/total` → 组标签（如 `▶ 运行中`）→ 行
+    `{'  ' * (depth + 1)}<mark> <id>  <goal>  （<理由>）`。缩进 = **列内深度**，
+    所以「父子」在同一列里看得见；理由只在有话说时出现（谁在跑 / 缺哪个前置 / 与谁冲突）。
+    """
+    lines: list[str] = []
+    layout = board_layout(tree, stage, stages, closed=closed, tree_name=tree_name)
+    for column in layout["columns"]:
+        lines.append(column["header"])
+        for group in column["groups"]:
+            lines.append(group["label"])
+            for row in group["rows"]:
+                line = (f"{'  ' * (row['depth'] + 1)}{row['mark']} "
+                        f"{row['node']}  {row['goal']}")
+                if row["detail"]:
+                    line += f"  （{row['detail']}）"
+                lines.append(line)
     return lines
 
 

@@ -92,7 +92,7 @@ d doctor                                        # 自检全绿
 | **顺序由它算**：我只说了 `B requires A`，`drive` 只把 A 放进首波 | ② |
 | **门会拒收假的完成**：验收不匹配就 `done` → 拒收（退出码非 0），理由逐条列出；若只是「没改任何东西」，门只给 ⚠ 空洞通过警告、仍 exit 0，不拒收 | ④ |
 | **证据引擎自算**：`done` 后 `introduced` / `size` / `acceptance` 由引擎采集，不是手抄 | ⑤ |
-| **看板/树/图不是第二份存储**：它们都读同一份投影 | ⑦ |
+| **看板/树/图不是第二份存储**：它们都读同一份投影（看板 = 阶段列 × 列内树层级 × 状态分组，宿主运行视图复用同一布局） | ⑦ |
 | **配置是独立文件且看得见**：`doctor` 报出实际取值与配置文件路径 | ⑧ |
 
 第 ④ 步的真实输出：
@@ -206,7 +206,7 @@ python3 -m disflow.cli collect demo a --result '{"status":"ok","summary":"…","
 python3 -m disflow.cli done demo a --decl '{"note":"…"}'   # 跑门；无已落盘 collect ⇒ 拒收（--no-result 显式破例）
 
 # 三种视图（同一投影）
-python3 -m disflow.cli board demo          # 按 stage
+python3 -m disflow.cli board demo          # 按 stage 列 + 列内树层级（--json 带 parent/depth）
 python3 -m disflow.cli tree demo           # 按 parent
 python3 -m disflow.cli graph demo [--dot]  # 按边
 
@@ -270,7 +270,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 582 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 594 passed（零第三方依赖）
 python3 scripts/mutation_check.py                 # 变异测试：64/64（验证测试真的有牙）
 ```
 

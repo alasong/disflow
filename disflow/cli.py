@@ -459,9 +459,19 @@ def cmd_board(engine: Engine, args) -> int:
     if args.stage is not None and args.stage not in stages:
         # 非法列名**响亮拒收**（退出码 2 = 用法错误，与 argparse 同款）：放行会打出
         # `[bogus] 0/0` —— 读者会当成「这一列是空的」，实际是**拼错了**（宽错）。
+        # 为何不用 argparse 的 `choices=`：合法列来自**运行期解析的配置**（`disflow.json` 的
+        # `stages`），parser 在解析配置之前就建好了；写死一份字面量就是**第二份列定义**
+        # （两面分叉），自定义列也会被误拒。
         print(f"✗ --stage 取值非法：{args.stage!r}（允许：{list(stages)}）", file=sys.stderr)
         return 2
-    for line in views.board_lines(engine.tree(args.tree), args.stage, stages=stages):
+    tree = engine.tree(args.tree)
+    # `closed` 与 `drive`/`host_next` 同源（跨树 `awaits` 的判据），否则看板与派活面会说
+    # 两套「可派」。人读态与 --json 都走 `board_layout`（唯一布局实现）——不许两面分叉。
+    kwargs = {"stages": stages, "closed": engine.closed_trees(), "tree_name": args.tree}
+    if args.json:
+        _dump(views.board_layout(tree, args.stage, **kwargs))
+        return 0
+    for line in views.board_lines(tree, args.stage, **kwargs):
         print(line)
     return 0
 
@@ -1005,6 +1015,8 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("--stage", default=None,
                       help="只显示该阶段列（如 dev；必须在配置的 stages 内，非法列名退出码 2）；"
                            "省略=全部阶段列（含空列）")
+    node.add_argument("--json", action="store_true",
+                      help="机器可读输出（与人读态同源：同一份布局，含列/分组/父子/深度）")
 
     node = add("tree", cmd_tree)
     node.add_argument("tree")
