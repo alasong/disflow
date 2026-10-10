@@ -18,7 +18,7 @@ disflow 算出 ready_wave  →  你 spawn 一个 subagent 干那个节点  →  
 ## 0 环境（一次）
 
 ```bash
-export PYTHONPATH=<disflow clone 路径>      # 本仓根
+export PYTHONPATH=<本仓的绝对路径>          # 本仓根
 export DISFLOW_STATE_DIR=<仓外的目录>        # ⚠ 想用 worktree 隔离时必须放仓外，见 §6
 D="python3 -m disflow.cli"
 ```
@@ -69,7 +69,8 @@ worker **不需要**知道整棵树——这是整棵树的上下文继承在替
 等于把 disflow 唯一的收益（每任务干净上下文）扔掉。
 
 `drive --json` 里：
-- `ready_wave` = 现在可以并发的节点（**同波写面互不重叠**，这是引擎算的，别自己加）
+- `ready_wave` = 现在可以并发的节点（**同波写面互不重叠**，并避开**正在运行**节点的写面；
+  被挡下的候选带理由进 `deferred`——都是引擎算的，别自己加，见 §10.2）
 - `blocked` = 谁在等谁 · `stuck` = 没就绪也没在跑但还有 pending ⇒ 真卡住了
 - 注意 `failed` **不算 stuck**（它可见、可 `retry`）
 
@@ -94,12 +95,25 @@ worker **不需要**知道整棵树——这是整棵树的上下文继承在替
    **不要自己拍板改范围**（范围是宿主定的）。宿主读到 `blocked` 后再决定（`rescope` / `unrequire` / 改 goal）。
    `blocked` 不是完成：`collect` **不写 done**。
 3. **`done_cmd` 在 brief 里**——worker 收尾时照抄，不要自己拼。
-4. **worker 不许自己 `git commit`——宿主统一提交。** worker 只管把文件改到工作区（未提交）。
-   实测（原地派发，无 worktree）：worker 自己 commit ⇒ 提交后工作区干净，而门的归因只读
-   `git status`（无 worktree 时 `base_sha=None`，不看已提交改动）⇒ `introduced=[]`、
-   `vacuous=[design_first, size_budget]`、**exit 0**——门彻底看不见改动；对照：不 commit ⇒
-   `introduced=['f.txt']`、`vacuous={}`。worktree 场景虽会记 `head_sha`、看得见已提交改动，
-   但 `size_budget` 仍以 `HEAD` 为基准而空转（实测 `diff_size` 为 0 行）——**别依赖这条兜底**。
+4. **worker 不许自己 `git commit`（原地派发）——宿主统一提交；worktree 场景例外，可以 commit。**
+   worker 只管把文件改到工作区（未提交）。分工的**判据**：
+
+   | 派发方式 | commit 落在哪 | 可以自 commit 吗 |
+   | --- | --- | --- |
+   | 原地派发（`worktree: null`，仓就是宿主的工作区） | 宿主**当前分支** | ✗ 不许（宿主统一提交） |
+   | worktree（`worktree apply` 之后） | 隔离分支 `disflow/<tree>/<node>` | ✓ 可以（宿主按分支合并） |
+
+   ⚠ **旧机制解释已作废（n6 修了，别再照旧讲）**：以前写的是「无 worktree 时 `base_sha=None`
+   ⇒ 门只读 `git status` ⇒ 提交后归因不到改动、规模门空转」。**现在不是这样**：`start`
+   **一律**记 `head_sha`（不再只对 worktree 记），`done` 把它当 `base_sha` 并上
+   `git diff --name-only <sha>`，规模读数也复用同一个 `base_sha`。
+   当场读数（判据：`tests/test_worktree_gate.py` 的 `test_a5_inplace_committed_change_is_seen`
+   等）：原地派发 + 自 commit ⇒ `introduced=['README.md']`、`vacuous={}`；worktree + 自 commit
+   ⇒ 同上；改而不提交 ⇒ 同样看得见。**别再用「提交了门就瞎了」当理由。**
+
+   那为什么原地派发仍不许自 commit？不是因为门，而是因为**原地派发就是宿主的当前分支**：
+   自 commit 会把改动直接写进宿主的工作历史、绕过「宿主统一提交」，而 worktree 的提交从设计上
+   就是落在隔离分支上给合并用的。
 
 ## 4 收尾
 
@@ -132,7 +146,8 @@ $D doctor              # 自检：投影漂移 / 成环 / 悬空引用 / 租约�
   所以每轮派活前都先 `start`。
 - **`--dry-run`**（`start`/`done`/`close`/`drive`）：门照跑、不落事件。想在派活前确认「能不能过」就用它。
 - `--json` 只在 `drive` / `status` / `metrics` / `worktree` 上有（`trees` 没有）。
-- `--help` 里有 14 个选项没写说明（如 `--result` 要 JSON）——**以本文件为准**。
+- `--help` 里**每个**选项都有说明（实测 **0 个无说明**；判据：当场数 `argparse` 各选项的
+  `help` 为空者）。**但散文里的纪律以本文件为准**（`--result` 要 JSON 这类形状说明已在 help 里）。
 
 ## 6 可选：worktree 物理隔离
 
@@ -256,3 +271,87 @@ sh .agents/skills/disflow/lanes_watch.sh all    # 含已过窗口的历史 lane
 
 另一个宿主侧工具是**派活器**（生成 pi-subagents 的 workflow JS，纪律块已内建）。
 它随宿主环境走，不在本仓里；没有它也能干活，只是每一波要手写那四行 `runs.all`。
+
+## 10 本轮沉淀的硬事实（self-harden 树实测，2026-10-10）
+
+> 这一节每条都是「照着旧写法会用错」的新事实。每条都连**判据命令**一起给，下一轮才有东西
+> 可以重新跑。**为何非要连判据不可**：本轮证明同一批产物会互相把对方写旧（至少 3 例：README 的
+> 测试数 `563 != 567`、旁边 §3 第 4 条的机制解释、以及某个写着「故障」而实现改判成「需人判断」
+> 的节点目标）。写「事实」不带判据，下一轮就不知道它还成不成立。
+
+### 10.1 提问通道的实际情况：worker 走 pi 的 `contact_supervisor`，问题**不进事件流**
+
+`brief` 的 `question_policy.how` 教 worker「把问题写进 `collect --result` 的 `summary`、`status`
+置 `blocked`」。**实测它基本没被走**：worker 跑在 pi 里，问宿主走的是 pi 的
+`contact_supervisor`，**不会**回头跑 `collect`。
+
+判据与读数（本仓 state dir）：`node.collect` 里 `status=blocked` 的**条数 = 0**
+（全部 11 条 `node.collect` 都是 `ok`），而同期 pi 的 99 个 worker 会话里 `contact_supervisor`
+被调 **27** 次。
+
+**后果（宿主必须自己补）**：worker 的问题**不在 disflow 的事件流里**——`board` / `state.json` /
+`metrics` 都看不见它。所以「宿主读到 `blocked` 再决定」这条契约，实际要**宿主自己把问答补记**
+（写进节点的 `context` 或提交信息），否则这棵树对后人就是「从没问过」。`collect` 仍是**结果**的
+落盘通道（别省），但它不是**提问**的通道。
+
+### 10.2 `drive` 的 `ready_wave` 会与**正在运行**的节点抢写面（n8 修，读法在宿主）
+
+n8 修好之前：`ready_wave` 只算「pending 节点之间」的写面不重叠，**不看正在跑的节点**——
+a 正持租约写 `out.txt` 时，`ready_wave` 照样把同样写 `out.txt` 的 b 推出去 ⇒ 并写冲突。
+
+判据：临时仓，a/b 的 `touch_plan` 都是 `out.txt`，c 是 `c.txt`；`start a` 之后跑 `drive --json`。
+
+- 修前：`ready_wave=["b"]`（撞车）
+- 修后：`ready_wave=["c"]` + `deferred=[{"node":"b","why":"与正在运行的 a 写面重叠：out.txt"}]`
+
+**宿主侧要点**：`ready_wave` 与 `deferred` 要**一起读**——被挡下的候选不会静默消失，它带着
+理由出现在 `deferred` 里。但 `drive` **不持锁、不认身份**：它只从**租约**推定「谁在跑」
+（非终态 ∧ 租约在手）。宿主自己绕过 `start` 并发派活，引擎看不见。
+
+### 10.3 提交纪律：原地派发不许 `git commit`，worktree 场景可以
+
+门**两个场景都看得见**已提交的改动：`start` 一律记 `head_sha`，`done` 拿它当 `base_sha`。
+所以「不许 commit」**不是**因为门瞎了（那是 n6 之前的旧机制，见 §3 第 4 条）。真正的分界是
+**改动落在哪个分支上**：看一下 §3 第 4 条的表，机制细节也在那里，别两处各写一份。
+
+### 10.4 `reap` 的 `--force` 语义：显式破例 + 强制记账，但**永不执行**
+
+`worktree reap` 仍是**纯计划**（只打印命令，不跑 git）。`--force`（**只对 `reap` 生效**；传给
+别的动作会 `✗ worktree apply 不支持 --force`）**只改打印出来的命令与记账**：
+
+- `remove_cmd` 从 `git worktree remove <path>` 变成 `git worktree remove --force <path>`；
+- `--json` 多出 `force: true` 与 `discarded`（逐条列出强删会丢什么）；
+- 分支删除命令**一律 `-d`**（安全删），要 `-D` 得宿主自己改并自负。
+
+判据与读数：造一个只含 **ignored** 文件的 worktree 与一个**脏** worktree，真跑删：
+
+```text
+git worktree remove（不加 --force）：ignored-only ⇒ rc=0；有未跟踪/已修改 ⇒ rc=128
+  fatal: '…' contains modified or untracked files, use --force to delete it
+```
+
+所以提示里说「ignored 也会让 git 拒绝」是**假警报**（n11 修）：ignored 那半现在只说「会丢、
+无需 `--force`」，dirty 那半才说「git 会拒绝、需 `--force`」。
+
+### 10.5 效率纪律（每条的代价都是从本仓 46 个子会话的 session 日志数出来的）
+
+| 纪律 | 代价读数 | 为什么 |
+| --- | --- | --- |
+| 负向对照只跑**目标测试文件**（`-p test_x.py`，0.2–2s）；全量只在收尾跑一次 | 全量被跑 **92** 次 × 46–65s ≈ **76 分钟**纯等；最差一条 lane 为 5 条对照跑了 **24** 次变异 | 全量 46–65s、对照 0.2–2s，差两个数量级 |
+| 禁 `sleep` 轮询：<90s 前台跑；>90s 放后台，去做别的事，≤3 次 `tail` 查结果 | `sleep` 累计 **1236 秒 ≈ 20 分钟**前台空等 | 空转不产生任何读数 |
+| 找符号/字符串先 `grep -n`（或查索引），别整读文件找符号 | 实测 `read : grep = 407 : 50` ≈ **8:1** | 整读是 O(文件) 换一次 O(命中) |
+| 别为「确认」反复跑同一条命令（幂等查询如 `git status` / `ls` 除外） | 见上两条的超额次数 | 同输入同输出，再跑一次只花时间 |
+
+### 10.6 开工先交 ≤10 行计划，并**点名方法论**
+
+派活模板若不要求，方法论就只会出现在收尾报告里——那是**报告装饰**，不参与选路（实测：v1
+模板下 46 个子会话，方法论只在收尾被要求声明）。**前向修法**：任务开头先交 ① 改哪几处
+（`文件:行` 或函数名）② 选哪个方法论、怎么用它 ③ 怎么验（哪条命令、负向对照打哪个文件），
+然后才开工。「怎么验」那句就是 §10.1 那条教训的正面用法。
+
+### 10.7 符号索引：派生资源落**仓外**，先查它再定点读
+
+配方（**别新建仓内脚本**）：stdlib `ast` 遍历 `*.py` 生成符号表 JSON；实测 1306 个符号
+（101 类 + 1205 函数/方法）· 0.2s · 132KB，落点与 state dir 同级（**不进版本库**）。
+⚠ 系统 `/usr/bin/ctags` 是 BSD 版，**不支持** `--output-format=json`（实测报 illegal option）
+——别用 ctags 做 JSON 索引。用法：先查索引拿「文件:行」，再 `read` 只取那一段。

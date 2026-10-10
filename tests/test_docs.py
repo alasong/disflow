@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import unittest
+from typing import Any
 
 from base import DisflowTestCase
 
@@ -100,6 +101,39 @@ _README_TEST_COUNT = re.compile(
     r"python3 -m unittest discover -s tests -t tests\s+#\s*(\d+)\s+passed")
 
 _PARTIAL_HEADING = "## [◐ 部分缺口]"
+
+# 本轮新沉淀的教训文档（n13-reflect）。它会被新读者照着走，所以里面的仓内路径不许失效。
+LESSONS = ROOT / "docs/self-harden-lessons.md"
+
+# 仓内路径引用的形状：只认这四类顶层目录开头的**完整相对路径**。
+# `disflow/<tree>/<node>` 是占位（不是文件）；`.agents/skills/disflow/SKILL.md` 由
+# 负向后顾挡住（否则会被读成 `disflow/SKILL.md` 这种不存在的缩写而假红）。
+_REPO_REF = re.compile(
+    r"(?<![\w./-])((?:disflow|tests|scripts|docs)/[A-Za-z0-9_./-]+\.(?:py|md|sh|json))")
+
+
+def _repo_refs(text: str) -> set[str]:
+    """文本里引用的仓内路径集合（形如 `tests/test_docs.py`）。"""
+    return set(_REPO_REF.findall(text))
+
+
+def _options_without_help() -> tuple[int, int]:
+    """当场数 CLI 选项说明：`(help 为空的个数, 选项总数)`。
+
+    抽成函数与 `_verbs_in` 同理：让「手册恰好写对」与「尺子有效」分得开。
+    为何要它：`.agents/skills/disflow/SKILL.md` §5 声明「0 个无说明」——那是必须与当场
+    读数对账的数字（n11 修之前它是 14，别让它悄悄回去）。
+    """
+    parser = build_parser()
+    sub: Any = parser._subparsers._group_actions[0]  # type: ignore[union-attr]
+    total = missing = 0
+    for subparser in sub.choices.values():
+        for action in subparser._actions:
+            for _opt in action.option_strings:
+                total += 1
+                if not action.help:
+                    missing += 1
+    return missing, total
 
 
 def _cli_suite_size() -> int:
@@ -262,6 +296,70 @@ class HostManualTest(DisflowTestCase):
         """§5 陷阱必须写明「不 start 就没有开工基线」。"""
         traps = _section(SKILL.read_text(encoding="utf-8"), "5")
         self.assertIn("开工基线", traps, "§5 陷阱必须写明不 start 就没有开工基线")
+
+
+class SelfHardenSedimentTest(DisflowTestCase):
+    """n13-reflect 的沉淀守卫：钉住本轮**改对/新增**的手册事实，防它们回退。
+
+    为何要这个类：本轮实测「同一批节点会互相把对方的说法写旧」——SKILL §3 第 4 条的机制
+    解释被同批的 n6 推翻而无人管（n12 评估记为 U2）。既有守卫抓不到它：
+    `test_worker_contract_forbids_self_commit` 只断言 `git commit` 与「宿主统一提交」还在，
+    把机制解释改回旧说法它照绿。
+
+    只钉**机器读得出来**的那部分：过时说法在不在、声明数字与当场读数是否一致、新节是否
+    还在、新文档引用的仓内路径是否失效。**事实对不对仍是人读的**，这里不冒充。
+    """
+
+    def test_skill_section_3_drops_the_stale_blind_gate_story(self):
+        """§3 不得再讲「提交了门就看不见」——n6 之后 `start` **一律**记 `head_sha`。
+
+        负向对照（已跑）：把这句改回过时说法 ⇒ 本测试变红。
+        """
+        section = _section(SKILL.read_text(encoding="utf-8"), "3")
+        for stale in ("不看已提交改动", "门彻底看不见改动",
+                      "vacuous=[design_first, size_budget]"):
+            self.assertNotIn(stale, section, f"§3 又回到过时的机制解释：{stale!r}")
+        for fresh in ("head_sha", "一律", "worktree"):
+            self.assertIn(fresh, section, f"§3 缺少修正后的机制事实：{fresh!r}")
+
+    def test_skill_section_5_help_claim_matches_the_live_parser(self):
+        """§5 声明的「无说明选项数」必须等于当场数出来的（数字过时 = 手册说假话）。"""
+        section = _section(SKILL.read_text(encoding="utf-8"), "5")
+        match = re.search(r"(\d+) 个无说明", section)
+        self.assertIsNotNone(match, "§5 必须声明「N 个无说明」以便与当场读数对账")
+        assert match is not None
+        missing, total = _options_without_help()
+        self.assertEqual(int(match.group(1)), missing,
+                         f"§5 说 {match.group(1)} 个无说明，当场数出 {missing}/{total}")
+
+    def test_skill_has_the_sedimented_hard_facts_section(self):
+        """必须存在 §10（本轮沉淀），且点名要求的事实都在里面。"""
+        text = SKILL.read_text(encoding="utf-8")
+        self.assertTrue(_section_heading(text, "10"), "缺少 §10 沉淀节（新事实没有落点）")
+        section = _section(text, "10")
+        for needed in ("contact_supervisor", "deferred", "--force", "1236", "407"):
+            self.assertIn(needed, section, f"§10 缺少本轮硬事实：{needed!r}")
+
+    def test_lessons_doc_exists_and_names_the_host_errors(self):
+        """`docs/self-harden-lessons.md` 必须存在，且点名本轮指定的宿主错误。"""
+        self.assertTrue(os.path.isfile(LESSONS), f"教训文档缺失：{LESSONS}")
+        text = LESSONS.read_text(encoding="utf-8")
+        for token in ("origin/", "PYTHONPATH", "引号", "reap", "sed"):
+            self.assertIn(token, text, f"教训文档缺指定宿主错误的关键词：{token!r}")
+
+    def test_the_repo_ref_ruler_is_not_vacuous(self):
+        """**尺子自测**：路径提取要能认活路径、报死路径，且不把占位当文件。"""
+        sample = "看 `tests/test_docs.py` 与 `docs/does-not-exist.md`。"
+        self.assertEqual(_repo_refs(sample),
+                         {"tests/test_docs.py", "docs/does-not-exist.md"})
+        self.assertEqual(_repo_refs("`disflow/<tree>/<node>` 与 `<state_dir>/x.json`"), set())
+
+    def test_lessons_doc_repo_refs_all_exist(self):
+        """教训文档引用的**仓内路径**不得失效（新文档是新读者会照着走的入口）。"""
+        refs = _repo_refs(LESSONS.read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(refs), 3, "尺子没抓到足够引用，守卫形同虚设")
+        dead = sorted(ref for ref in refs if not (ROOT / ref).exists())
+        self.assertEqual(dead, [], f"教训文档引用了不存在的仓内路径：{dead}")
 
 
 class DocsTruthTest(DisflowTestCase):
