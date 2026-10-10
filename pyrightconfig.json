@@ -1,0 +1,4 @@
+{
+  "include": ["disflow", "tests"],
+  "pythonVersion": "3.12"
+}

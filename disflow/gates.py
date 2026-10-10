@@ -1,0 +1,112 @@
+"""disflow · 门与证据。
+
+门的判据：验收命令跑过 + 期望匹配（FR-18）；证据元数据由引擎自算（FR-19）；
+拒收给缺项清单 + 契约片段（FR-20）。
+"""
+from __future__ import annotations
+
+import shlex
+import subprocess
+
+DEFAULT_TIMEOUT = 120
+
+
+def _check_expect(returncode: int, output: str, expect: str) -> tuple[bool, str]:
+    if expect == "exit0":
+        return returncode == 0, f"exit={returncode}（期望 0）"
+    if expect.startswith("contains:"):
+        needle = expect[len("contains:"):]
+        ok = returncode == 0 and needle in output
+        return ok, f"exit={returncode}；期望包含 {needle!r}"
+    if expect.startswith("regex:"):
+        import re
+        pattern = expect[len("regex:"):]
+        ok = returncode == 0 and re.search(pattern, output) is not None
+        return ok, f"exit={returncode}；期望匹配 /{pattern}/"
+    raise ValueError(f"acceptance.expect 非法：{expect!r}（支持 exit0 | contains:… | regex:…）")
+
+
+def run_acceptance(acceptance: dict | None, cwd: str,
+                   timeout: int = DEFAULT_TIMEOUT) -> tuple[bool, str, dict]:
+    """跑验收命令。返回 (ok, why, meta)。命令按 argv 解析，不走 shell。"""
+    if not acceptance or not acceptance.get("cmd"):
+        return False, "缺少 acceptance.cmd（节点未声明验收命令）", {}
+    cmd = acceptance["cmd"]
+    expect = acceptance.get("expect", "exit0")
+    try:
+        argv = shlex.split(cmd)
+    except ValueError as exc:
+        return False, f"acceptance.cmd 无法解析为 argv：{exc}", {"cmd": cmd}
+    try:
+        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, f"验收命令超时（>{timeout}s）：{cmd}", {"cmd": cmd, "timeout": timeout}
+    except OSError as exc:
+        return False, f"验收命令无法执行：{exc}", {"cmd": cmd}
+    output = (proc.stdout or "") + (proc.stderr or "")
+    ok, why = _check_expect(proc.returncode, output, expect)
+    meta = {"cmd": cmd, "expect": expect, "exit": proc.returncode, "output_tail": output[-2000:]}
+    return ok, why, meta
+
+
+def git_changed_files(cwd: str) -> list[str] | None:
+    """工作区改动文件（含未跟踪）。非 git 仓返回 None（不假装有证据）。"""
+    try:
+        probe = subprocess.run(["git", "-C", cwd, "rev-parse", "--is-inside-work-tree"],
+                               capture_output=True, text=True, timeout=10)
+    except OSError:
+        return None
+    if probe.returncode != 0:
+        return None
+    try:
+        status = subprocess.run(["git", "-C", cwd, "status", "--porcelain"],
+                                capture_output=True, text=True, timeout=20)
+    except OSError:
+        return None
+    if status.returncode != 0:
+        return None
+    files: list[str] = []
+    for line in status.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:]
+        if " -> " in path:                      # 重命名：取新路径
+            path = path.split(" -> ", 1)[1]
+        files.append(path.strip())
+    return sorted(files)
+
+
+def _covered(path: str, touch_plan: list[str]) -> bool:
+    for entry in touch_plan:
+        entry = entry.rstrip("/")
+        if entry in (".", "", "/"):        # 声明整仓
+            return True
+        if path == entry or path.startswith(entry + "/"):
+            return True
+    return False
+
+
+def scope_check(touch_plan: list[str], changed: list[str] | None) -> dict:
+    """design_first（软）：改动集是否落在 touch_plan 内。无声明或无 git → 跳过。
+
+    `touch_plan` 可写目录前缀；写 `.` 表示整仓（用于仓库自身有无关脏改动时）。
+    """
+    if not touch_plan or changed is None:
+        return {"checked": False, "violations": []}
+    violations = [path for path in changed if not _covered(path, touch_plan)]
+    return {"checked": True, "violations": sorted(violations)}
+
+
+def evidence_meta(acceptance: dict | None, cwd: str,
+                  timeout: int = DEFAULT_TIMEOUT) -> tuple[bool, str, dict]:
+    """采集证据：验收结果 + git 改动集 + 作用域检查。"""
+    ok, why, meta = run_acceptance(acceptance, cwd, timeout)
+    changed = git_changed_files(cwd)
+    evidence = {
+        "acceptance": meta,
+        "changed_files": changed,
+        "git": changed is not None,
+        "acceptance_ok": ok,
+        "acceptance_why": why,
+    }
+    return ok, why, evidence
