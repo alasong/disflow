@@ -7,8 +7,16 @@ v6 的正源（新增，接上 disflow 的树）：
   为什么要接：以前只读 pi 的 run 目录 ⇒ 只知道「跑到哪了」，不知道「这是什么活」。
   两个存储各答一半，人在两个窗口之间对不上——这才是「看不出做什么的」的病根。
 
-命名（重要）：这里是**执行视图**（宿主侧、读 pi 的 run 目录）；disflow 的
-`board <tree>` 是**树看板**（读 disflow 自己的事件流）。别再都叫「看板」。
+命名（重要，三个词不许再撞）：
+  · **看板** = disflow 的**一棵树**（一个目标、一个权威分发者）。它的**列**是 `stage`。
+    设计原文（docs/design-dispatch-tree-graph.md:20）：
+      「相当于**看板**，多个看板串成工作流：有的看板完成需求、有的完成设计、有的完成开发」
+      §4：看板 = 按 `stage` 分组/过滤**同一棵树**的投影；“工作流模板 = 阶段图”，
+      实例化后**只是节点上的 `stage` 字段** + `requires` 边——不新建实体。
+  · **列** = `stage`（默认 req|design|dev|verify|done，可配）。看板里 `[dev] 10/10` 这种就是列。
+  · **派发批次** = **宿主一次 subagent 调用**（pi 的 workflow run；1 个批次可含 1..N 路 lane）。
+    ⚠ 以前这里把这个叫了“工作流”，与设计里的“工作流（阶段图）”撞名——所以看不懂。
+  · 本文件是**执行视图**（宿主侧，读 pi 的 run 目录）；`disflow board <tree>` 是**看板**。
 
 ── 历史（v1..v5 的错，留着防止改回去）──
 
@@ -212,8 +220,8 @@ def block(r, label, verbose=False, info=None, looked_up=False):
     pa = {True: "活", False: "死", None: "?"}[alive(r["pid"])]
     warn = "   ⚠ state=running 但进程没了" if (r["state"] == "running" and pa == "死") else ""
     pad = " " * max(1, 24 - len(label))
-    tag = (f" · disflow {info['stage']}/{info['status']}"
-           + (f" {info['points']}pt" if info.get("points") else "")) if info else ""
+    tag = (f" · 看板 {info['tree']} · 列 {info['stage']} · {info['status']}"
+           + (f" · {info['points']}pt" if info.get("points") else "")) if info else ""
     b = [f"  {icon} {label}{pad}{r['state']:<9} 已跑 {dur(r['elapsed'])} · 静默 {dur(r['idle'])}"
          f" · pid {r['pid']}({pa}) · {r['turns']} 条消息{tag}{warn}"]
     if info:
@@ -249,15 +257,18 @@ def render(all_, verbose=False):
     nboards = len(groups) + (1 if rest else 0)
     nrunning = sum(1 for r in keep if r["state"] == "running")
     trees = sorted({v["tree"] for v in idx.values()})
+    boards = len(trees)
     out = [f"══ 执行视图 @ {time.strftime('%H:%M:%S')} ══",
-           f"工作流 {nboards} 个（workflow {len(groups)} · 散跑 {1 if rest else 0}）"
+           f"看板（= disflow 树）{boards} 棵："
+           f"{', '.join(trees) if trees else '（读不到 state.json）'}",
+           f"派发批次（= pi workflow run）{nboards} 个"
+           f"（workflow {len(groups)} · 散跑 {1 if rest else 0}）"
            f" · lane {len(keep)} 路 · 在跑 {nrunning} · 静默阈值 10 分钟",
-           f"接 disflow 树：{', '.join(trees) if trees else '（读不到 state.json）'}"
-           f" @ {DISFLOW_STATE_DIR}"]
+           f"state dir {DISFLOW_STATE_DIR}"]
     for i, (p, kids) in enumerate(groups, 1):
         nrun = sum(1 for k in kids if k["state"] == "running")
         out.append("")
-        out.append(f"▌工作流 {i}/{nboards} · {p['short']}"
+        out.append(f"▌派发批次 {i}/{nboards} · {p['short']}"
                    f"（{nrun} 在跑 / {len(kids)} 路 · 父 {p['state']}）")
         if p["root"]:
             out.append(f"  root {p['root']}")
@@ -268,7 +279,7 @@ def render(all_, verbose=False):
                        else [f"  · {cid:<22}{c.get('state')}（已过窗口）"])
     if rest:
         out.append("")
-        out.append(f"▌散跑 run {nboards}/{nboards}（不属于任何 workflow）")
+        out.append(f"▌散跑批次 {nboards}/{nboards}（不属于任何 pi workflow）")
         for r in rest:
             out.extend(block(r, "", verbose, None, False))
     if not keep:
@@ -304,8 +315,8 @@ else:
     try:
         while True:
             draw(render(False, verbose),
-                 f"（Ctrl-C 退出 · {iv:g}s 刷新 · 状态=status.json.state · goal=disflow 投影"
-                 f" · 备用屏：不闪不留回滚）")
+                 f"（Ctrl-C 退出 · {iv:g}s 刷新 · 状态=status.json.state"
+                 f" · 看板/列=disflow 投影 · 备用屏：不闪不留回滚）")
             time.sleep(iv)
     finally:
         sys.stdout.write("\033[?25h\033[?1049l")
