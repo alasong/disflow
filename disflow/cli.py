@@ -191,6 +191,42 @@ def cmd_drive(engine: Engine, args) -> int:
     return 0
 
 
+def cmd_host_next(engine: Engine, args) -> int:
+    """宿主「下一步」（FR-16 的**派活面**）：一次只读调用给出本轮该派的全部。
+
+    默认人类可读；`--json` 给机器可读（含每个就绪节点的完整 brief 与命令）。
+    """
+    payload = engine.host_next(args.tree)
+    if args.json:
+        _dump(payload)
+        return 0
+    progress = payload["progress"]
+    print(f"树 {args.tree}：{payload['goal']}")
+    print(f"进度 {progress['done']}/{progress['tasks']}（{progress['pct']}%）"
+          f" · 就绪 {len(payload['ready_wave'])} · 运行中 {len(payload['running'])}"
+          f" · 卡死 {'是' if payload['stuck'] else '否'}")
+    if not payload["plan"]:
+        # 无就绪节点：**显式**说清是全部完成还是卡住，不静默空。
+        print(f"[{payload['state']}] {payload['state_message']}")
+        for node_id, deps in sorted(payload["blocked"].items()):
+            print(f"  被阻塞 {node_id} ← {', '.join(deps)}")
+        return 0
+    print(f"就绪波次：{len(payload['waves'])} 波（首波 {len(payload['ready_wave'])} 个，"
+          "同波写面互不重叠）")
+    for wave_index, wave in enumerate(payload["waves"], 1):
+        print(f"  第 {wave_index} 波：{', '.join(wave)}")
+    print("下面每个节点的 brief 即 worker 的 task（**原样给**），命令照抄：")
+    for entry in payload["plan"]:
+        print(f"▶ {entry['node']}  [{entry['stage']}/{entry['role']}]  第 {entry['wave']} 波")
+        print(f"    goal:    {entry['goal']}")
+        print(f"    start:   {entry['start_cmd']}")
+        print(f"    collect: {entry['collect_cmd']}")
+        print(f"    done:    {entry['done_cmd']}")
+        print(f"    提问纪律：{entry['brief']['question_protocol']}")
+    print("（完整 brief 见 --json：宿主可直接把 plan[].brief 作为 worker 的 task）")
+    return 0
+
+
 def cmd_brief(engine: Engine, args) -> int:
     _dump(engine.brief(args.tree, args.node))
     return 0
@@ -830,6 +866,10 @@ def build_parser() -> argparse.ArgumentParser:
     node = add("brief", cmd_brief)
     node.add_argument("tree")
     node.add_argument("node")
+
+    node = add("host-next", cmd_host_next)
+    node.add_argument("tree")
+    node.add_argument("--json", action="store_true", help="机器可读输出")
 
     node = add("plan", cmd_plan)
     node.add_argument("tree")

@@ -283,6 +283,7 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 | `disflow drive <tree> [--json]` | 算就绪波次 + 每节点建议 | **只推不跑**；两次同输入同输出 |
 | `--dry-run`（`start`/`done`/`close`/`drive`） | 预演：门照跑、`prepare` 照算，**不落任何事件** | 拒收行为与真跑一致（预演不消耗节点） |
 | `disflow brief <tree> <node>` | 写全派发契约 | **一次写全**：必填声明 + `question_policy` + `result_contract`（FR-15） |
+| `disflow host-next <tree> [--json]` | 一轮派活的**全部输入**：就绪波次 + 每个就绪节点的完整 brief + `start`/`collect`/`done` 命令 | **纯读**：不落事件、不改状态、不起常驻进程；无就绪时显式报 `complete`/`stuck` |
 | `disflow collect <tree> <node> --result` | 校验结果契约后落盘 | **不写 done**；`status ∈ {ok, failed, blocked}` |
 | `disflow done <tree> <node> --decl` | 跑门 → 通过/拒收 | 证据自算；拒收给缺项 |
 | `disflow fail/retry/skip <tree> <node>` | 状态操作 | 经同一状态表 |
@@ -342,6 +343,34 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 统一跑在 `_gate_cwd` 上（有真 worktree 就是它，否则仓根）；两处目录不一致时 fail-closed
 **响亮拒收**，不给「静默空洞通过」留路。改动集在 worktree 场景下取「脏文件 ∪ 相对
 `head_sha` 的已提交改动」——提交型 worker 的活也看得见（`git status` 为空 ≠ 没干活）。
+
+### 5.6 `host-next`：把宿主一轮的六步压成一次只读调用（FR-16 的派活面）
+
+宿主每轮要跑六步：`drive → brief → start → 派活 → collect → done`。宿主实测的摩擦力在于：
+它能一步就派一个 subagent，而 disflow 要六步——于是 disflow 被绕开（本会话实测：**3 小时
+4 次派发、disflow 事件参与 0 次**，原因就是六步 vs 一步）。`host-next` 直接对抗这个摩擦力：
+
+```text
+disflow host-next <tree> [--json]
+```
+
+一次只读调用给出**本轮该派的全部**：
+
+- **就绪波次**：`waves`（每波内写面 `touch_plan` 互不重叠）+ `ready_wave`（首波）+ `blocked` + `stuck`；
+- **每个就绪节点的完整 brief**（`plan[].brief`）：与 `disflow brief` **同一份** `handoff_brief`
+  （必填声明 + `question_policy` + `result_contract` + 工作目录），宿主可直接把它当 worker 的 task；
+- **收尾要跑的完整命令行**：每个节点给 `start_cmd` / `collect_cmd` / `done_cmd`，照抄即可。
+
+三条硬约束：
+
+1. **纯读**：只读投影 + 只读的 worktree 对账，**不落任何事件、不改状态、不起常驻进程**
+   （宿主只是拿它去派活）。
+2. **无就绪节点时不静默**：`state` / `state_message` 显式报 `complete`（全部完成）
+   或 `stuck`（卡住）；另有 `running` / `failed` 两种诚实读数（在跑／有失败待 retry）。
+3. **提问纪律要写全**（`plan[].brief.question_protocol`）：worker 的提问天然走**宿主通道**
+   （pi 里即 `contact_supervisor`），而该通道**不进 disflow 事件流**——追溯会缺一块。故约定：
+   **① 走宿主通道提问；② 同时在 `collect --result` 里把 `status` 置 `blocked`**。两条都做，
+   disflow 的事件流里才留得下这次提问（只做①树上查不到；只做②宿主收不到）。
 
 ---
 
