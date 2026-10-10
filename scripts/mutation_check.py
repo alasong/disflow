@@ -28,6 +28,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # 每条：(名字, 文件, 原样, 换成, 要跑哪个测试文件)
 Mutation = tuple[str, str, str, str, str]
 
+
+class PinNotFound(Exception):
+    """针脚在文件里找不到 = harness 自己的错（代码改了、针脚没跟上）。
+
+    与“漏抓”必须分开：漏抓是「注入生效了但测试没红」= 真覆盖缺口；
+    针脚未应用是「根本没注入」——把后者说成“这个行为没有被测试守住”是**编造**。
+    """
+
 MUTATIONS: list[Mutation] = [
     # ── 被拒的事件不许落盘（store 先试算后 append）────────────────────────
     ("store 改回「先落盘再试算」", "disflow/store.py",
@@ -39,19 +47,19 @@ MUTATIONS: list[Mutation] = [
 
     # ── 改动归因：路径差集 vs 内容指纹 ───────────────────────────────────
     ("归因退回「按路径做差集」", "disflow/gates.py",
-     "        if fingerprint(cwd, path) != base.get(path):",
+     "        if fingerprint(cwd, path, cfg) != base.get(path):",
      "        if path not in base:",
      "test_engine.py"),
 
     # ── diff_size 的读数分支 ─────────────────────────────────────────────
     ("diff_size 不查 HEAD（暂存改动不可见）", "disflow/gates.py",
-     '    head = _numstat(cwd, ["HEAD"], paths)\n'
+     '    head = _numstat(cwd, ["HEAD"], paths, cfg)\n'
      "    if head is not None:\n        return head",
      "    head = None\n"
      "    if head is not None:\n        return head",
      "test_gates.py"),
     ("diff_size 不区分已跟踪文件（一律数整文件）", "disflow/gates.py",
-     "        if _is_tracked(cwd, path):",
+     "        if _is_tracked(cwd, path, cfg):",
      "        if False:",
      "test_gates.py"),
     ("diff_size 兜底重复计数", "disflow/gates.py",
@@ -140,6 +148,42 @@ MUTATIONS: list[Mutation] = [
      'import contextlib\nimport fcntl\nimport json',
      "test_declarations.py"),
 
+    # ── 配置层：独立文件 + 优先级 + 写时词汇校验 ─────────────────────────
+    ("节点声明的 acceptance.timeout 不再生效", "disflow/gates.py",
+     '    declared = (acceptance or {}).get("timeout")',
+     '    declared = None',
+     "test_config.py"),
+    ("配置文件被完全忽略（永远出厂默认）", "disflow/config.py",
+     '    path = config_path(cwd)\n    if not os.path.isfile(path):',
+     '    path = config_path(cwd)\n    if True:',
+     "test_config.py"),
+    ("未知配置键被静默忽略", "disflow/config.py",
+     '    unknown = sorted(set(raw) - set(_VALIDATORS))',
+     '    unknown = []',
+     "test_config.py"),
+    ("配置类型错不再报错", "disflow/config.py",
+     '    if isinstance(value, bool) or not isinstance(value, (int, float)):',
+     '    if value is None:',
+     "test_config.py"),
+    ("walk_ignore 不再剪枝（递归整棵依赖树）", "disflow/gates.py",
+     '            dirs[:] = [d for d in dirs if d not in ignore]',
+     '            pass',
+     "test_config.py"),
+    ("stage 写时校验被移除（错别字静默多出一列）", "disflow/engine.py",
+     '            if stage is not None and str(stage) not in self.cfg.stages:',
+     '            if False:',
+     "test_config.py"),
+    ("配置路径跟着状态目录走（不再独立）", "disflow/config.py",
+     '    return os.path.join(os.path.abspath(cwd), CONFIG_BASENAME)',
+     '    from .spec import SPEC as _s\n'
+     '    return os.path.join(os.path.abspath(cwd),\n'
+     '                        os.path.basename(_s["state"]["dir"]), CONFIG_BASENAME)',
+     "test_config.py"),
+    ("output_tail 写死不再可配", "disflow/gates.py",
+     '            "timeout": timeout, "output_tail": output[-cfg.output_tail:]}',
+     '            "timeout": timeout, "output_tail": output[-2000:]}',
+     "test_config.py"),
+
     # ── 空洞通过：记录与报出 ────────────────────────────────────────────
     ("空洞检测失效（永远返回空）", "disflow/gates.py",
      '    reasons: dict[str, str] = {}\n'
@@ -197,12 +241,21 @@ def _run_tests(pattern: str) -> int:
 
 
 def _check(mutation: Mutation) -> tuple[bool, int, int]:
-    """返回 (是否抓到, 注入后退出码, 还原后退出码)。无论如何都会还原。"""
+    """返回 (是否抓到, 注入后退出码, 还原后退出码)。无论如何都会还原。
+
+    `PinNotFound` 与“漏抓”是**两件事**：
+      - 针脚找不到 = 代码变了、针脚没跟上 ⇒ **harness 报错**（exit 2）；
+      - 漏抓 = 注入生效了但测试没红 ⇒ **真覆盖缺口**（exit 1）。
+    混在一起会把“过期的针脚”说成“这个行为没有被测试守住”——凭空造出一个不存在的结论。
+    """
     name, relpath, old, new, pattern = mutation
     path = ROOT / relpath
     original = path.read_text(encoding="utf-8")
     if old not in original:
-        raise SystemExit(f"针脚找不到（代码变了？）：{name}\n  文件：{relpath}")
+        # 针脚找不到 = **harness 自己的错**（代码改了、针脚没跟上），不是“测试没守住”。
+        # 两者必须分开报：把过期的针脚说成“这个行为没有被测试守住”是**编造**。
+        raise PinNotFound(
+            f"针脚找不到（{relpath} 的代码变了？）：\n      old = {old!r}")
     try:
         path.write_text(original.replace(old, new, 1), encoding="utf-8")
         injected = _run_tests(pattern)
@@ -225,20 +278,30 @@ def main(argv: list[str] | None = None) -> int:
             print(name)
         return 0
 
+    unresolved: list[str] = []
     bad: list[str] = []
     for name, mutation in selected:
         try:
             caught, injected, restored = _check(mutation)
-        except SystemExit as exc:
-            print(f"  ⚠️  {name}：{exc}")
-            bad.append(name)
+        except PinNotFound as exc:
+            print(f"  ⛔ {name}：针脚未应用")
+            print(f"     {exc}")
+            unresolved.append(name)
             continue
         print(f"  {'✅' if caught else '❌'} {name}"
               f"（注入 exit={injected} / 还原 exit={restored}）")
         if not caught:
             bad.append(name)
 
-    print(f"\n捕获率：{len(selected) - len(bad)}/{len(selected)}")
+    total = len(selected)
+    if unresolved:
+        # 先报 harness 的错：它使本轮结果不可信，谈不上“捕获率”
+        print(f"\n⛔ {len(unresolved)}/{total} 条针脚**未应用**（不是漏抓）：")
+        for name in unresolved:
+            print(f"  - {name}")
+        print("  ⇒ 这些变异根本没注入，本轮结果不可信；请把针脚对齐当前代码。")
+        return 2
+    print(f"\n捕获率：{total - len(bad)}/{total}")
     if bad:
         print("漏抓（这些行为没有被测试守住）：")
         for name in bad:

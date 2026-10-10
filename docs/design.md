@@ -491,6 +491,62 @@ disflow doctor                                     # 自检
 2. **`done` 不可判定**：它既是视图列取值、又是机制终态（`core.TERMINAL`），故不入针脚。
 3. 本节只守「核心不认业务词 + 依赖单向」；它**不**证明业务层设计正确。
 
+### 9.2 配置层（`config.py`）—— **独立配置文件**
+
+**为何要它**：这些值随机器/项目而变，却曾写死在代码里 ⇒ 用户唯一出路是改源码或绕过门。
+最尖锐的一条：验收超时 `120s` 是**模块常量**，节点声明不了 ⇒ 跑 >2 分钟的验收
+**这道门永远过不去**，只能写 `waiver`——那等于**把门关掉**（已经在发生的损失）。
+
+**它是独立文件，不在状态目录里、不在事件流里**：
+
+```text
+<项目根>/disflow.json          ← 策略（人写、要版本化、要 review）
+<项目根>/.disflow/state.json   ← 状态（派生，可由 rebuild 从事件重建）
+<项目根>/.disflow/events.jsonl ← 事件（唯一事实源）
+```
+
+| 为何强调“独立” | 不独立的后果 |
+| --- | --- |
+| 状态是**派生**的，删掉重置是合法动作 | 删 `.disflow/` 会**静默带走策略**（配置不是从事件推出来的，`rebuild` 重建不了它） |
+| 配置是**策略**，该进版本库 | 混在状态目录里 ⇒ 天然被 gitignore，策略没法 review |
+
+**判据是可执行的**（`tests/test_config.py`）：
+
+- **位置无关**：改 `DISFLOW_STATE_DIR` 不能改变配置路径（这是“独立”的函数化定义）。
+- **重置不丢**：删掉状态目录后配置照旧生效。
+- 生产默认下二者是**兄弟**（`disflow.json` vs `.disflow/`），不是子文件。
+
+**优先级**：内建默认 < `disflow.json`（`$DISFLOW_CONFIG` 可指别处）< 显式参数/节点声明。
+
+| 键 | 默认 | 节点级覆盖 |
+| --- | --- | --- |
+| `acceptance_timeout` | 120 | `acceptance.timeout` |
+| `git_timeout` | 20 | — |
+| `output_tail` | 2000 | — |
+| `walk_ignore` | `.git`/`node_modules`/`__pycache__` 等 | — |
+| `size_budget` | 400 | `context.size_budget` |
+| `lease_ttl` | 900 | `start --ttl` |
+| `stages` | `req/design/dev/verify/done` | — |
+| `roles` | `dev/qa/pm` | — |
+
+**边界一：机制词汇不进配置**。`EVENT_KINDS`←→`_HANDLERS`、`KINDS`、`STORED_STATUS` 留在
+代码里，靠 `tests/test_declarations.py` 做**编译/测试期**保证；挪进配置就退化成**运行期**才发现，
+而错一个字母坏的是一个事件流的可重放性。
+
+**边界二：`stages`/`roles` 可配，但**只在写时**校验**（`Engine._validate_vocabulary`）：
+
+| 时机 | 行为 | 为何 |
+| --- | --- | --- |
+| **写**（`expand`） | 未知值 → 报错，并指出“若这是自定义列，写进 `disflow.json`” | 挡住错别字（之前 `stage:"audti"` 会**静默多出一个看板列**） |
+| **读**（`views.board_lines`） | 未知 stage **容忍**（`order += sorted(...)`） | 事件流可能来自更新的版本/不同配置，视图不能崩 |
+
+**为何 reducer 不校验**：reducer 一依赖配置，事件流就**不可重放**了——换台机器或改了
+`stages`，重放旧事件会直接失败。「事件流不可重放」比「错别字没当场报」严重得多。
+测试 `test_unknown_stage_from_another_writer_replays_and_renders` 钉住了这条。
+
+**配置在 `doctor` 里可见**（全绿时列出 8 个键的实际取值与来源；失败时只把路径并进 stderr 报告，
+保持“失败时 stdout 干净”的既有契约）：配置改了行为就变，那就得看得见。
+
 ---
 
 ## 10. mgt 迁移映射（FR-28/29）

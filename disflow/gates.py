@@ -11,9 +11,19 @@ import re
 import shlex
 import subprocess
 
-from .spec import CLOSURE_ENTRIES, SEDIMENT_ENTRIES, SIZE_BUDGET_DEFAULT
+from .config import DEFAULTS, Config
+from .spec import CLOSURE_ENTRIES, SEDIMENT_ENTRIES
 
-DEFAULT_TIMEOUT = 120
+
+def _resolve_timeout(acceptance: dict | None, cfg: Config) -> float:
+    """验收超时优先级：**节点声明 > 项目配置默认**。
+
+    为何节点要能声明：今天 `120s` 是模块常量 ⇒ 跑 >2 分钟的验收**这道门永远过不去**，
+    唯一出路是写 `waiver` —— 那等于把门关掉。"""
+    declared = (acceptance or {}).get("timeout")
+    if isinstance(declared, (int, float)) and not isinstance(declared, bool) and declared > 0:
+        return float(declared)
+    return float(cfg.acceptance_timeout)
 
 
 def _check_expect(returncode: int, output: str, expect: str) -> tuple[bool, str]:
@@ -31,9 +41,10 @@ def _check_expect(returncode: int, output: str, expect: str) -> tuple[bool, str]
 
 
 def run_acceptance(acceptance: dict | None, cwd: str,
-                   timeout: int = DEFAULT_TIMEOUT) -> tuple[bool, str, dict]:
+                   cfg: Config = DEFAULTS) -> tuple[bool, str, dict]:
     """跑验收命令。返回 (ok, why, meta)。命令按 argv 解析，不走 shell。
 
+    超时：`acceptance.timeout`（节点声明）> `cfg.acceptance_timeout`（项目配置）。
     显式豁免：`acceptance.waiver` 非空时直接放行，并把理由记进证据（可审计的破例，不是静默放行）。
     """
     waiver = str((acceptance or {}).get("waiver") or "").strip()
@@ -43,6 +54,7 @@ def run_acceptance(acceptance: dict | None, cwd: str,
         return False, "缺少 acceptance.cmd（节点未声明验收命令）", {}
     cmd = acceptance["cmd"]
     expect = acceptance.get("expect", "exit0")
+    timeout = _resolve_timeout(acceptance, cfg)
     try:
         argv = shlex.split(cmd)
     except ValueError as exc:
@@ -50,27 +62,28 @@ def run_acceptance(acceptance: dict | None, cwd: str,
     try:
         proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return False, f"验收命令超时（>{timeout}s）：{cmd}", {"cmd": cmd, "timeout": timeout}
+        return False, f"验收命令超时（>{timeout:g}s）：{cmd}", {"cmd": cmd, "timeout": timeout}
     except OSError as exc:
         return False, f"验收命令无法执行：{exc}", {"cmd": cmd}
     output = (proc.stdout or "") + (proc.stderr or "")
     ok, why = _check_expect(proc.returncode, output, expect)
-    meta = {"cmd": cmd, "expect": expect, "exit": proc.returncode, "output_tail": output[-2000:]}
+    meta = {"cmd": cmd, "expect": expect, "exit": proc.returncode,
+            "timeout": timeout, "output_tail": output[-cfg.output_tail:]}
     return ok, why, meta
 
 
-def git_changed_files(cwd: str) -> list[str] | None:
+def git_changed_files(cwd: str, cfg: Config = DEFAULTS) -> list[str] | None:
     """工作区改动文件（含未跟踪）。非 git 仓返回 None（不假装有证据）。"""
     try:
         probe = subprocess.run(["git", "-C", cwd, "rev-parse", "--is-inside-work-tree"],
-                               capture_output=True, text=True, timeout=10)
+                               capture_output=True, text=True, timeout=cfg.git_timeout)
     except OSError:
         return None
     if probe.returncode != 0:
         return None
     try:
         status = subprocess.run(["git", "-C", cwd, "status", "--porcelain"],
-                                capture_output=True, text=True, timeout=20)
+                                capture_output=True, text=True, timeout=cfg.git_timeout)
     except OSError:
         return None
     if status.returncode != 0:
@@ -97,13 +110,19 @@ def _file_digest(path: str) -> str:
     return digest.hexdigest()
 
 
-def fingerprint(cwd: str, relpath: str) -> str:
+def fingerprint(cwd: str, relpath: str, cfg: Config = DEFAULTS) -> str:
     """单条改动路径的**内容指纹**。目录（`git status` 会把未跟踪目录折叠成 `dir/`）
-    递归按 `(相对路径, 内容指纹)` 计入；读不到返回 `""`。"""
+    递归按 `(相对路径, 内容指纹)` 计入；读不到返回 `""`。
+
+    递归时跳过 `cfg.walk_ignore` 里的目录名（默认含 `.git`/`node_modules`/`__pycache__`）：
+    否则 `touch_plan` 写了一个包含依赖目录的目录 ⇒ 哈希整棵依赖树（慢、且毫无信息量）。
+    """
     full = os.path.join(cwd, relpath.rstrip("/"))
     if os.path.isdir(full):
+        ignore = set(cfg.walk_ignore)
         parts: list[str] = []
-        for base, _dirs, files in os.walk(full):
+        for base, dirs, files in os.walk(full):
+            dirs[:] = [d for d in dirs if d not in ignore]      # 就地剪枝，不进去
             for name in files:
                 sub = os.path.join(base, name)
                 parts.append(f"{os.path.relpath(sub, full)}:{_file_digest(sub)}")
@@ -111,15 +130,16 @@ def fingerprint(cwd: str, relpath: str) -> str:
     return _file_digest(full)
 
 
-def snapshot(cwd: str) -> dict[str, str] | None:
+def snapshot(cwd: str, cfg: Config = DEFAULTS) -> dict[str, str] | None:
     """开工基线：**当前脏文件 → 内容指纹**。非 git 仓返回 None（不假装有基线）。"""
-    changed = git_changed_files(cwd)
+    changed = git_changed_files(cwd, cfg)
     if changed is None:
         return None
-    return {path: fingerprint(cwd, path) for path in changed}
+    return {path: fingerprint(cwd, path, cfg) for path in changed}
 
 
-def newly_changed(cwd: str, baseline: dict | list | None) -> list[str] | None:
+def newly_changed(cwd: str, baseline: dict | list | None,
+                  cfg: Config = DEFAULTS) -> list[str] | None:
     """`done` 时归因：**相对基线内容真的变了**的路径（新出现 / 内容变 / 被删）。
 
     为何不用「按路径做差集」：同一文件被前一个节点弄脏后，本节点再改它时，
@@ -128,14 +148,14 @@ def newly_changed(cwd: str, baseline: dict | list | None) -> list[str] | None:
 
     兼容旧事件：基线是**路径列表**时，值记为 `None`（未知指纹）⇒ 一律判为已改（保守）。
     """
-    changed = git_changed_files(cwd)
+    changed = git_changed_files(cwd, cfg)
     if changed is None:
         return None
     base: dict = (dict.fromkeys(baseline) if isinstance(baseline, list)
                   else dict(baseline or {}))
     out: list[str] = []
     for path in sorted(set(changed) | set(base)):
-        if fingerprint(cwd, path) != base.get(path):
+        if fingerprint(cwd, path, cfg) != base.get(path):
             out.append(path)
     return out
 
@@ -162,10 +182,10 @@ def scope_check(touch_plan: list[str], changed: list[str] | None) -> dict:
 
 
 def evidence_meta(acceptance: dict | None, cwd: str,
-                  timeout: int = DEFAULT_TIMEOUT) -> tuple[bool, str, dict]:
+                  cfg: Config = DEFAULTS) -> tuple[bool, str, dict]:
     """采集证据：验收结果 + git 改动集 + 作用域检查。"""
-    ok, why, meta = run_acceptance(acceptance, cwd, timeout)
-    changed = git_changed_files(cwd)
+    ok, why, meta = run_acceptance(acceptance, cwd, cfg)
+    changed = git_changed_files(cwd, cfg)
     evidence = {
         "acceptance": meta,
         "changed_files": changed,
@@ -205,19 +225,20 @@ def vacuous_reasons(*, acceptance: dict | None, touch_plan: list[str],
     return reasons
 
 
-def resolve_budget(node: dict) -> int:
-    """节点预算：`context.size_budget` 优先，否则出厂默认。"""
+def resolve_budget(node: dict, cfg: Config = DEFAULTS) -> int:
+    """节点预算：`context.size_budget` 优先，否则项目配置默认（再否则出厂默认）。"""
     raw = (node.get("context") or {}).get("size_budget")
     if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
         return raw
-    return SIZE_BUDGET_DEFAULT
+    return cfg.size_budget
 
 
-def _numstat(cwd: str, args: list[str], paths: list[str]) -> dict[str, int] | None:
+def _numstat(cwd: str, args: list[str], paths: list[str],
+             cfg: Config = DEFAULTS) -> dict[str, int] | None:
     """跑一次 `git diff <args> --numstat`，返回 `{路径: 增+删}`；命令本身失败返回 None。"""
     try:
         proc = subprocess.run(["git", "-C", cwd, "diff", *args, "--numstat", "--", *paths],
-                              capture_output=True, text=True, timeout=30)
+                              capture_output=True, text=True, timeout=cfg.git_timeout)
     except OSError:
         return None
     if proc.returncode != 0:
@@ -233,7 +254,8 @@ def _numstat(cwd: str, args: list[str], paths: list[str]) -> dict[str, int] | No
     return per_file
 
 
-def _numstat_vs_head(cwd: str, paths: list[str]) -> dict[str, int] | None:
+def _numstat_vs_head(cwd: str, paths: list[str],
+                     cfg: Config = DEFAULTS) -> dict[str, int] | None:
     """改动量读数：优先 `git diff HEAD`（**工作区 + 暂存区** vs 最后一次提交）。
 
     为何不用裸 `git diff`：它比的是「工作区 vs 暂存区」——**已暂存的改动对它不可见**，
@@ -243,11 +265,11 @@ def _numstat_vs_head(cwd: str, paths: list[str]) -> dict[str, int] | None:
     仓里还没有提交（`HEAD` 不存在）时 `git diff HEAD` 失败，则合并
     「未暂存（`git diff`）+ 已暂存（`git diff --cached`）」——两者不相交，相加即工作区 vs HEAD。
     """
-    head = _numstat(cwd, ["HEAD"], paths)
+    head = _numstat(cwd, ["HEAD"], paths, cfg)
     if head is not None:
         return head
-    unstaged = _numstat(cwd, [], paths)
-    staged = _numstat(cwd, ["--cached"], paths)
+    unstaged = _numstat(cwd, [], paths, cfg)
+    staged = _numstat(cwd, ["--cached"], paths, cfg)
     if unstaged is None and staged is None:
         return None                     # 不是 git 仓：不假装有读数
     merged: dict[str, int] = {}
@@ -257,17 +279,18 @@ def _numstat_vs_head(cwd: str, paths: list[str]) -> dict[str, int] | None:
     return merged
 
 
-def _is_tracked(cwd: str, path: str) -> bool:
+def _is_tracked(cwd: str, path: str, cfg: Config = DEFAULTS) -> bool:
     """路径是否被 git 跟踪（在索引里）。非 git 仓 / 命令失败 → False。"""
     try:
         proc = subprocess.run(["git", "-C", cwd, "ls-files", "--error-unmatch", "--", path],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, timeout=cfg.git_timeout)
     except OSError:
         return False
     return proc.returncode == 0
 
 
-def diff_size(cwd: str, introduced: list[str] | None) -> dict | None:
+def diff_size(cwd: str, introduced: list[str] | None,
+              cfg: Config = DEFAULTS) -> dict | None:
     """`introduced` 文件的行数变动总计：已跟踪走 `git diff --numstat`，未跟踪数行。
 
     非 git 仓 / 无基线 → None（不假装有读数）。
@@ -276,14 +299,14 @@ def diff_size(cwd: str, introduced: list[str] | None) -> dict | None:
         return None
     if not introduced:
         return {"total": 0, "per_file": {}}
-    per_file = _numstat_vs_head(cwd, introduced)
+    per_file = _numstat_vs_head(cwd, introduced, cfg)
     if per_file is None:
         return None
     total = sum(per_file.values())
     for path in introduced:
         if path in per_file:
             continue
-        if _is_tracked(cwd, path):
+        if _is_tracked(cwd, path, cfg):
             # git **知道**这个文件，只是相对 HEAD 净改动为 0（否则会出现在 numstat 里）。
             # 不能因“numstat 没这一条”就数整文件——那会把「暂存后又改回原状」算成整文件行数。
             per_file[path] = 0

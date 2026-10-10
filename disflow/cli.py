@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 
-from . import graph, store, views
+from . import config, graph, store, views
 from .engine import Engine, EngineError, GateReject
 from .import_mgt import apply_import, build_import, load_mgt
 from .ready import lease_expired
@@ -250,11 +251,18 @@ def cmd_doctor(engine: Engine, args) -> int:
                 if consumed not in tree["assets"]:
                     problems.append(f"{name}/{node_id}: consumes 未登记 {consumed}")
     if problems:
-        # 失败报文统一走 stderr（与 GateReject 一致）：脚本 2>/dev/null 时不会把失败看成成功
-        print("✗ doctor 发现：", file=sys.stderr)
+        # 失败报文统一走 stderr（与 GateReject 一致）：脚本 2>/dev/null 时不会把失败看成成功。
+        # stdout 必须为空——“失败时 stdout 干净”是既有契约（tests/test_cli_readonly.py）。
+        # 配置信息不丢：路径并进 stderr 报告（一行）。
+        print(f"✗ doctor 发现（配置：{config.config_path(engine.cwd)}）：", file=sys.stderr)
         for item in problems:
             print(f"  - {item}", file=sys.stderr)
         return 1
+    # 全绿时把“这些值从哪来”报出来：配置是独立文件，改了它行为会变，所以得看得见
+    cfg_path = config.config_path(engine.cwd)
+    print(f"配置：{cfg_path}" + ("（存在）" if os.path.isfile(cfg_path) else "（无 → 全用内建默认）"))
+    for key, value, _source in config.describe(engine.cfg, engine.cwd):
+        print(f"  {key} = {value}")
     print("✓ doctor 全绿")
     return 0
 

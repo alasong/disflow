@@ -11,8 +11,32 @@ from __future__ import annotations
 import json
 import os
 
+from .spec import ROLES
+
 _KIND = {"R": "container", "O": "container", "T": "task", "S": "task"}
 _STATUS = {"pending": "pending", "ready": "pending", "iterating": "running", "done": "done"}
+
+# mgt 的 `org` 是**自由团队名**（如 "backend" / "quality-guild"），disflow 的 `role` 是
+# **小闭集**负责方分类（dev/qa/pm）。直接置过去会造出任意 role → 写时校验会报错。
+# 按关键词归类；归不出来回落 `dev`，**原值进 context 不丢**（下列 `mgt.org`）。
+_ROLE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("qa", ("qa", "test", "verify", "quality", "regress")),
+    ("pm", ("pm", "product", "plan", "design", "arch", "analysis")),
+    ("dev", ("dev", "eng", "backend", "frontend", "infra", "impl")),
+)
+
+
+def _role_of(org: object) -> str:
+    """mgt `org` → disflow `role`（小闭集）。"""
+    text = str(org or "").strip().lower()
+    if not text:
+        return "dev"
+    if text in ROLES:
+        return text
+    for role, hints in _ROLE_HINTS:
+        if any(hint in text for hint in hints):
+            return role
+    return "dev"
 _GLOBAL_DONE = {"dev_done", "verified", "approved", "closed"}
 
 
@@ -77,12 +101,13 @@ def build_import(mgt: dict) -> dict:
             "parent": todo.get("parent") or None,
             "kind": _KIND.get(item_type, "task"),
             "stage": "verify" if global_status in ("verified", "approved") else "dev",
-            "role": todo.get("org") or "dev",
+            "role": _role_of(todo.get("org")),
             "goal": todo.get("title") or "",
             "entry": todo.get("mode") or "",
             "touch_plan": list(todo.get("files") or []),
             "status": status,
             "context": {"mgt": {"type": item_type, "layer": todo.get("layer"),
+                                "org": todo.get("org"),
                                 "domain": todo.get("domain"), "phase": todo.get("phase"),
                                 "priority": todo.get("priority"),
                                 "global_status": global_status}},

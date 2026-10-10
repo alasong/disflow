@@ -9,7 +9,8 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import gates, graph, store
+from . import config, gates, graph, store
+from .config import Config
 from .core import RUNNING
 from .dispatch import dispatch_plan
 from .dispatch import drive as run_drive
@@ -22,11 +23,11 @@ from .ready import (
     ready_tasks,
     running_tasks,
 )
-from .spec import LEASE_TTL_SECONDS, SPEC
+from .spec import SPEC
 from .state import project
 
 
-def _make_lease(holder: str, ttl: int = LEASE_TTL_SECONDS) -> dict:
+def _make_lease(holder: str, ttl: int) -> dict:
     """带有效期的工作租约（`reap` 据此判过期）。"""
     now = datetime.now(timezone.utc)
     return {
@@ -50,9 +51,13 @@ class GateReject(EngineError):
 
 
 class Engine:
-    def __init__(self, spec: dict | None = None, cwd: str | None = None):
+    def __init__(self, spec: dict | None = None, cwd: str | None = None,
+                 cfg: Config | None = None):
         self.spec = spec or SPEC
         self.cwd = cwd or os.getcwd()
+        # 配置从 `<cwd>/disflow.json` 读（可用 `$DISFLOW_CONFIG` 指别处）；缺文件 = 全用内建默认。
+        # 显式传入 `cfg` 用于测试与“别处已解析好”的场景。
+        self.cfg = cfg if cfg is not None else config.load(self.cwd)
 
     # ── 读 ────────────────────────────────────────────────────────────────
 
@@ -127,9 +132,34 @@ class Engine:
 
     # ── 节点与图 ──────────────────────────────────────────────────────────
 
+    def _validate_vocabulary(self, children: list[dict]) -> None:
+        """`stage` / `role` 取值校验——**写时**，用解析后的配置。
+
+        为何只在写时、不在 reducer 里校验：reducer 一依赖配置，事件流就**不可重放**了
+        ——换台机器或改了 `stages`，重放旧事件会直接失败。所以分两处：
+          - **写时**（这里）：挡住错别字，报出允许的取值；
+          - **读时**（`views.py`）：对未知 stage **容忍**（`order += sorted(...)`）——
+            事件流可能来自更新的版本 / 不同的配置，视图不能崩。
+        之前两边都没有：`stage: "audti"` 会静默多出一个看板列。
+        """
+        for child in children:
+            node_id = child.get("id", "?")
+            stage = child.get("stage")
+            if stage is not None and str(stage) not in self.cfg.stages:
+                raise EngineError(
+                    f"{node_id}: stage 取值非法：{stage!r}（允许：{list(self.cfg.stages)}）"
+                    "——自定义看板列请写进 disflow.json 的 \"stages\"")
+            role = child.get("role")
+            if role is not None and str(role) not in self.cfg.roles:
+                raise EngineError(
+                    f"{node_id}: role 取值非法：{role!r}（允许：{list(self.cfg.roles)}）"
+                    "——自定义负责方请写进 disflow.json 的 \"roles\"")
+
     def expand(self, tree: str, parent: str, children: list[dict]) -> dict:
-        return self._write("node.expand", tree=tree, node=parent,
-                           guard=lambda t: self._need(t, parent),
+        def guard(t: dict) -> None:
+            self._need(t, parent)
+            self._validate_vocabulary(children)
+        return self._write("node.expand", tree=tree, node=parent, guard=guard,
                            prepare=lambda _: {"children": children})
 
     def require(self, tree: str, node: str, dep: str) -> dict:
@@ -185,7 +215,7 @@ class Engine:
 
     def start(self, tree: str, node: str, holder: str = "",
               ttl: int | None = None, dry_run: bool = False) -> dict:
-        lease = _make_lease(holder, LEASE_TTL_SECONDS if ttl is None else ttl)
+        lease = _make_lease(holder, self.cfg.lease_ttl if ttl is None else ttl)
 
         def guard(t: dict, state: dict) -> None:
             item = self._need(t, node)
@@ -198,7 +228,7 @@ class Engine:
                 raise EngineError(f"{node} 未就绪，被阻塞：{blockers}")
         return self._write("node.start", tree=tree, node=node, guard_state=guard,
                            prepare=lambda _: {"lease": lease,
-                                              "baseline": gates.snapshot(self.cwd)},
+                                              "baseline": gates.snapshot(self.cwd, self.cfg)},
                            dry_run=dry_run)
 
     def collect(self, tree: str, node: str, result: dict) -> dict:
@@ -214,14 +244,14 @@ class Engine:
              dry_run: bool = False) -> dict:
         def prepare(t: dict) -> dict:
             item = self._need(t, node)
-            ok, why, evidence = gates.evidence_meta(item.get("acceptance"), self.cwd)
+            ok, why, evidence = gates.evidence_meta(item.get("acceptance"), self.cwd, self.cfg)
             baseline = item.get("baseline") or {}
             # 只归因「开工后**内容真的变了**」的改动：既忽略开工前的脏文件，
             # 也逮得住「同文件被前一节点弄脏、本节点又改」这种差集看不见的情况
-            introduced = gates.newly_changed(self.cwd, baseline)
+            introduced = gates.newly_changed(self.cwd, baseline, self.cfg)
             scope = gates.scope_check(item.get("touch_plan") or [], introduced)
-            size = gates.diff_size(self.cwd, introduced)
-            budget = gates.resolve_budget(item)
+            size = gates.diff_size(self.cwd, introduced, self.cfg)
+            budget = gates.resolve_budget(item, self.cfg)
             evidence["baseline"] = sorted(baseline)
             evidence["introduced"] = introduced
             evidence["baseline_method"] = "content-sha256"
@@ -336,7 +366,7 @@ class Engine:
             added = [path for path in touch if path not in old]
             if not added:
                 raise EngineError(f"新声明未增加任何路径（现有 {sorted(old)}），不必 rescope")
-            touched = set(gates.newly_changed(self.cwd, item.get("baseline")) or [])
+            touched = set(gates.newly_changed(self.cwd, item.get("baseline"), self.cfg) or [])
             dirty = sorted(set(added) & touched)
             if dirty:
                 raise EngineError(

@@ -285,7 +285,10 @@ class ExpectSemanticsTest(DisflowTestCase):
 
     def test_timeout_is_rejected_not_hung(self):
         cmd = f'{sys.executable} -c "import time; time.sleep(5)"'
-        ok, why, meta = gates.run_acceptance({"cmd": cmd, "expect": "exit0"}, self.tmp, timeout=1)
+        # 超时现在由**节点自己声明**（`acceptance.timeout`），不再靠函数参数——
+        # 这正是修「验收超时写死在代码里 ⇒  >2min 的验收这道门永远过不去」那条。
+        ok, why, meta = gates.run_acceptance({"cmd": cmd, "expect": "exit0", "timeout": 1},
+                                            self.tmp)
         self.assertFalse(ok)
         self.assertIn("超时", why)
         self.assertEqual(meta["timeout"], 1)

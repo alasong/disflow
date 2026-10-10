@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 248 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 274 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -177,7 +177,7 @@ disflow 决定，**无硬编码列表**。
 
 **变异测试抳出 2 个「测试自身的洞」**（已补：`test_declared_dangling_relates_is_rejected`、
 `test_per_file_agrees_with_total`）——详见 backlog §B3/B4 已结节。
-可复跑回归口：`python3 scripts/mutation_check.py`（**29/29**，有漏抓则退出码 1）。
+可复跑回归口：`python3 scripts/mutation_check.py`（**37/37**，有漏抓则退出码 1）。
 
 ### 0.7 python-expert 12 类审查（按“该配置化却硬编码”切入）
 
@@ -203,6 +203,58 @@ disflow 决定，**无硬编码列表**。
   **不静默降级为不加锁**（那会变成并发写没保护）。Windows 实现已登记 backlog §D3。
 - `store.checkpoint` 等“带过来但不用”的 vendored API 在文件头**明标**，
   以免读者以为有第二个真相源。
+
+### 0.8 ①② 配置层 + 写时词汇校验（按“软件框架必须配置化”）
+
+**① 配置层（`config.py`）—— 独立配置文件**
+
+| 项 | 实测 |
+| --- | --- |
+| 配置位置 | `<项目根>/disflow.json`，**与状态目录是兄弟**（`$DISFLOW_CONFIG` 可指别处） |
+| 为何要独立 | 配置是**策略**（人写、进版本库、要 review），状态是**派生**（可由 rebuild 从事件重建）——放一起的话「删 `.disflow/` 重置」会**静默带走策略** |
+| 优先级 | 内建默认 < `disflow.json` < 显式参数/节点声明 |
+| 报错 | 未知键/类型错 **报错**并列允许的键（不静默忽略） |
+| 可见 | `doctor` 全绿时报出 8 个键的实际取值与来源 |
+
+**修的最尖锐一条**：验收超时 `DEFAULT_TIMEOUT=120` 曾是模块常量，节点声明不了 ⇒
+跑 >2 分钟的验收**这道门永远过不去**，唯一出路是写 `waiver`——等于**把门关掉**。
+现在：`acceptance.timeout`（节点） > `acceptance_timeout`（项目）。
+
+**其余可配**：`git_timeout`、`output_tail`、`walk_ignore`（指纹递归剪枝）、
+`size_budget`、`lease_ttl`、`stages`、`roles`。
+
+**边界：机制词汇不进配置**。`EVENT_KINDS`←→`_HANDLERS` 留在代码里，靠
+`test_declarations.py` 做编译/测试期保证；挪进配置就退化成运行期才发现，
+而错一个字母坏的是一个事件流的可重放性。
+
+**② 写时词汇校验（`stages`/`roles`）**
+
+| 时机 | 行为 | 为何 |
+| --- | --- | --- |
+| **写**（`expand`） | 未知值 → 报错，并指出“自定义列请写进 `disflow.json`” | 之前 `stage:"audti"` 会**静默多出一个看板列** |
+| **读**（`views.board_lines`） | 未知 stage **容忍**（`order += sorted(...)`） | 事件流可能来自更新的版本/不同配置，视图不能崩 |
+
+**为何 reducer 不校验**：reducer 一依赖配置，事件流就**不可重放**了——换台机器或改了
+`stages`，重放旧事件会直接失败。「事件流不可重放」比「错别字没当场报」严重得多。
+
+**顺带修的映射表**：`import_mgt` 的 `role = todo.get("org")` 是错的——mgt 的 `org` 是
+**自由团队名**（`backend`/`quality-guild`），disflow 的 `role` 是小闭集。
+现在走 `_ROLE_HINTS` 归类，归不出来回落 `dev`，**原值进 `context.mgt.org` 不丢**。
+
+### 0.9 变异 harness 自身的一个缺陷（修 0.8 时抳出）
+
+改 `fingerprint`/`_numstat`/`_is_tracked` 的签名后，3 条针脚的 `old` 文本匹配不上了，
+harness 却把它们报成**「漏抓」**——凭空多出 3 个根本不存在的“覆盖缺口”。
+
+根因：`main` 把 `SystemExit`（针脚找不到）和真漏抓混进同一个 `bad` 桶，
+最后统一说“这些行为没有被测试守住”。**对过期针脚而言这是编造**——同一个 bug 家族：
+把不是事实的东西当事实报。
+
+已修：`PinNotFound` 单独一条退出码；
+- 针脚未应用 → **exit 2**，明说“本轮结果不可信，请对齐针脚”；
+- 真漏抓 → exit 1。
+新增 `tests/test_mutation_harness.py`：除了测这个区分，还有一条
+**全量断言所有针脚的 `old` 都能在当前代码里找到**（把“改了实现不更新针脚”变成即时报错）。
 
 ### 0.3 随后修掉的 C4.2 与顺手补的两个可执行检查
 

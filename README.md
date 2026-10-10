@@ -153,6 +153,36 @@ python3 -m disflow.cli reap demo           # 回收过期租约（worker 崩溃�
 python3 -m disflow.cli doctor
 ```
 
+## 配置（独立文件 `disflow.json`）
+
+零配置可用；要改则放一个独立文件在**项目根**（与状态目录是兄弟，不在它里面）：
+
+```jsonc
+// <项目根>/disflow.json
+{
+  "acceptance_timeout": 300,          // 验收默认超时（秒）；节点可声明 acceptance.timeout 覆盖
+  "size_budget": 400,                 // 单节点改动行数预算；节点可声明 context.size_budget
+  "lease_ttl": 900,                   // 租约默认秒数；start --ttl 可覆盖
+  "git_timeout": 20,                  // git 探测超时（大仓调大）
+  "output_tail": 2000,                // 证据里保留的输出尾部字符数
+  "walk_ignore": ["node_modules"],    // 指纹递归目录时跳过的名字
+  "stages": ["req", "design", "dev", "verify", "done"],  // 看板列（写时校验）
+  "roles": ["dev", "qa", "pm"]                            // 负责方（写时校验）
+}
+```
+
+路径可用 `DISFLOW_CONFIG` 指到别处。**为什么必须是独立文件**：配置是**策略**
+（人写、要版本化、要 review），状态是**派生**（可从事件重建）——放一起的话，
+「删掉 `.disflow/` 重置」这个合法动作会**静默带走策略**。
+
+`disflow doctor` 会把 8 个键的实际取值与来源列出来（改了行为就变，那就得看得见）：
+
+```text
+配置：/path/disflow.json（存在）
+  acceptance_timeout = 300.0
+  ...
+```
+
 ## 开发看板（dogfooding）
 
 ```bash
@@ -165,8 +195,8 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 248 passed（零第三方依赖）
-python3 scripts/mutation_check.py                 # 变异测试：29/29（验证测试真的有牙）
+python3 -m unittest discover -s tests -t tests    # 274 passed（零第三方依赖）
+python3 scripts/mutation_check.py                 # 变异测试：37/37（验证测试真的有牙）
 ```
 
 > 上面那段「5 分钟上手」本身也被测试盯着：`tests/test_readme_walkthrough.py` 会
@@ -185,6 +215,7 @@ disflow/
   ready.py        # ready() / 卡死（纯机制，不含写面）
   context.py      # brief() 上下文投影
   gates.py        # 五道门 + 证据（acceptance/design_first/size_budget/tree_closure/tree_coverage）
+  config.py       # 项目级配置（独立文件 disflow.json；响亮报错）
   dispatch.py     # drive/brief/collect + 波次打包（写面，业务）
   views.py        # board/tree/graph（同源视图）
   import_mgt.py   # mgt 导入器
