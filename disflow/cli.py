@@ -514,6 +514,27 @@ def cmd_deadline(engine: Engine, args) -> int:
     return 0
 
 
+def _parse_nodes(value: str) -> list[str]:
+    """一次 `--nodes` 的值 → 节点名列表：`a,b` 逗号分隔（本次内），`--nodes` 可重复（跨次累加）。
+
+    空串或含空项一律**响亮拒收**（argparse error，退出码 2）。为什么不能宽容：空串若被
+    静默读成「没限定」，就会把「点名了却把名字写空」当成「全量建」——正是本参数要防的误建。
+    本函数只做**形状**校验（非空项）；名字是否真存在由模块层 `plan` 校验并响亮上抛。
+    """
+    items = [item.strip() for item in value.split(",")]
+    if any(not item for item in items):
+        raise argparse.ArgumentTypeError(
+            f"节点列表含空项：{value!r}（逗号分隔非空节点名，如 a,b）")
+    return items
+
+
+def _flatten_nodes(groups: list[list[str]] | None) -> list[str] | None:
+    """把 `action="append"` 攒下的「每次一组」摊平；`None` 原样透传（= 全量，逐字不变）。"""
+    if groups is None:
+        return None
+    return [nid for group in groups for nid in group]
+
+
 def _worktree_call(args, handler):
     """组装层把底层异常归一到 `EngineError`：`worktree` 抛 `KeyError`（名字写错）
     与 `WorktreeError`（探针失败 / 真跑 git 失败），两者若直接漏出去就是抛栈而不是一行人话。
@@ -539,6 +560,12 @@ def cmd_worktree(engine: Engine, args) -> int:
     engine.tree(args.tree)                 # 名字写错在这里就用 EngineError 拦下
     spec, tree, cwd = engine.spec, args.tree, engine.cwd
     action = args.action
+    nodes = _flatten_nodes(args.nodes)
+    if nodes is not None and action != "apply":
+        # 只有 apply 把「按节点子集建」落到 git 副作用上；其余动作不支持就响亮拒收，
+        # 绝不静默忽略——静默忽略会让 `plan --nodes a` 读成一个看似成功的全量计划。
+        raise EngineError(
+            f"worktree {action} 不支持 --nodes（节点子集只对 apply 有意义）")
     if action == "plan":
         report = _worktree_call(args, lambda: worktree.plan(spec, tree, cwd))
         if args.json:
@@ -574,7 +601,7 @@ def cmd_worktree(engine: Engine, args) -> int:
             print("  ✓ 干净")
         return 0
     if action == "apply":
-        report = _worktree_call(args, lambda: worktree.apply(spec, tree, cwd))
+        report = _worktree_call(args, lambda: worktree.apply(spec, tree, cwd, nodes=nodes))
         if args.json:
             _dump(report)
             return 0
@@ -811,6 +838,9 @@ def build_parser() -> argparse.ArgumentParser:
                       help="只有 apply（创建，可逆）真跑 git；reap 是纯计划")
     node.add_argument("tree")
     node.add_argument("--json", action="store_true", help="机器可读输出")
+    node.add_argument("--nodes", action="append", type=_parse_nodes, default=None,
+                      metavar="A,B",
+                      help="只对这些节点建（逗号分隔，可重复）；省略=全量，仅 apply 支持")
 
     add("trees", cmd_trees)
     add("doctor", cmd_doctor)
