@@ -8,7 +8,8 @@
 | --- | --- |
 | `docs/requirements.md` | 需求 v0.1：mgt 复盘 + 29 条可验收 FR/NFR |
 | `docs/design.md` | 设计 v0.1：数据模型、`ready()`、分发器、看板、门 |
-| `docs/dev-board.md` | **开发看板**（14/15，仅 PM 审批未做） |
+| `docs/dev-board.md` | **开发看板**（16/17，仅 PM1 审批未做） |
+| `docs/v0.2-backlog.md` | v0.2 候选**存档**（停放，非承诺：每项写明触发条件） |
 | `docs/design-dispatch-tree-graph.md` | 早期讨论稿（历史） |
 
 ## 核心判断

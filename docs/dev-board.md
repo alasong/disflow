@@ -1,6 +1,6 @@
 # disflow 开发看板（v0.1）
 
-> 状态：**v0.1 完成待批准（14/15，仅 PM1 审批未做）** · 2026-10-10
+> 状态：**v0.1 完成待批准（16/17，仅 PM1 审批未做）** · 2026-10-10
 > 用途：disflow **自己的第一批节点**，开发按本看板推进（dogfooding）。
 > 配套：`docs/requirements.md` · `docs/design.md`
 
@@ -137,10 +137,15 @@ V3 的「篡改投影必须被抓」**确实被抓**（exit 1）—— 一致性
 
 ## 4. 下一步
 
-1. ~~独立复跑 V1–V4~~ ✅ 已完成（2026-10-10）。
-2. 修 V3 发现：`cli.main` 捕获 `ValueError`/`OSError`（已做，`tests/test_cli.py` 守）。
-3. ~~补 `tree_coverage` 门（v0.2）~~ ✅ 已完成（`tests/test_coverage.py` 守；`close` 串联两门）。
-4. 实现 §10 的三条偏离（v0.2，若迁移是主打场景）。
-5. ~~v0.2：多棵树（多块板）作用域隔离 + 跨树完成信号~~ ✅ 已完成（`awaits` + `tree.close`，`tests/test_multitree.py` 守）。
-6. v0.2 余项：每树物理隔离（`DISFLOW_STATE_DIR`）；`phase/layer` 标签；`registry` 资产登记。
-7. ~~覆盖审计（§7）标出的 2 个 ◐：FR-13 的 `--dry-run` 旗标；NFR-2 的业务常量下沉~~ → 均已 ✅（NFR-2 分层自检；FR-13 `--dry-run` 预演）。**FR/NFR 现在全覆盖**。
+~~1–7~~ 全部完成（清单已收口）。**残余项已归档到 `docs/v0.2-backlog.md`**，不再在本表追踪：
+
+| 已收口 | 结果 |
+| --- | --- |
+| 独立复跑 V1–V4（+V5 分层） | ✅ 二轮完成，@0 有记录；抳出 V3 真缺陷已修 |
+| `cli.main` 捕获 `ValueError`/`OSError` | ✅ `tests/test_cli.py` 守 |
+| `tree_coverage` 门 | ✅ `tests/test_coverage.py` 守；`close` 串联两门 |
+| v0.2：多树作用域隔离 + 跨树完成信号 | ✅ `awaits` + `tree.close`，`tests/test_multitree.py` 守 |
+| 覆盖审计 2 个 ◐（FR-13 / NFR-2） | ✅ 均完成 —— **FR/NFR 全覆盖** |
+| §10 三条偏离 | 未实现，**按决策停放**见 backlog §C |
+
+**唯一未决：PM1 人工审批**（收口条件见 `docs/v0.2-backlog.md` §F）。

@@ -379,7 +379,7 @@ disflow doctor                                     # 自检
 2. `phase→stage`：mgt 的 phase（A/B/C）是**排期批次**，不是 disflow 的 stage（req/design/dev/verify）；强行映射会造出假语义。
 3. `registry.json` 作为登记：v0.1 只做状态迁移，不做资产登记。
 
-→ 三条均列为 v0.2 候选，见 `dev-board.md` §4。
+→ 三条均列为 v0.2 候选，见 `docs/v0.2-backlog.md` §C（停放，含各自的触发条件）。
 
 ---
 
