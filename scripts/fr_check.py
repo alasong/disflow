@@ -172,7 +172,8 @@ def fr5_no_contains() -> tuple[bool, str]:
     """FR-5 层级无第二表达（disflow/ 不得出现 contains 边）。
 
     为什么不用 `\bcontains\b`：本环境的 git grep -E 不支持 `\b`，该式**一条也匹配不到**
-    ——`scripts/goal_check.py` 的 p3 用的就是它，故 p3 在本机是**真空通过**（见报告）。
+    ——`scripts/goal_check.py` 的 p3 曾用同一式，故 p3 当时是**真空通过**（见报告；该条已随本报告
+    一并修掉，commit c5ca556）。
     也不能直接搜裸词 `contains`：`acceptance.expect` 的取值类型写的就是 `contains:`、
     `import_mgt.py` 文档里也提到 mgt 的 `contains` 依赖被丢弃 —— 那些不是边。
     真·contains 边在代码里会是一个**引号包住的字段名** `"contains"`，故只搜引号字面量。
@@ -532,9 +533,12 @@ MISSED_SCOPE: list[str] = [
     "§5.3 确定性 = 两次 drive 相同），未另起编号机检。跨条组合行为（同一投影两次 `drive` "
     "逐字节相同）目前只有 `tests/test_e2e.py::EndToEndTest::test_drive_is_bit_identical` 覆盖。",
     "**§6 术语表**：纯定义，无机检对象（`[判断]`：术语是否与代码一致属人读）。",
-    "**`scripts/goal_check.py` 的 p3 在本机真空通过**：其 `\\bcontains\\b` 模式在本环境 "
-    "git grep -E 下一条也匹配不到（即使 `contains:` 明明存在）。本轮**未改** goal_check（不合并），"
-    "仅记录；其余 21 条 goal_check 判据未逐条做负向对照重验。",
+    "**`scripts/goal_check.py` 的 p3 曾是真空判据**（其 `\\bcontains\\b` 在本环境 "
+    "git grep -E 下一条也匹配不到）。**本报告交付后已修**：commit c5ca556 把 P3 改为引号字面量，"
+    "并在 `_grep` 里硬拦 `\\b \\s \\w \\d \\S \\W \\D \\B` —— 这类转义在 POSIX ERE 下不报错、"
+    "只静默返空，而空命中在那些脚本里通常意味着「通过」，故构造性拦下。仍开的："
+    "**goal_check 其余 21 条判据未逐条做负向对照重验**（只有 P3 在修复时做了三向验证："
+    "基线 22/22 · 注入真 contains 边→红 · 只动 `acceptance.expect` 词表→仍绿）。",
     "**负向对照只做了 7 条 / 29 条机检判据**（brief 要求的下限是 5）：其余 22 条没有做变异验证，"
     "其“有牙”是推定，不是实测。",
     "**NFR-3 只机检了“无服务/无数据库”**；“运行产物与源码分离”靠 "
