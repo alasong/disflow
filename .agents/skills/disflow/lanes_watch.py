@@ -1,48 +1,40 @@
 #!/usr/bin/env python3
-"""运行视图 v6 —— 「这是什么活」+「跑到哪了」，一屏看完。
+"""运行视图 v7 —— 以 **disflow 树**为骨架（阶段列 + 树层级），在**在跑节点**上就地显示实时进展。
 
-v6 的正源（新增，接上 disflow 的树）：
-  · goal/stage/status  ← `$DISFLOW_STATE_DIR/state.json` 的投影（键 = 节点 id）
-  · lane 名 == disflow 节点 id（宿主派活时 key=node；找不到就明说，不猜）
-  为什么要接：以前只读 pi 的 run 目录 ⇒ 只知道「跑到哪了」，不知道「这是什么活」。
-  两个存储各答一半，人在两个窗口之间对不上——这才是「看不出做什么的」的病根。
+v7 的正源（2026-10-11 用户要求改版）——原话：「我希望看板的运行视图，能按照阶段列出来。
+并且能按树结构的类别分层」+「运行中的任务，要参考现在的运行视图，实时显示进展，重新渲染下」。
 
-命名（重要，三个词不许再撞）：
-  · **看板** = `disflow board <tree>`：**一棵树的 `stage` 列投影**（阶段列，不是第二份存储）。
-    它的**列**是 `stage`，默认 `req|design|dev|verify`（可配）。
-    设计原文（docs/design-dispatch-tree-graph.md:123）：「工作流模板 = 阶段图（需求 → 设计 → 开发 → 验证）」；
-    §4：看板 = 按 `stage` 分组/过滤**同一棵树**的投影。
-    ⚠ `done` **不是列**：它是节点**状态**（`status`）——「流程走到哪」与「收尾没有」是两个轴，
-    混成一个会造出一个永远为空、且与状态同名的列。
-  · **运行视图** = 本文件（宿主侧，读 pi 的 run 目录）：并行 lane 的**实时进度**。
-    一个 pi workflow run（= 宿主一次 subagent 调用，可含 1..N 路 lane）就是运行视图里的一个块。
-    ⚠ **不许**把它叫「看板」/「工作流」/「派发批次」——它与看板（阶段列）不是一回事。
-  · 本文件的 lane 名 = disflow 节点 id；后面的「看板 <树> · 列 <stage>」是**读投影**得来的，不是猜的。
+两个视图（**数据源分离、布局同源**）：
+  · **看板** = `disflow board <tree>`：**纯 disflow 事实** —— 阶段列 × 列内树层级 × 状态分组。
+    布局的唯一实现在 `disflow/views.py` 的 `board_layout` / `board_lines`。
+  · **运行视图** = 本文件：disflow 事实（骨架 = **全部**节点，含 pending/skipped/failed）
+    **join** 宿主 pi 运行目录（实时事实：哪条 lane、哪个批次、run 状态、已跑/静默、消息数、
+    最后一条工具命令、worker 自报进展）。
+    **布局同源**：本文件 import `disflow.views`，逐行**复用 `board_lines` 的成品行**（列 / 缩进 /
+    分组一个字符都不自己写），只在其后追加 join 来的实时行——两套缩进就是本仓已知的「两面分叉」病。
 
-── 历史（v1..v5 的错，留着防止改回去）──
+join 键：lane 名（父 run 的 `workflowChildren.children[].childId`）== disflow 节点 id（宿主派活
+时 key=node）。读不到就**明说**，绝不猜一个 goal 顶上。
 
-v6 修（2026-10-11）：把 pi workflow run 叫「派发批次」——与看板（阶段列）撞名，改叫**运行视图**；
-  看板列取值去掉了 `done`（`done` 是节点**状态**，列 = 需求/设计/开发/验证）。
+⚠ 命名（三个词不许再撞）：`done` **不是列**（是状态）；一个 pi workflow run（= 宿主一次 subagent
+调用，可含 1..N 路 lane）**不叫「看板」/「工作流」**——它是**运行视图**里的一个**派发批次**，
+v7 起只作**次级注解区**（排障用），不再是主结构。
 
-v5（定稿）。
+── 历史（v1..v6 的错，留着防止改回去）──
 
+v6：外层循环是 pi 的 run 目录 ⇒ **只列已派发 lane，pending 一个不出现**；分组轴是派发批次
+  ⇒ 看不到树的层级；且把 pi workflow run 叫「派发批次」，与看板（阶段列）撞名。
+v5：分组 / 状态 / 命令 / 进展全部结构化（`status.json` + 子会话 `session.jsonl`），不猜。
 v1 错：判据用文件 mtime（两个方向都骗）。
 v2 错：平铺无分组；「进展」是 tail 原始日志。
-v3 错：命令读日志被截断的 bash: 行；分组靠 idle，父 run 的 lastActivityAt 为 None 时塌掉。
+v3 错：命令读日志被截断的 `bash:` 行；分组靠 idle，父 run 的 `lastActivityAt` 为 None 时塌掉。
 v4 错：屏闪（clear）；「进展」从日志猜，抓到的是它读的文档内容。
-
-v5 的正源（全部结构化，不猜）：
-  · 分组   status.json.workflowChildren.children[].childId（= 派活时给的 lane 名）
-  · 状态   status.json.state + pid 存活直接探测
-  · 命令   子会话 session.jsonl 里最后一条 toolCall 的完整 arguments.command
-  · 进展   同一份 session.jsonl 里最后一条 assistant text 块的首行（= ⟳ 进展块）
-  · 静默   lastActivityAt → lastUpdate → startedAt 逐级回退（父 run 常常没有 lastActivityAt）
 
 用法（建议先 `cd` 到 disflow 仓根）:
   sh .agents/skills/disflow/lanes_watch.sh once     # 快照
   sh .agents/skills/disflow/lanes_watch.sh          # 持续 5s（备用屏，无闪、不留回滚）
   sh .agents/skills/disflow/lanes_watch.sh 2
-  sh .agents/skills/disflow/lanes_watch.sh all      # 含全部历史
+  sh .agents/skills/disflow/lanes_watch.sh all      # 含全部历史 lane
   sh .agents/skills/disflow/lanes_watch.sh once -v  # 每个 lane 多给几行
   DISFLOW_STATE_DIR=<树的状态目录> sh .agents/skills/disflow/lanes_watch.sh once
 """
@@ -54,13 +46,40 @@ import sys
 import tempfile
 import time
 
+# 本文件在 <repo>/.agents/skills/disflow/ —— 三跳回仓根，让 `disflow.views`（布局唯一实现）可
+# import。**布局同源是硬要求**：运行视图若自己写一套缩进/分列，就与看板分叉了。
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "..", "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from disflow import config as dconfig  # noqa: E402
+from disflow import spec as dspec  # noqa: E402
+from disflow import views as dviews  # noqa: E402
+
 # pi 的 async run 落点：$TMPDIR/pi-subagents-uid-*/async-subagent-runs/*
 PAT = os.path.join(tempfile.gettempdir(), "pi-subagents-uid-*",
                    "async-subagent-runs", "*")
 ICON = {"running": "●", "complete": "✓", "completed": "✓", "failed": "✗",
-        "killed": "⊘", "started": "●"}
-DISFLOW_STATE_DIR = (os.environ.get("DISFLOW_STATE_DIR")
-                     or os.path.expanduser("~/.disflow/disflow-self"))
+        "killed": "⊘", "started": "●", "stopped": "⊘"}
+_DEFAULT_STATE_DIR = os.path.expanduser("~/.disflow/disflow-self")
+
+
+def state_dir():
+    """状态目录**每次调用都从环境解析**（与 `store.state_dir` 同源），不缓存。"""
+    return os.environ.get("DISFLOW_STATE_DIR") or _DEFAULT_STATE_DIR
+
+
+def _stages():
+    """看板列 = **与 `disflow board` 同一来源**（`disflow.json` 的 `stages`，缺省 `spec.STAGES`）。
+
+    配置坏了（ConfigError）不该把只读旁路打挂：退回出厂列并在表头不说「同看板」——
+    调用方拿到的列仍是 `spec.STAGES`，与零配置下的 `board` 一致。
+    """
+    try:
+        return dconfig.load(os.getcwd()).stages
+    except dconfig.ConfigError:
+        return dspec.STAGES
 
 
 def _read_json(path):
@@ -84,27 +103,17 @@ def _loads(line):
         return None
 
 
-def trees_index():
-    """读 disflow 投影，把 lane 名（= 节点 id）映回它的 goal/stage/status。
+def load_projection():
+    """读 disflow 投影（**骨架 + 布局输入**）。读不到 / 不是对象 → None。
 
-    只读 state.json（不 spawn 子进程、不碰事件流）——运行视图不许改状态。
-    找不到就返回 None，由调用方**明说找不到**，绝不猜一个 goal 顶上。
+    只读 `state.json`（不 spawn 子进程、不碰事件流）——运行视图不许改状态。
+    调用方拿到 None 时必须**明说读不到**，绝不自己造一棵树。
     """
-    path = os.path.join(DISFLOW_STATE_DIR, "state.json")
+    path = os.path.join(state_dir(), "state.json")
     if not os.path.isfile(path):
-        return {}
+        return None
     proj = _read_json(path)
-    if proj is None:
-        return {}
-    idx = {}
-    for slug, t in (proj.get("trees") or {}).items():
-        for nid, nd in ((t or {}).get("nodes") or {}).items():
-            idx[nid] = {"tree": slug,
-                        "goal": " ".join(str(nd.get("goal") or "").split()),
-                        "status": nd.get("status") or "?",
-                        "stage": nd.get("stage") or "?",
-                        "points": nd.get("points")}
-    return idx
+    return proj if isinstance(proj, dict) else None
 
 
 def alive(pid):
@@ -177,6 +186,7 @@ def from_session(session_file):
 
 
 def load(run_dir):
+    """读一个 pi run 目录 → 结构化运行事实；读不到 `status.json` → None。"""
     sp = os.path.join(run_dir, "status.json")
     st = _read_json(sp) if os.path.isfile(sp) else None
     if not isinstance(st, dict):
@@ -211,84 +221,202 @@ def load(run_dir):
     }
 
 
-def prog_lines(r, want):
-    t = (r["text"] or "").strip()
+def visible(runs, all_):
+    """窗口内的 run：在跑，或近 10 分钟活动过（`all` 则全部）——与旧运行视图**同节拍**。"""
+    return [r for r in runs if all_ or r["state"] == "running"
+            or (r["idle"] is not None and r["idle"] < 600)]
+
+
+def lane_index(runs):
+    """把 lane 名（= disflow 节点 id）映到它的运行事实。
+
+    正源：父 run（`mode=workflow`）的 `workflowChildren.children[].childId`。同一节点被派过
+    多次时优先留**在跑**的那条，否则留后出现的一条。返回 `(by_node, parents)`；
+    `parents` 供**次级注解区**（派发批次）用。
+    """
+    by_node = {}
+    parents = [r for r in runs if r["mode"] == "workflow"]
+    for p in parents:
+        for c in p["children"]:
+            cid = c.get("childId")
+            if not cid:
+                continue
+            kid = next((r for r in runs if r["runId"] == c.get("runId")), None)
+            prev = by_node.get(cid)
+            if prev is None or (kid is not None and kid["state"] == "running"):
+                by_node[cid] = {"run": kid, "child": c, "parent": p}
+    return by_node, parents
+
+
+def prog_lines(run, want):
+    t = (run["text"] or "").strip()
     if not t:
         return ["（还没有助手正文）"]
     out = [x.strip() for x in t.splitlines() if x.strip()][:want]
     return [x[:140] for x in out]
 
 
-def block(r, label, verbose=False, info=None, looked_up=False):
-    icon = ICON.get(r["state"], "?")
+def is_running(node, lane):
+    """节点是否「在跑」：disflow 侧持租约（`status=running`）**或** pi 侧 run 在跑。
+
+    **只对这一类显示实时进展**（`◈/⌘/↳`）——pending/done 不显示，避免刷屏。
+    """
+    if str(node.get("status") or "pending") == "running":
+        return True
+    run = (lane or {}).get("run")
+    return bool(run and run["state"] == "running")
+
+
+def node_annotation(lane):
+    """一行**就地标注**运行事实：哪条 lane / 哪个批次 / run 状态 / 已跑 / 静默 / 消息数。"""
+    c, p, r = lane["child"], lane["parent"], lane["run"]
+    facts = [f"lane {c.get('childId') or '?'}", f"批次 {(p.get('short') or '?')}"]
+    if r is None:
+        facts.append(f"{c.get('state') or '?'}（run 目录已过窗口）")
+        return "  ▸ " + " · ".join(facts)
     pa = {True: "活", False: "死", None: "?"}[alive(r["pid"])]
-    warn = "   ⚠ state=running 但进程没了" if (r["state"] == "running" and pa == "死") else ""
-    pad = " " * max(1, 24 - len(label))
-    tag = (f" · 看板 {info['tree']} · 列 {info['stage']} · {info['status']}"
-           + (f" · {info['points']}pt" if info.get("points") else "")) if info else ""
-    b = [f"  {icon} {label}{pad}{r['state']:<9} 已跑 {dur(r['elapsed'])} · 静默 {dur(r['idle'])}"
-         f" · pid {r['pid']}({pa}) · {r['turns']} 条消息{tag}{warn}"]
-    if info:
-        goal = info["goal"]
-        b.append(f"       ◈ [{info['tree']}] {goal[:96]}{'…' if len(goal) > 96 else ''}")
-    elif looked_up:
-        b.append("       ◈ （disflow 里没有这个节点名 —— lane 名与节点 id 不一致？不许猜）")
-    if r["cmd"]:
-        b.append(f"       ⌘ {r['cmd'][:150]}")
-    for t in prog_lines(r, 6 if verbose else 2):
-        b.append(f"       ↳ {t}")
-    return b
+    facts += [f"{r['state']}（pid {r['pid']}({pa})）", f"已跑 {dur(r['elapsed'])}",
+              f"静默 {dur(r['idle'])}", f"{r['turns']} 条消息"]
+    return "  ▸ " + " · ".join(facts)
 
 
-def render(all_, verbose=False):
-    idx = trees_index()
-    runs = [r for r in (load(d) for d in glob.glob(PAT)) if r]
-    keep = [r for r in runs if all_ or r["state"] == "running"
-            or (r["idle"] is not None and r["idle"] < 600)]
+def progress_lines(node, lane, verbose, indent):
+    """在跑节点的实时进展：`◈` 目标 · `⌘` 最后命令 · `↳` worker 自报进展；读不到就**明说**。"""
+    run = (lane or {}).get("run")
+    if run is None:
+        return [f"{indent}↳ （在跑，但 pi 运行目录里读不到这条 lane —— 实时进展读不到）"]
+    goal = " ".join(str(node.get("goal") or "").split())
+    out = [f"{indent}◈ {goal[:96]}{'…' if len(goal) > 96 else ''}"]
+    out.append(f"{indent}⌘ {run['cmd'][:150]}" if run["cmd"]
+               else f"{indent}⌘ （还没有工具调用）")
+    for t in prog_lines(run, 6 if verbose else 2):
+        out.append(f"{indent}↳ {t}")
+    return out
+
+
+def tree_block(slug, tree, lanes, closed, verbose):
+    """一棵树：**逐行复用看板的渲染**（列 / 缩进 / 分组），再就地追加 join 来的实时行。
+
+    `board_lines` 与 `board_layout` 是同一份布局的两种投影（人读态 / 结构化），行序一一对应
+    ——这里按 layout 的列→组→行顺序消费，`next(base)` 取到的就是**看板自己渲染的那一行**。
+    运行视图因此**没有第二套缩进/分列**。
+    """
+    cols = _stages()
+    layout = dviews.board_layout(tree, stages=cols, closed=closed, tree_name=slug)
+    base = iter(dviews.board_lines(tree, stages=cols, closed=closed, tree_name=slug))
+    out = []
+    for column in layout["columns"]:
+        out.append(next(base))                    # 列头
+        for group in column["groups"]:
+            out.append(next(base))                # 组标签
+            for row in group["rows"]:
+                line = next(base)                 # 行（缩进/标记/目标/理由都来自看板）
+                out.append(line)
+                # 续行缩进 = 该行自身的行首空白（不另写一份缩进公式）
+                indent = line[:len(line) - len(line.lstrip())]
+                lane = lanes.get(row["node"])
+                if lane is not None:
+                    out.append(indent + node_annotation(lane))
+                if is_running(row, lane):
+                    out.extend(progress_lines(row, lane, verbose, indent + "  "))
+    return out
+
+
+def child_detail(label, run, info, verbose=False):
+    """次级注解区的一路 lane 详情（命令行 / 尾行，供排障）。"""
+    pa = {True: "活", False: "死", None: "?"}[alive(run["pid"])]
+    head = (f"  {ICON.get(run['state'], '?')} {label or '(散跑)'}"
+            f"  {run['state']}  已跑 {dur(run['elapsed'])} · 静默 {dur(run['idle'])}"
+            f" · pid {run['pid']}({pa}) · {run['turns']} 条消息{info}")
+    lines = [head]
+    if run["cmd"]:
+        lines.append(f"      命令  {run['cmd'][:150]}")
+    for t in prog_lines(run, 6 if verbose else 2):
+        lines.append(f"      尾行  {t}")
+    return lines
+
+
+def batch_section(runs, keep, parents, node_meta, verbose):
+    """**次级注解区**：派发批次（+ 散跑）的排障详情。**不是主结构**。"""
     kept = {r["runId"] for r in keep}
-
-    # 分组；父 run 只要**任一子可见**就保留（父常缺 lastActivityAt），
-    # 且保留后该运行视图下的**全部** lane 都显示（不再被 10 分钟窗口逐个筛掉）
-    groups = []
-    for p in [r for r in runs if r["mode"] == "workflow"]:
+    out = ["", "── 派发批次（次级注解 · 排障用 · 不是主结构）──"]
+    groups, claimed = [], set()
+    for p in parents:
         cids = {c.get("runId") for c in p["children"]}
-        kids_all = [r for r in runs if r["runId"] in cids]
-        if any(k["runId"] in kept for k in kids_all):
-            groups.append((p, kids_all))
-    claimed = {k["runId"] for _, kids in groups for k in kids}
+        kids = [r for r in runs if r["runId"] in cids]
+        if any(k["runId"] in kept for k in kids):
+            groups.append((p, kids))
+            claimed |= {k["runId"] for k in kids}
     rest = [r for r in keep if r["runId"] not in claimed and r["mode"] != "workflow"]
-
-    nboards = len(groups) + (1 if rest else 0)
-    nrunning = sum(1 for r in keep if r["state"] == "running")
-    trees = sorted({v["tree"] for v in idx.values()})
-    boards = len(trees)
-    out = [f"══ 运行视图 @ {time.strftime('%H:%M:%S')} ══",
-           f"看板（= disflow 树，列 stage）{boards} 棵："
-           f"{', '.join(trees) if trees else '（读不到 state.json）'}",
-           f"运行视图（= pi workflow run）{nboards} 个"
-           f"（workflow {len(groups)} · 散跑 {1 if rest else 0}）"
-           f" · lane {len(keep)} 路 · 在跑 {nrunning} · 静默阈值 10 分钟",
-           f"state dir {DISFLOW_STATE_DIR}"]
+    if not groups and not rest:
+        out.append("（没有窗口内的 lane：没有 running 的，也没有近 10 分钟活动过的）")
     for i, (p, kids) in enumerate(groups, 1):
         nrun = sum(1 for k in kids if k["state"] == "running")
-        out.append("")
-        out.append(f"▌运行视图 {i}/{nboards} · {p['short']}"
+        out.append(f"▌批次 {i}/{len(groups)} · {p['short']}"
                    f"（{nrun} 在跑 / {len(kids)} 路 · 父 {p['state']}）")
-        if p["root"]:
-            out.append(f"  root {p['root']}")
         for c in p["children"]:
             cid = c.get("childId") or ""
             kid = next((r for r in kids if r["runId"] == c.get("runId")), None)
-            out.extend(block(kid, cid, verbose, idx.get(cid), bool(cid)) if kid
-                       else [f"  · {cid:<22}{c.get('state')}（已过窗口）"])
+            if kid is None:
+                out.append(f"  · {cid}  {c.get('state')}（run 目录已过窗口）")
+                continue
+            meta = node_meta.get(cid)
+            info = (f" · 节点 {cid} · 树 {meta['tree']} · 列 {meta['stage']}"
+                    f" · 状态 {meta['status']}" if meta
+                    else f" · （lane 名 {cid!r} 在 disflow 里没有对应节点 —— 不猜）")
+            out.extend(child_detail(cid, kid, info, verbose))
     if rest:
-        out.append("")
-        out.append(f"▌散跑 {nboards}/{nboards}（不属于任何 pi workflow）")
+        out.append(f"▌散跑 {len(rest)} 路（没有 lane 名，无法关联节点）")
         for r in rest:
-            out.extend(block(r, "", verbose, None, False))
-    if not keep:
+            out.extend(child_detail("", r, " · （散跑：没有 lane 名，无法关联节点）", verbose))
+    return out
+
+
+def render(all_, verbose=False):
+    proj = load_projection()
+    runs = [r for r in (load(d) for d in glob.glob(PAT)) if r]
+    keep = visible(runs, all_)
+    kept = {r["runId"] for r in keep}
+    by_node, parents = lane_index(runs)
+    # 只有**窗口内**的 lane 才就地标注（否则历史 lane 会把每一行都涂满）
+    lanes = {nid: v for nid, v in by_node.items()
+             if v["run"] is not None and v["run"]["runId"] in kept}
+    trees = (proj or {}).get("trees") or {}
+    closed = {name for name, t in trees.items()
+              if isinstance(t, dict) and t.get("closed")}
+    node_meta = {}
+    for slug, t in trees.items():
+        if not isinstance(t, dict):
+            continue
+        for nid, node in (t.get("nodes") or {}).items():
+            if isinstance(node, dict):
+                node_meta[nid] = {"tree": slug, "stage": node.get("stage") or "?",
+                                  "status": node.get("status") or "?"}
+    nrunning = sum(1 for r in keep if r["state"] == "running")
+    cols = _stages()
+    out = [f"══ 运行视图 @ {time.strftime('%H:%M:%S')} ══",
+           "数据源：disflow 投影（骨架 = 全部节点，布局同看板） + pi 运行目录（实时事实）",
+           f"树 {len(trees)} 棵：{', '.join(sorted(trees)) if trees else '（读不到 state.json）'}"
+           f" · 列（同看板）：{'|'.join(cols)}",
+           f"在跑 lane {nrunning} 路 · 窗口内 lane {len(keep)} 路 · 静默阈值 10 分钟"
+           f" · state dir {state_dir()}"]
+    if proj is None:
         out.append("")
-        out.append("（没有 lane：没有 running 的，也没有近 10 分钟活动过的）")
+        out.append(f"✗ 读不到 state.json（{os.path.join(state_dir(), 'state.json')}）"
+                   " —— 没有树可当骨架；下面只有 pi 运行目录里的事实（不猜节点）")
+    elif not trees:
+        out.append("")
+        out.append("（state.json 里没有树）")
+    for slug in sorted(trees):
+        tree = trees[slug]
+        if not isinstance(tree, dict) or not isinstance(tree.get("nodes"), dict):
+            out.append(f"▌树 {slug}  ⚠ 投影节点不是对象（读时容忍：跳过，不猜）")
+            continue
+        goal = " ".join(str(tree.get("goal") or "").split())
+        out.append("")
+        out.append(f"▌树 {slug}  {goal[:96]}{'…' if len(goal) > 96 else ''}")
+        out.extend(tree_block(slug, tree, lanes, closed, verbose))
+    out.extend(batch_section(runs, keep, parents, node_meta, verbose))
     return out
 
 
@@ -304,11 +432,13 @@ def leave(*_):
     sys.exit(0)
 
 
-mode = sys.argv[1] if len(sys.argv) > 1 else "5"
-verbose = "-v" in sys.argv
-if mode in ("once", "all"):
-    print("\n".join(render(mode == "all", verbose)))
-else:
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    mode = argv[0] if argv else "5"
+    verbose = "-v" in argv
+    if mode in ("once", "all"):
+        print("\n".join(render(mode == "all", verbose)))
+        return 0
     try:
         iv = float(mode)
     except ValueError:
@@ -320,8 +450,13 @@ else:
         while True:
             draw(render(False, verbose),
                  f"（Ctrl-C 退出 · {iv:g}s 刷新 · 状态=status.json.state"
-                 f" · 看板/列=disflow 投影 · 备用屏：不闪不留回滚）")
+                 f" · 列/布局=disflow 看板同源 · 备用屏：不闪不留回滚）")
             time.sleep(iv)
     finally:
         sys.stdout.write("\033[?25h\033[?1049l")
         sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

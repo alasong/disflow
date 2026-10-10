@@ -92,8 +92,15 @@ d doctor                                        # 自检全绿
 | **顺序由它算**：我只说了 `B requires A`，`drive` 只把 A 放进首波 | ② |
 | **门会拒收假的完成**：验收不匹配就 `done` → 拒收（退出码非 0），理由逐条列出；若只是「没改任何东西」，门只给 ⚠ 空洞通过警告、仍 exit 0，不拒收 | ④ |
 | **证据引擎自算**：`done` 后 `introduced` / `size` / `acceptance` 由引擎采集，不是手抄 | ⑤ |
-| **看板/树/图不是第二份存储**：它们都读同一份投影（看板 = 阶段列 × 列内树层级 × 状态分组，宿主运行视图复用同一布局） | ⑦ |
+| **看板/树/图不是第二份存储**：它们都读同一份投影（看板 = 阶段列 × 列内树层级 × 状态分组）；宿主**运行视图**（`.agents/skills/disflow/lanes_watch.sh`）用它当骨架、复用**同一布局**，再叠加 pi 运行目录里的**实时进展** | ⑦ |
 | **配置是独立文件且看得见**：`doctor` 报出实际取值与配置文件路径 | ⑧ |
+
+两个视图各答一半（**数据源分离、布局同源**）：`board` 是**纯 disflow 事实**的一次性快照
+（阶段列 + 列内树层级 + 状态分组，含 pending/skipped/failed）；`lanes_watch.sh` 以**同一棵树的
+全部节点**为骨架（**逐行复用** `board_lines`，不另写一套缩进/分列），再把宿主 pi 运行目录
+（lane 名 = 节点 id）join 上来，在**在跑**节点上就地显示实时进展（`◈` 目标 / `⌘` 最后命令 /
+`↳` worker 自报进展）。`board` 不知道 worker 在跑哪条命令，pi 不知道树的结构 —— 所以是**两个**；
+区分依据是**数据源与刷新节拍**，不是布局（布局只有 `views.board_layout` 一处实现）。
 
 第 ④ 步的真实输出：
 
@@ -270,7 +277,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 594 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 604 passed（零第三方依赖）
 python3 scripts/mutation_check.py                 # 变异测试：64/64（验证测试真的有牙）
 ```
 
