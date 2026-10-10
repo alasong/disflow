@@ -106,6 +106,7 @@ def _on_node_start(state: dict, event: dict) -> None:
     node = _node(state, event["slug"], event["node"])
     node["status"] = "running"
     node["lease"] = event.get("lease")
+    node["baseline"] = event.get("baseline") or []
 
 
 def _on_node_collect(state: dict, event: dict) -> None:

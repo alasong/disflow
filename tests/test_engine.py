@@ -1,6 +1,10 @@
 """引擎端到端测试：建树、建图、就绪、分发、门、证据、确定性。"""
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 from base import DisflowTestCase, acceptance, always_fails
@@ -73,14 +77,17 @@ class EngineFlowTest(DisflowTestCase):
             e.done("t3", "y")
 
     def test_scope_violation_rejected_in_git_repo(self):
-        e = self.engine
+        repo = tempfile.mkdtemp(prefix="disflow-git-")
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        with open(os.path.join(repo, "other.py"), "w", encoding="utf-8") as handle:
+            handle.write("x = 1\n")
+        e = Engine(cwd=repo)                 # 自建脏 git 仓，不依赖本仓状态
         e.init_tree("t4", "g")
         e.expand("t4", "root", [{"id": "z", "touch_plan": ["src/z.py"],
                                  "acceptance": acceptance("Z")}])
-        # 用仓库根当 cwd：工作区有未提交文件（含本文件），必然超出 touch_plan
-        git_engine = Engine(cwd="/Users/song/1github/disflow")
         with self.assertRaises(GateReject) as ctx:
-            git_engine.done("t4", "z")
+            e.done("t4", "z")
         self.assertTrue(any("超出 touch_plan" in m for m in ctx.exception.missing))
 
     def test_require_cycle_rejected(self):
@@ -135,6 +142,22 @@ class EngineFlowTest(DisflowTestCase):
         self.engine.done("t1", "a")
         matched, diffs = store.projection_matches(spec.SPEC, project=state.project)
         self.assertTrue(matched, diffs)
+    def test_baseline_excludes_preexisting_dirt(self):
+        repo = tempfile.mkdtemp(prefix="disflow-git-")
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        with open(os.path.join(repo, "other.py"), "w", encoding="utf-8") as handle:
+            handle.write("x = 1\n")
+        e = Engine(cwd=repo)
+        e.init_tree("t8", "g")
+        e.expand("t8", "root", [{"id": "n", "touch_plan": ["src/n.py"],
+                                  "acceptance": acceptance("N")}])
+        e.start("t8", "n", "w")
+        e.done("t8", "n")
+        node = e.load()["trees"]["t8"]["nodes"]["n"]
+        self.assertEqual(node["evidence"]["introduced"], [])
+        self.assertIn("other.py", node["evidence"]["baseline"])
+
     def test_scope_dot_covers_all_and_prefix_matches(self):
         self.assertEqual(gates.scope_check(["."], ["a.py", "dir/b.py"])["violations"], [])
         self.assertEqual(gates.scope_check(["src"], ["src/a.py", "other/b.py"])["violations"],

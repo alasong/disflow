@@ -138,7 +138,8 @@ class Engine:
                 raise EngineError(f"{node} 未就绪，被阻塞：{blockers}")
         return self._write("node.start", tree=tree, node=node, guard=guard,
                            prepare=lambda _: {"lease": {"holder": holder or "unknown",
-                                                        "at": now_iso()}})
+                                                        "at": now_iso()},
+                                              "baseline": gates.git_changed_files(self.cwd) or []})
 
     def collect(self, tree: str, node: str, result: dict) -> dict:
         def guard(t: dict) -> None:
@@ -153,7 +154,13 @@ class Engine:
         def prepare(t: dict) -> dict:
             item = self._need(t, node)
             ok, why, evidence = gates.evidence_meta(item.get("acceptance"), self.cwd)
-            scope = gates.scope_check(item.get("touch_plan") or [], evidence.get("changed_files"))
+            baseline = set(item.get("baseline") or [])
+            changed = evidence.get("changed_files")
+            # 只归因「开工后被引入」的改动，忽略开工前就存在的脏文件（他人改动）
+            introduced = None if changed is None else [f for f in changed if f not in baseline]
+            scope = gates.scope_check(item.get("touch_plan") or [], introduced)
+            evidence["baseline"] = sorted(baseline)
+            evidence["introduced"] = introduced
             evidence["scope"] = scope
             contract = {"node": node, "acceptance": item.get("acceptance"),
                         "touch_plan": item.get("touch_plan"),
