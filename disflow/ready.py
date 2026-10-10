@@ -17,15 +17,26 @@ RUNNING = "running"
 
 def lease_expired(lease: dict | None, now_ts: float) -> bool:
     """租约是否已过期（仅 `reap` 调用；`ready()` 不看时钟，保持纯函数）。"""
+    return lease_overdue_seconds(lease, now_ts) is not None
+
+
+def lease_overdue_seconds(lease: dict | None, now_ts: float) -> float | None:
+    """租约已过期**多久**（秒）；未过期 / 无租约 / 解析不了 → `None`。
+
+    为何要“多久”而不只是“过期了”：这是人判断「该 `reap` 还是该继续干」的**唯一线索**
+    ——刚过几分钟多半是人还在干，过了几天多半是 worker 崩了。
+    只有布尔值的报错会把这两种完全不同的情况说成同一件事。
+    """
     if not lease:
-        return False
+        return None
     raw = lease.get("expires_at")
     if not raw:
-        return False
+        return None
     try:
-        return datetime.fromisoformat(raw).timestamp() < now_ts
+        overdue = now_ts - datetime.fromisoformat(raw).timestamp()
     except ValueError:
-        return False
+        return None
+    return overdue if overdue > 0 else None
 
 
 def awaits_of(node: dict) -> list[str]:

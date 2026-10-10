@@ -217,8 +217,8 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 295 passed（零第三方依赖）
-python3 scripts/mutation_check.py                 # 变异测试：41/41（验证测试真的有牙）
+python3 -m unittest discover -s tests -t tests    # 301 passed（零第三方依赖）
+python3 scripts/mutation_check.py                 # 变异测试：45/45（验证测试真的有牙）
 ```
 
 > 上面那段「5 分钟上手」本身也被测试盯着：`tests/test_readme_walkthrough.py` 会

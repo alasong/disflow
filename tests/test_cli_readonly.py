@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
@@ -156,6 +157,84 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         code, _out, err = self._run(["doctor"])
         self.assertNotEqual(code, 0, "悬空 requires 必须被 doctor 抓到")
         self.assertIn("✗", err)
+
+    # ── doctor：把“故障”与“需人判断”分开（租约人速假红）──────────────
+    #   背景：lease_ttl 默认 900s。人（不是 agent）在一个节点上干超过 15 分钟，
+    #   旧行为是 doctor **变红**并把 `reap` 当成唯一修法——而那会把节点从干活的人
+    #   手里收回。doctor 无法知道是“worker 崩了”还是“人在干活”，所以不能假装知道。
+
+    def _start_with_expired_lease(self) -> None:
+        """起一个节点并让租约**已经过期**——用 `--ttl=-1`（立即过期），
+        与本仓既有做法一致（`tests/test_lease.py`），不靠 `sleep`：
+        既快又不依赖墙钟（sleep 会造成慢+偶发飘）。"""
+        code, out, err = self._run(["start", "t", "a", "--holder", "me", "--ttl=-1"])
+        self.assertEqual(code, 0, f"start 失败：{out}{err}")
+
+    def test_expired_lease_is_an_advisory_not_a_failure(self):
+        self._seed()
+        self._start_with_expired_lease()
+        code, out, _err = self._run(["doctor"])
+        self.assertEqual(code, 0, "租约过期不该让 doctor 退出码非零（人速干活是正常的）")
+        self.assertIn("需人判断", out)
+        self.assertIn("租约已过期", out)
+        self.assertIn("holder=me", out, "要报出是谁在干")
+        self.assertIn("不是故障", out)
+        self.assertIn("✓ doctor 全绿", out)
+
+    def test_advisory_states_the_fact_and_both_readings(self):
+        """报的必须是**事实 + 两种读法各自的正确做法**，而不是一个断定的病因。"""
+        self._seed()
+        self._start_with_expired_lease()
+        _code, out, _err = self._run(["doctor"])
+        self.assertIn("已过期", out)                      # 事实：过期多久（人能据此判断）
+        self.assertRegex(out, r"已过期 \d+ 秒")           # 具体读数，不是“已过期”三个字
+        self.assertIn("worker 已崩", out)                 # 读法 ①
+        self.assertIn("reap", out)                        # ① 的做法
+        self.assertIn("人还在干", out)                    # 读法 ②
+        self.assertIn("done 不要求租约", out)             # ② 的做法（且说明为何安全）
+        self.assertIn("lease_ttl", out)                   # 想避开这条怎么办
+
+    def test_advisory_does_not_hide_a_real_problem(self):
+        """两者的错不能互相掩盖：同时存在时，真故障仍然退出码 1、stdout 干净。"""
+        self._seed()
+        self._start_with_expired_lease()
+        path = store.projection_path(spec.SPEC)          # 造一个真故障：投影漂移
+        state = store.read_json(path)
+        state["trees"]["t"]["nodes"]["b"]["status"] = "done"
+        store.write_json_atomic(path, state)
+        code, out, err = self._run(["doctor"])
+        self.assertEqual(code, 1, "有真故障就必须非零")
+        self.assertIn("投影漂移", err)
+        self.assertIn("rebuild", err)
+        self.assertEqual(out, "", "失败时 stdout 必须干净（既有契约）")
+
+    def test_no_advisory_when_no_lease_has_expired(self):
+        self._seed()
+        code, out, _err = self._run(["doctor"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("需人判断", out, "没有过期租约就不该出现这一节")
+
+    def test_running_with_a_live_lease_is_silent(self):
+        self._seed()
+        self._run(["start", "t", "a", "--holder", "me", "--ttl", "3600"])
+        code, out, _err = self._run(["doctor"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("需人判断", out)
+
+    def test_done_does_not_require_a_lease(self):
+        """把“意外行为”钉成**有意的契约**：`done` 不要求 `running` 也不要求未过期租约。
+
+        为何这是对的：租约防的是**并发**（两个人同时干同一节点），不是“收工晚了”。
+        所以租约过期不该阻止干活的人交活。
+        """
+        self._seed()
+        self._start_with_expired_lease()
+        os.makedirs(os.path.join(self.tmp, "src"), exist_ok=True)
+        with open(os.path.join(self.tmp, "src", "a.py"), "w", encoding="utf-8") as handle:
+            handle.write("x = 1\n")
+        code, out, err = self._run(["done", "t", "a", "--decl", '{"approver":"me"}'])
+        self.assertEqual(code, 0, f"租约过期不该拦住 done：{out}{err}")
+        self.assertIn("done", out)
 
     def test_doctor_names_the_remedy_for_projection_drift(self):
         """报故障必须带修法：漂移时要点名 `rebuild`，否则用户只知道“坏了”。"""

@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 295 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 301 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -177,7 +177,7 @@ disflow 决定，**无硬编码列表**。
 
 **变异测试抳出 2 个「测试自身的洞」**（已补：`test_declared_dangling_relates_is_rejected`、
 `test_per_file_agrees_with_total`）——详见 backlog §B3/B4 已结节。
-可复跑回归口：`python3 scripts/mutation_check.py`（**41/41**，有漏抓则退出码 1）。
+可复跑回归口：`python3 scripts/mutation_check.py`（**45/45**，有漏抓则退出码 1）。
 
 ### 0.7 python-expert 12 类审查（按“该配置化却硬编码”切入）
 
@@ -338,6 +338,42 @@ harness 却把它们报成**「漏抓」**——凭空多出 3 个根本不存�
 
 > 识别方法：一条报错经过「清 `__pycache__` + 重启服务器 + 全仓跑同一分析器」后仍然存在，
 > 且**直接跑分析器报 0 条**，那就是内容哈希挂着的陈旧结论——改动**被报的那个文件**（而不是它引用的那个）就能破。
+
+### 0.12 租约人速假红（backlog C5）：两种病因共用一个信号
+
+**同一类错，本轮修了第二次**（上一次是 0.9 的变异 harness：把「针脚未应用」与「真漏抓」
+混进同一个 `bad` 桶）。归类：**一个信号传达两种不同病因** ⇒ 消费者无法正确行动。
+标准修法：**按病因拆开**；拆不开时就**陈述事实 + 并列各读法**，不要假装知道。
+
+**实测（修前）**：
+
+```text
+start 后过了租约期(默认 900s)  doctor 报「租约超时未回收（可 disflow reap）」  退出码 1
+照建议 reap                   running → pending（而人还在干）
+人已干完活直接 done           ✅ 仍成功——但这点当时没写进任何文档，属意外行为
+```
+
+**为何不能直接删掉这个检查**：`is_stuck` 只看 **pending**。所以“worker 崩了留下 `running`
+的节点”会让树**静默停住**，而 `drive` 什么都不说——**`doctor` 是唯一说出它的地方**。
+
+**已修**（口径：既不删也不变哑，而是**说准**）：
+
+| 渠道 | 内容 | 退出码 |
+| --- | --- | --- |
+| `✗ doctor 发现` | 真故障（漂移/成环/悬空/未登记） | **1** |
+| `⚠ 需人判断` | 租约已过期 N 秒（holder=X）+ **两种读法及各自正确做法** | **0** |
+
+关键是**报事实而非结论**：`ready.lease_overdue_seconds()` 给出“过期多久”（刚几分钟 ≈ 人还在干，
+几天 ≈ worker 崩了），这是人能自己判断的**唯一线索**；旧措辞只有布尔值，
+把两种完全不同的情况说成同一件事，并把一个**对其中一种是错的**修法（`reap`）当成唯一答案。
+
+同时把「**`done` 不要求租约**」从意外行为升为有意契约（`design.md` §3.1 + 测试）。
+理由：租约防的是**并发**（两人同干一节点），不是“收工晚了”。
+
+**立即回报**：新加的守卫 `test_every_pin_applies_to_current_code`（见 0.11）
+**当场抓到我自己的错针脚**——我在 pin 里写了真换行，而源码里是 `\n` 两个字符。
+harness 也正确地报成「⛔ 针脚**未应用**（不是漏抓）」——
+区分这两个之前只是“应该分”，今天是**用得着**。
 
 ### 0.3 随后修掉的 C4.2 与顺手补的两个可执行检查
 

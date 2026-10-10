@@ -21,7 +21,7 @@ import time
 from . import config, graph, store, views
 from .engine import Engine, EngineError, GateReject
 from .import_mgt import apply_import, build_import, load_mgt
-from .ready import lease_expired
+from .ready import lease_overdue_seconds
 from .state import project
 
 
@@ -242,8 +242,31 @@ def cmd_rebuild(engine: Engine, args) -> int:
     return 0
 
 
+def _human_seconds(seconds: float) -> str:
+    """把秒数说成人能读的样子（用于“租约过期多久”）。"""
+    total = int(seconds)
+    if total < 60:
+        return f"{total} 秒"
+    if total < 3600:
+        return f"{total // 60} 分 {total % 60} 秒"
+    if total < 86400:
+        return f"{total // 3600} 小时 {total % 3600 // 60} 分"
+    return f"{total // 86400} 天 {total % 86400 // 3600} 小时"
+
+
+# `doctor` 的“需人判断”条目——**不计入退出码**（错在把两种病因当成一种报）
+_DOCTOR_ADVISORY_FOOTNOTE = (
+    "两种读法：① worker 已崩 → `disflow reap <tree>` 收回（节点退回 pending，\n"
+    "             已落盘的事件不丢）；\n"
+    "           ② 人还在干 → 直接 `disflow done <tree> <node> --decl …`\n"
+    "             （**done 不要求租约**——租约防的是并发，不是“收工晚了”）。\n"
+    "想避开这条：`start --ttl <秒>` 或配置 `lease_ttl`。"
+)
+
+
 def cmd_doctor(engine: Engine, args) -> int:
     problems: list[str] = []
+    advisories: list[str] = []
     matched, diffs = store.projection_matches(engine.spec, project=project)
     if not matched:
         problems.extend(f"投影漂移：{d}" for d in diffs)
@@ -256,8 +279,13 @@ def cmd_doctor(engine: Engine, args) -> int:
         if cycles:
             problems.append(f"{name}: requires 成环 {cycles}")
         for node_id, node in tree["nodes"].items():
-            if node.get("status") == "running" and lease_expired(node.get("lease"), now_ts):
-                problems.append(f"{name}/{node_id}: 租约超时未回收（可 `disflow reap {name}`）")
+            if node.get("status") == "running":
+                overdue = lease_overdue_seconds(node.get("lease"), now_ts)
+                if overdue is not None:
+                    holder = (node.get("lease") or {}).get("holder") or "?"
+                    advisories.append(
+                        f"{name}/{node_id}: 租约已过期 {_human_seconds(overdue)}"
+                        f"（holder={holder}）")
             for dep in node.get("requires") or []:
                 if dep not in tree["nodes"]:
                     problems.append(f"{name}/{node_id}: requires 悬空 {dep}")
@@ -271,12 +299,22 @@ def cmd_doctor(engine: Engine, args) -> int:
         print(f"✗ doctor 发现（配置：{config.config_path(engine.cwd)}）：", file=sys.stderr)
         for item in problems:
             print(f"  - {item}", file=sys.stderr)
+        if advisories:
+            print("  （另有需人判断项，因本轮已有故障而不单独报；见 exit 0 时的输出）",
+                  file=sys.stderr)
         return 1
     # 全绿时把“这些值从哪来”报出来：配置是独立文件，改了它行为会变，所以得看得见
     cfg_path = config.config_path(engine.cwd)
     print(f"配置：{cfg_path}" + ("（存在）" if os.path.isfile(cfg_path) else "（无 → 全用内建默认）"))
     for key, value, _source in config.describe(engine.cfg, engine.cwd):
         print(f"  {key} = {value}")
+    if advisories:
+        # **不计入退出码**，也不叫“故障”：doctor 无法知道这是“worker 崩了”还是
+        # “人在正常干活”——那就不能假装知道，而要给事实（过期多久）+ 两种读法。
+        print("⚠ 需人判断（不是故障，不计入退出码）：")
+        for item in advisories:
+            print(f"  - {item}")
+        print(_DOCTOR_ADVISORY_FOOTNOTE)
     print("✓ doctor 全绿")
     return 0
 

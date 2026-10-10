@@ -194,6 +194,31 @@ MUTATIONS: list[Mutation] = [
      'def _covered(path: str, touch_plan: list[str]) -> bool:\n    return True\n    for entry in touch_plan:',
      "test_config.py"),
 
+    # ── C5：租约人速假红——“故障”与“需人判断”必须分开 ────────────────
+    ("租约过期又变回“故障”（退代码 1 + 唯一修法 reap）", "disflow/cli.py",
+     '                if overdue is not None:\n'
+     '                    holder = (node.get("lease") or {}).get("holder") or "?"\n'
+     '                    advisories.append(',
+     '                if overdue is not None:\n'
+     '                    holder = (node.get("lease") or {}).get("holder") or "?"\n'
+     '                    problems.append(',
+     "test_cli_readonly.py"),
+    ("租约提醒丢掉“过期多久”（事实没了就只剩断言）", "disflow/cli.py",
+     '                        f"{name}/{node_id}: 租约已过期 {_human_seconds(overdue)}"',
+     '                        f"{name}/{node_id}: 租约已过期"',
+     "test_cli_readonly.py"),
+    ("租约提醒不再说“done 不要求租约”（最容易被误解的那句）", "disflow/cli.py",
+     # `\\n` 是**源码里的两个字符**（字符串字面量内的转义），不是真换行；
+     # 写错就会以“未应用”的形式被守卫测试当场抓获（实测踩过）
+     '    "           ② 人还在干 → 直接 `disflow done <tree> <node> --decl …`\\n"\n'
+     '    "             （**done 不要求租约**——租约防的是并发，不是“收工晚了”）。\\n"',
+     '    "           ② 人还在干 → 直接 `disflow done <tree> <node> --decl …`\\n"',
+     "test_cli_readonly.py"),
+    ("lease_overdue_seconds 永远说没过期（提醒全消失）", "disflow/ready.py",
+     '    return overdue if overdue > 0 else None',
+     '    return None',
+     "test_cli_readonly.py"),
+
     # ── batch_append：零调用方的死路径（曾被整文件屏蔽藏住）────────────────
     ("batch_append 返回旧的/错的偏移（曾是真 NameError）", "disflow/store.py",
      '    return {"appended": appended, "projection_offset": len(events) + appended}',
