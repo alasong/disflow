@@ -275,12 +275,20 @@ def fr16_no_daemon() -> tuple[bool, str]:
 
 
 def fr18_acceptance_gate() -> tuple[bool, str]:
-    """FR-18 done 前必须过验收门：验收失败必须拒，验收通过才放行。"""
+    """FR-18 done 前必须过验收门：验收失败必须拒，验收通过才放行。
+
+    先落 `collect`（宿主循环契约，见 `cli.cmd_done`）：无 collect 的 `done` 在**进门之前**
+    就被 CLI 拒（缺 collect 契约），拒因不是门 ⇒ 判据会把「契约拒」误读成「门在工作」。
+    collect 后，拒/放行才由**门**决定；若把验收门改坏（`done` 恒放行），本判据仍会红。
+    """
     sd = _fresh()
     try:
         _seed(sd)
-        rc_fail, _ = _cli(["done", "t", "c", "--dry-run"], sd)   # acceptance.cmd=false
-        rc_pass, _ = _cli(["done", "t", "a", "--dry-run"], sd)   # acceptance.cmd=true
+        result = json.dumps({"status": "ok", "summary": "s", "changed_files": []})
+        _cli(["collect", "t", "c", "--result", result], sd)   # acceptance.cmd=false
+        _cli(["collect", "t", "a", "--result", result], sd)   # acceptance.cmd=true
+        rc_fail, _ = _cli(["done", "t", "c", "--dry-run"], sd)   # 验收 false ⇒ 门应拒
+        rc_pass, _ = _cli(["done", "t", "a", "--dry-run"], sd)   # 验收 true ⇒ 门应放
         ok = rc_fail != 0 and rc_pass == 0
         return ok, (f"验收 false 的节点 done rc={rc_fail}（应非 0）；"
                     f"验收 true 的节点 done rc={rc_pass}（应 0）")
@@ -298,11 +306,17 @@ def fr19_evidence_selfcomputed() -> tuple[bool, str]:
 
 
 def fr20_reject_lists_missing() -> tuple[bool, str]:
-    """FR-20 拒收给缺项清单 + 契约片段。"""
+    """FR-20 拒收给缺项清单 + 契约片段。
+
+    先落 `collect`：本判据要的是**门**的拒收（打印缺项清单 + `契约片段：` 段）。缺 collect
+    的 CLI 契约拒收只说契约、**不打印 `契约片段`** ⇒ 不先 collect 会把这条判据照成假红。
+    """
     sd = _fresh()
     try:
         _seed(sd)
-        rc, out = _cli(["done", "t", "c"], sd)          # 实写，验收 false
+        result = json.dumps({"status": "ok", "summary": "s", "changed_files": []})
+        _cli(["collect", "t", "c", "--result", result], sd)
+        rc, out = _cli(["done", "t", "c"], sd)          # 实写，验收 false ⇒ 门拒
         ok = rc != 0 and "拒收" in out and "契约片段" in out
         return ok, f"拒收 rc={rc}；含「拒收」={'拒收' in out}；含「契约片段」={'契约片段' in out}"
     finally:
@@ -461,7 +475,7 @@ TEST_ONLY: list[tuple[str, str, str, str]] = [
      "tests/test_core.py::ReadyTest（test_ready_requires_deps_done / "
      "test_container_never_ready / test_lease_blocks_ready）",
      "组合条件只能在具体节点图上跑；且「本波写面不重叠」实现在 `dispatch.pack_waves`、"
-     "**不在** `is_ready` 内（见报告 ◐ 部分缺口）。"),
+     "**不在** `is_ready` 内（见报告「本报告的遗漏面」）。"),
     ("FR-22", "多板 = 多棵树，隔离",
      "tests/test_multitree.py::MultiTreeTest::test_trees_are_isolated",
      "隔离是两棵树并存时的行为，无单条 grep 能判定。"),
@@ -481,7 +495,7 @@ UNJUDGEABLE: list[tuple[str, str, str]] = [
     ("FR-17", "触发方式支持 cron / 事件 / 显式三种，引擎自身不常驻",
      "「支持三种触发方式」是**架构判断**：没有一条命令能判定「够不够支持」。可观察的相关事实"
      "是 disflow/ 内无内置调度器（`daemon|cron` 命中 0，这条由 FR-16 机检），"
-     "且 design.md §7 把 cron 明确列为**宿主外部**（`外部 cron | drive + 派发`）。"
+     "且 design.md §5.4 把 cron 明确列为**宿主外部**（`外部 cron | drive + 派发`）。"
      "「引擎自身不常驻」那半句是机检的（FR-16），但整条 FR-17 无法机检。"),
 ]
 
@@ -489,18 +503,26 @@ UNJUDGEABLE: list[tuple[str, str, str]] = [
 UNIMPLEMENTED: list[tuple[str, str, str, str]] = []
 
 # ◐ 部分缺口：整条机检通过，但**子句**在实现里找不到。（编号, 子句, 缺什么, 验收点）
-PARTIAL: list[tuple[str, str, str, str]] = [
+# 判据：子句必须在**需求原文里真的写着**，且确实没实现——报告不得替需求发明子句（否则计数与正文自相矛盾，
+# 也会把「已满足」写成「缺口」）。经此复核，当前**没有**真正的 ◐：两条曾标 ◐ 的都已归入 DOWNGRADED。
+PARTIAL: list[tuple[str, str, str, str]] = []
+
+# 已复核·非缺口：曾标 ◐，复核后确认**需求已满足** ⇒ **不计入上面的 ◐ 计数**。
+# 两条都属同一类错：把「不变量 / 系统能力」与「报告替需求发明的实现机制」搞混。（编号, 子句, 复核结论, 备注）
+DOWNGRADED: list[tuple[str, str, str, str]] = [
     ("FR-17", "cron / 事件触发（内置）",
-     "disflow/ 内无 cron/事件触发实现（命中 0）；design.md 明确把它列为宿主外部。",
-     "若要做：加 `disflow drive --watch`/触发器适配层——但这会与 FR-16「不常驻」冲突，"
-     "须先决定边界。"),
+     "FR-17 原文**没写「内置」**——它要的是「系统支持 cron / 事件 / 显式三种触发方式，"
+     "**引擎自身不常驻**」。design.md §5.4 把三种都列了（外部 cron → `drive` + 派发；"
+     "事件 → 上游 `done` 后触发；显式 → 人主动跑），触发都在宿主侧，与「不常驻」自洽 "
+     "⇒ 需求已满足。「内置」是**本报告替需求加的**子句，既非原文、又与「不常驻」互相矛盾 "
+     "⇒ 原先那条 ◐ 是报告自己的过读，不是缺口。",
+     "不必新增机制；`drive --watch`/触发器适配层会与 FR-16「不常驻」冲突，故不做。"),
     ("FR-22", "每棵树一个权威分发者",
-     "【本条已降级：需求已满足。原先标 ◐ 是把「不变量」与「一种实现机制」搞混了】"
      "需求要的是**不允许双重权威**；`drive` 是**纯函数**（`ready` 不看时钟、不读外部状态）"
      "⇒ 两个分发者在同一棵树上**算不出不同的波**（实测：两边都拿到 `['a','b']`）⇒ 不存在双权威。"
      "唯一代价是重复派发，而它在 `start` 被租约拦住（第二个 exit=1）⇒ 浪费一次启动，不坏数据。"
      "原先要的「分发者身份 + 同树多分发者检测」是**一种可选机制**，需求没要求，记为打磨项而非缺口。",
-     "若仍想要可观测性：`drive --holder X` 记「谁在调度」+ doctor 报同树多分发者；"
+     "若要可观测性：`drive --holder X` 记「谁在调度」+ doctor 报同树多分发者；"
      "但那会引入一个需要过期语义的新状态（死掉的宿主永远占着），而正确性收益为 0。"),
 ]
 
@@ -544,6 +566,14 @@ MISSED_SCOPE: list[str] = [
     "`spec.SPEC[\"state\"][\"dir\"]` 约定，未机检（没有一条命令能判定“分离”）。",
     "**FR-12 的实现位置与文义有偏差（未判缺陷）**：文义说 `ready(n)` 覆盖“本波写面不重叠”，"
     "实际由 `dispatch.pack_waves` 实现，`is_ready` 不含写面。`[判断]`：这是设计选择还是漏实现，需人定夺。",
+    "**两个机检脚本自身曾不在任何自动化套件里**（`fr_check.py` / `goal_check.py` 都不在 "
+    "`unittest discover` 的覆盖内）。**本节点 n10-docs-truth 已加守卫**："
+    "`tests/test_docs.py::MachineCheckGuardTest` 当场跑两个脚本并断言 exit 0（`mutation_check.py` "
+    "不进守卫——真跑一次 ~4 分钟）。事故归因（三段，实测）：① **引入者** = 节点 `n7-accounting` "
+    "（`26749cb`）给 CLI 加了「`done` 前先 `collect`」契约，却未同步本脚本 FR-18/FR-20 的探针；"
+    "② **为何没被发现** = 本脚本不在 `unittest` 套件里，n7 的验收与全量 unittest 都覆盖不到它；"
+    "③ **宿主过程错误** = 宿主合并 n7 后只重跑了 unittest 与自举探针，**没重跑两个机检脚本** "
+    "⇒ 红灯活了约 40 分钟。守卫就是这条「机检必须进套件」的落地。",
 ]
 
 
@@ -584,7 +614,8 @@ def emit_report() -> str:
     out.append("")
     if not UNIMPLEMENTED:
         out.append("**（空）**：29 FR + 7 NFR 里没有整条未实现的。"
-                   "但下节有 3 条 **◐ 部分缺口**（整条机检通过、子句缺失）。")
+                   f"**◐ 部分缺口** {len(PARTIAL)} 条（整条机检通过、子句在实现里找不到）；"
+                   f"**已复核·非缺口** {len(DOWNGRADED)} 条（曾标 ◐、复核后确认需求已满足）。")
     out.append("")
 
     out.append("## [不可机检]（语义判断，不冒充通过）")
@@ -596,10 +627,21 @@ def emit_report() -> str:
 
     out.append("## [◐ 部分缺口]（整条机检通过，但子句在实现里找不到）")
     out.append("")
+    if not PARTIAL:
+        out.append("**（空）**：没有「整条机检通过、但子句在实现里找不到」的需求——"
+                   "曾标 ◐ 的两条都在下节「已复核·非缺口」。")
     for cid, clause, missing, acceptance in PARTIAL:
         out.append(f"- **{cid} / {clause}**")
         out.append(f"  - 缺什么：{missing}")
         out.append(f"  - 若要做，验收点：{acceptance.removeprefix('若要做：')}")
+    out.append("")
+
+    out.append("## [已复核·非缺口]（曾标 ◐，复核后确认需求已满足——不计入上面的 ◐ 计数）")
+    out.append("")
+    for cid, clause, conclusion, note in DOWNGRADED:
+        out.append(f"- **{cid} / {clause}**")
+        out.append(f"  - 复核结论：{conclusion}")
+        out.append(f"  - 备注：{note.removeprefix('若要做：')}")
     out.append("")
 
     out.append("## [测试]（只有测试覆盖、没有独立命令）")
@@ -676,10 +718,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"        {why}")
 
     print("\n[◐ 部分缺口]（整条机检通过，但子句缺失——诚实单列）")
+    if not PARTIAL:
+        print("  （空：没有整条机检通过、但子句在实现里找不到的需求）")
     for cid, clause, missing, acceptance in PARTIAL:
         print(f"  [{cid}] {clause}")
         print(f"        缺什么：{missing}")
         print(f"        验收点：{acceptance.removeprefix('若要做：')}")
+
+    print("\n[已复核·非缺口]（曾标 ◐，复核后确认需求已满足——不计入 ◐ 计数）")
+    for cid, clause, conclusion, note in DOWNGRADED:
+        print(f"  [{cid}] {clause}")
+        print(f"        复核结论：{conclusion}")
+        print(f"        备注：{note.removeprefix('若要做：')}")
 
     total = len(MACHINE) + len(TEST_ONLY) + len(UNJUDGEABLE) + len(UNIMPLEMENTED)
     print(f"\n四类计数：机检 {len(MACHINE)}（通过 {len(MACHINE) - len(failed)} · 失败 {len(failed)}）"

@@ -9,7 +9,7 @@
 ```bash
 cd "$(mktemp -d)"                              # 一个临时目录
 export PYTHONPATH=/改成你 clone 的 disflow 路径
-export DISFLOW_STATE_DIR="$PWD/.disflow"
+export DISFLOW_STATE_DIR="$PWD/.disflow"       # 仓内 state dir：上手够用，但 worktree 会被硬拒（见「量化、迭代、worktree」）
 ```
 
 **准备**——注意两点：`.gitignore` 与**配置文件**。状态目录必须被忽略，否则它会以
@@ -90,7 +90,7 @@ d doctor                                        # 自检全绿
 | 看什么 | 在哪一步 |
 | --- | --- |
 | **顺序由它算**：我只说了 `B requires A`，`drive` 只把 A 放进首波 | ② |
-| **门会拒收假的完成**：没改任何东西就 `done` → 退出码 2，理由逐条列出 | ④ |
+| **门会拒收假的完成**：验收不匹配就 `done` → 拒收（退出码非 0），理由逐条列出；若只是「没改任何东西」，门只给 ⚠ 空洞通过警告、仍 exit 0，不拒收 | ④ |
 | **证据引擎自算**：`done` 后 `introduced` / `size` / `acceptance` 由引擎采集，不是手抄 | ⑤ |
 | **看板/树/图不是第二份存储**：它们都读同一份投影 | ⑦ |
 | **配置是独立文件且看得见**：`doctor` 报出实际取值与配置文件路径 | ⑧ |
@@ -164,6 +164,12 @@ python3 -m disflow.cli worktree reap demo         # 只打印命令，**不执�
 删除会连带丢掉未提交改动、被 `.gitignore` 忽略的文件、未合并的提交，是唯一不可逆动作，
 所以引擎不替人删数据。宿主读完计划后自己跑那两条命令，**顺序要紧：先删工作区、再删分支**
 （工作区还在时 git 会拒删它占用的分支）；分支一律用 `-d`（安全删），`-D` 会制造不可达提交。
+
+> **限制（上手例里就踩得到）**：上面「5 分钟上手」把 `DISFLOW_STATE_DIR` 放在示例仓**内部**
+> （`$PWD/.disflow`）——这个布局下 `worktree` **不可用**：worktree 落点在仓内会被硬拒（在仓内
+> 会污染 `git status`，且一次 `git clean -xdf` 会把状态目录连同全部 worktree 一起删掉）。
+> 要 `worktree` 就把 state dir 配到仓外（`[state].dir` 或 `DISFLOW_STATE_DIR`）；`doctor` 会
+> **主动**报出这条（「需人判断」，不计入退出码）。
 
 ## 文档
 
@@ -264,8 +270,8 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 301 passed（零第三方依赖）
-python3 scripts/mutation_check.py                 # 变异测试：45/45（验证测试真的有牙）
+python3 -m unittest discover -s tests -t tests    # 563 passed（零第三方依赖）
+python3 scripts/mutation_check.py                 # 变异测试：64/64（验证测试真的有牙）
 ```
 
 > 上面那段「5 分钟上手」本身也被测试盯着：`tests/test_readme_walkthrough.py` 会

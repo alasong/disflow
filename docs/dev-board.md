@@ -177,7 +177,7 @@ disflow 决定，**无硬编码列表**。
 
 **变异测试抳出 2 个「测试自身的洞」**（已补：`test_declared_dangling_relates_is_rejected`、
 `test_per_file_agrees_with_total`）——详见 backlog §B3/B4 已结节。
-可复跑回归口：`python3 scripts/mutation_check.py`（**45/45**，有漏抓则退出码 1）。
+可复跑回归口：`python3 scripts/mutation_check.py`（**64/64**，有漏抓则退出码 1）。
 
 ### 0.7 python-expert 12 类审查（按“该配置化却硬编码”切入）
 

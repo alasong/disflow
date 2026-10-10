@@ -109,9 +109,14 @@ class CliLifecycleVerbTest(DisflowTestCase):
         self._run(["expand", "t", "root", "--children", '[{"id":"a","goal":"无判据"}]'])
         self._run(["start", "t", "a"])
         self._collect("a")               # 先过宿主循环契约，才测得到门
-        code, _out, err = self._run(["done", "t", "a"])
+        code, out, err = self._run(["done", "t", "a"])
         self.assertNotEqual(code, 0, "无验收命令不许 done（FR-18）")
         self.assertIn("验收", err)
+        # 拒收**头部**也必须走 stderr（与 test_rescope_rejection_goes_to_stderr 同理由：
+        # 否则脚本 `2>/dev/null` 会把「门拒收」读成成功）。只断理由行不够——理由行在
+        # stderr、头部溜去 stdout 时仍全绿（`scripts/mutation_check.py` 的针脚守的就是这处）。
+        self.assertIn("✗", err)
+        self.assertEqual(out, "", "done 的拒收报文不许混进 stdout")
 
     def test_done_with_failing_acceptance_is_rejected(self):
         self._one_node_tree(always_fails())
