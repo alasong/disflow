@@ -59,30 +59,34 @@ python3 -m disflow.cli drive disflow-v0.1
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 87 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 91 passed（零第三方依赖）
 ```
 
 ## 结构
 
 ```text
 disflow/
+  core.py         # 机制词汇（KINDS/STATUS/TERMINAL）—— 核心层，零业务词
   store.py        # L0 事件流 + 原子投影（vendored 自 fat3 flowcore）
   state.py        # 事件 → 投影 reducer
   model.py        # 节点模型 / 树语义
   graph.py        # requires/relates + 环检测
-  ready.py        # ready() / 波次打包 / 卡死
+  ready.py        # ready() / 卡死（纯机制，不含写面）
   context.py      # brief() 上下文投影
-  gates.py        # 验收门 + 证据 + 作用域 + 规模预算 + 树终止条件
-  dispatch.py     # drive/brief/collect（只推不跑）
+  gates.py        # 五道门 + 证据（acceptance/design_first/size_budget/tree_closure/tree_coverage）
+  dispatch.py     # drive/brief/collect + 波次打包（写面，业务）
   views.py        # board/tree/graph（同源视图）
   import_mgt.py   # mgt 导入器
   engine.py       # 动词面（锁 + append）
   cli.py          # 命令装配
-tests/            # stdlib unittest
+tests/            # stdlib unittest（含 test_layering.py：核心零业务词的逆向自检）
 scripts/          # seed_dev_board.py
 ```
 
+模块分两层（NFR-2）：**核心层** `core`/`store`/`graph`/`ready` 零业务词、依赖单向；
+`tests/test_layering.py` 把这条线变成可执行断言（而不是文档承诺）。
+
 ## 状态
 
-v0.1 完成（16/17，仅 PM1 审批未做）：87 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、五道门（acceptance/design_first/size_budget/tree_closure/**tree_coverage**）、**多块板**（多树作用域隔离 + 跨树 `awaits` 信号）、**租约超时回收 `reap`**、`doctor` 全绿。需求覆盖见 `docs/requirements.md` §7。
-已知局限见 `docs/dev-board.md` §0（V1–V4 未独立复跑、V4 用合成 fixture、`tree_coverage` 未做）。
+v0.1 完成（16/17，仅 PM1 审批未做）：91 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、五道门（acceptance/design_first/size_budget/tree_closure/**tree_coverage**）、**多块板**（多树作用域隔离 + 跨树 `awaits` 信号）、**租约超时回收 `reap`**、**核心层零业务词**（NFR-2，逆向自检）、`doctor` 全绿。需求覆盖见 `docs/requirements.md` §7。
+已知局限见 `docs/dev-board.md` §0（V1–V4 未独立复跑、V4 用合成 fixture）。

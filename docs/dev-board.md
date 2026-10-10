@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 74 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 91 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -21,6 +21,7 @@
 | 多块板 | 多树作用域隔离 + 跨树 `awaits` 显式完成信号（`tree.close`） |
 | 租约回收 | `start` 带 `expires_at`；`reap` 显式回收过期租约（`doctor` 会报） |
 | 覆盖门 | `tree_coverage`：叶子任务有 goal + 可跑判据；非根容器有子节点（`close` 串联 `tree_closure`） |
+| 模块分层 | 核心层 = `core`/`store`/`graph`/`ready`（零业务词 + 依赖单向）；`tests/test_layering.py` 逆向自检 |
 | 需求覆盖 | `docs/requirements.md` §7 逐条审计 FR/NFR（2 项 ◐ 已登记） |
 | 偏离 | 本机无 pytest → 标准库 `unittest`（与 NFR-1 零依赖一致） |
 
@@ -125,4 +126,4 @@ V3 的「篡改投影必须被抓」**确实被抓**（exit 1）—— 一致性
 4. 实现 §10 的三条偏离（v0.2，若迁移是主打场景）。
 5. ~~v0.2：多棵树（多块板）作用域隔离 + 跨树完成信号~~ ✅ 已完成（`awaits` + `tree.close`，`tests/test_multitree.py` 守）。
 6. v0.2 余项：每树物理隔离（`DISFLOW_STATE_DIR`）；`phase/layer` 标签；`registry` 资产登记。
-7. 覆盖审计（§7）标出的 2 个 ◐：FR-13 的 `--dry-run` 旗标；NFR-2 的业务常量下沉（`ready` 不再 import `spec.TERMINAL`）。
+7. ~~覆盖审计（§7）标出的 2 个 ◐：FR-13 的 `--dry-run` 旗标；NFR-2 的业务常量下沉~~ → NFR-2 ✅ 已下沉（`tests/test_layering.py` 守）；FR-13 `--dry-run` 仍待做。

@@ -43,7 +43,7 @@ def would_cycle(nodes: dict, src: str, dst: str) -> bool:
 
 
 def find_cycles(nodes: dict) -> list[list[str]]:
-    """返回 requires 子图中的强连通/环（用于 doctor 与 status 自检）。"""
+    """返回 requires 子图中的强连通/环（用于自检与 status）。"""
     WHITE, GREY, BLACK = 0, 1, 2
     color = dict.fromkeys(nodes, WHITE)
     cycles: list[list[str]] = []

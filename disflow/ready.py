@@ -1,13 +1,16 @@
 """disflow · 就绪判据（唯一函数）。
 
 `ready` 是**派生量**，不落库。分发器与 worker 共用同一份判定，两面不分叉。
+
+本模块属**核心层**（NFR-2）：只用机制词汇（状态/分型/边/租约），不含业务词；
+写面打包（依赖业务声明的写面字段）不在这里，见 `dispatch.pack_waves`。
 """
 from __future__ import annotations
 
 from datetime import datetime
 
+from .core import TERMINAL
 from .graph import unmet_requires
-from .spec import TERMINAL
 
 RUNNING = "running"
 
@@ -66,34 +69,6 @@ def ready_tasks(nodes: dict, closed: set[str] | frozenset[str] = frozenset()) ->
     return [nid for nid in sorted(nodes) if is_ready(nodes, nid, closed)]
 
 
-def _touch_pair_overlap(left: str, right: str) -> bool:
-    """单对写面冲突：同一路径，或一方是另一方的目录前缀。"""
-    a, b = left.rstrip("/"), right.rstrip("/")
-    if a == b:
-        return True
-    return a.startswith(b + "/") or b.startswith(a + "/")
-
-
-def _touches_overlap(a: list[str], b: list[str]) -> bool:
-    """写面冲突：任一对路径重合或互为目录前缀。"""
-    return any(_touch_pair_overlap(left, right) for left in a for right in b)
-
-
-def pack_waves(nodes: dict, node_ids: list[str]) -> list[list[str]]:
-    """贪心把就绪节点装进波次：同波 `touch_plan` 不重叠（写面互斥）。"""
-    waves: list[list[str]] = []
-    for nid in node_ids:
-        touches = nodes[nid].get("touch_plan") or []
-        for wave in waves:
-            if not any(_touches_overlap(touches, nodes[other].get("touch_plan") or [])
-                       for other in wave):
-                wave.append(nid)
-                break
-        else:
-            waves.append([nid])
-    return waves
-
-
 def running_tasks(nodes: dict) -> list[str]:
     return sorted(nid for nid, node in nodes.items()
                   if node.get("kind") == "task" and node.get("status") == RUNNING)
@@ -117,6 +92,6 @@ def is_stuck(nodes: dict, closed: set[str] | frozenset[str] = frozenset()) -> bo
 
 def progress(nodes: dict) -> dict:
     tasks = [node for node in nodes.values() if node.get("kind") == "task"]
-    done = sum(1 for node in tasks if node.get("status") in ("done", "skipped"))
+    done = sum(1 for node in tasks if node.get("status") in TERMINAL)
     return {"tasks": len(tasks), "done": done,
             "pct": round(100.0 * done / len(tasks)) if tasks else 100}

@@ -201,11 +201,11 @@ disflow 是一个**任务分发流引擎**：用**树**提供上下文继承、�
 | FR-27 卡死 | ✅ | `is_stuck`；`tests/test_core.py` |
 | FR-28/29 迁移 | ✅ | `import mgt`；`design.md` §10/§10.1；`tests/test_import_mgt.py` |
 | NFR-1 零依赖 | ✅ | 仅标准库 |
-| NFR-2 语言中立 | ◐ | 核心基本中立；`ready` 仍 import `spec.TERMINAL` |
+| NFR-2 语言中立 | ✅ | 核心层 = `core`/`store`/`graph`/`ready`，零业务词；依赖单向；`tests/test_layering.py` 逆向自检（扫针脚 + 查 import） |
 | NFR-3/4/5 文件式·可测·可重建 | ✅ | — |
 | NFR-6 规模预算 | ✅ | `size_budget` 门；`tests/test_gates.py` |
 | NFR-7 不静默降级 | ✅ | 坏行/写失败报错；`tests/test_store.py`、`test_cli.py` |
 
 **新增门**：**`tree_coverage`**——每个叶子任务要「需求已登记」（`goal` 非空）且「有可跑判据」（`acceptance.cmd` 或 `waiver`），非根容器必须有子节点；与 `tree_closure` 在 `close` 串联。逃生口：树根 `context.coverage = "not_applicable: <理由>"`。
 
-**未覆盖（◐）**：FR-13 的 `--dry-run` 旗标、NFR-2 的业务常量下沉。均列入 v0.2。
+**未覆盖（◐）**：FR-13 的 `--dry-run` 旗标。列入 v0.2。

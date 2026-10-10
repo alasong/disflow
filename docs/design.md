@@ -303,6 +303,23 @@ disflow import mgt <path>                          # 迁移（§10）
 disflow doctor                                     # 自检
 ```
 
+### 9.1 模块分层与 NFR-2（核心语言中立）
+
+| 层 | 文件 | 允许知道什么 |
+| --- | --- | --- |
+| **核心（机制）** | `core.py` `store.py` `graph.py` `ready.py` | 状态/分型/边/租约/事件 IO —— **零业务词** |
+| 业务（本实例） | `spec.py` `model.py` `state.py` `gates.py` `views.py` `context.py` `dispatch.py` `engine.py` `cli.py` `import_mgt.py` | 视图列/负责方/门名/模板名/写面/验收 |
+
+**依赖方向单向**：业务层 → 核心层；核心层**不得** `import` 业务层。
+机制词汇（`KINDS`/`STORED_STATUS`/`TERMINAL`）住在 `core.py`，`spec.py` 只做再导出。
+
+**判据可执行**（沿用 flowcore「lib 零业务判据名」）：`tests/test_layering.py` 扫描四个核心文件，
+命中业务词针脚即失败，并断言核心未 import 业务模块。写面打包（依赖业务字段）因此从
+`ready.py` 移到 `dispatch.pack_waves`。
+
+**允许留在核心的机制词**：`requires`/`relates`（边种）、`container`/`task`（分型）、
+`pending`/`running`/`done`/`failed`/`skipped`（状态）、`lease`、`awaits`（跨树完成信号 = 机制）。
+
 ---
 
 ## 10. mgt 迁移映射（FR-28/29）

@@ -10,11 +10,41 @@ from .ready import (
     blocked_by,
     is_stuck,
     live_tasks,
-    pack_waves,
     progress,
     ready_tasks,
     running_tasks,
 )
+
+
+def _touch_pair_overlap(left: str, right: str) -> bool:
+    """单对写面冲突：同一路径，或一方是另一方的目录前缀。"""
+    a, b = left.rstrip("/"), right.rstrip("/")
+    if a == b:
+        return True
+    return a.startswith(b + "/") or b.startswith(a + "/")
+
+
+def _touches_overlap(a: list[str], b: list[str]) -> bool:
+    """写面冲突：任一对路径重合或互为目录前缀。"""
+    return any(_touch_pair_overlap(left, right) for left in a for right in b)
+
+
+def pack_waves(nodes: dict, node_ids: list[str]) -> list[list[str]]:
+    """贪心把就绪节点装进波次：同波写面（`touch_plan`）不重叠。
+
+    写面是业务声明（不入核心层），故本函数住在**分发面**而非 `ready.py`。
+    """
+    waves: list[list[str]] = []
+    for nid in node_ids:
+        touches = nodes[nid].get("touch_plan") or []
+        for wave in waves:
+            if not any(_touches_overlap(touches, nodes[other].get("touch_plan") or [])
+                       for other in wave):
+                wave.append(nid)
+                break
+        else:
+            waves.append([nid])
+    return waves
 
 
 def drive(tree_name: str, tree: dict,

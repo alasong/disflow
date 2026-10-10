@@ -1,6 +1,9 @@
 """disflow spec —— 机制数据（路径、状态集、阶段集）。业务名词只出现在这里与 node 模板。"""
 from __future__ import annotations
 
+# 机制词汇从核心层再导出（NFR-2：核心不依赖业务层，方向是 spec → core）
+from .core import KINDS, STORED_STATUS, TERMINAL  # noqa: F401  （向后兼容再导出）
+
 # 存储机制：状态目录与文件名（store 层按此取路径）
 SPEC: dict = {
     "state": {
@@ -12,22 +15,13 @@ SPEC: dict = {
     }
 }
 
-# 节点分型（HTN 的 compound / primitive）
-KINDS: tuple[str, ...] = ("container", "task")
-
-# 存储状态：就绪（ready）是**派生量**，不在这里
-STORED_STATUS: tuple[str, ...] = ("pending", "running", "done", "failed", "skipped")
-
-# 终态
-TERMINAL: tuple[str, ...] = ("done", "skipped")
-
 # 看板列（stage）—— 仅用于视图分组，不参与就绪判定
 STAGES: tuple[str, ...] = ("req", "design", "dev", "verify", "done")
 
 # 负责方（role）—— 与 stage 独立
 ROLES: tuple[str, ...] = ("dev", "qa", "pm")
 
-# 规模预算（门 `size_budget`）：节点开工后引入的改动行数上限（可用 node.context.size_budget 覆盖）
+# 规模预算（门 `size_budget`）
 SIZE_BUDGET_DEFAULT: int = 400
 
 # 租约有效期：`start` 加锁；超时后由 `reap` **显式**回收（reap 是事件，就绪判定保持纯函数）

@@ -5,7 +5,7 @@ import unittest
 
 from base import DisflowTestCase
 
-from disflow import context, graph, model, ready
+from disflow import context, dispatch, graph, model, ready
 
 
 def node(node_id, parent=None, *, kind="task", status="pending", requires=None,
@@ -103,13 +103,13 @@ class ReadyTest(DisflowTestCase):
             "b": node("b", touch=["src/one.py"]),
             "c": node("c", touch=["src/two.py"]),
         }
-        waves = ready.pack_waves(nodes, ["a", "b", "c"])
+        waves = dispatch.pack_waves(nodes, ["a", "b", "c"])
         self.assertEqual(waves[0], ["a", "c"])
         self.assertEqual(waves[1], ["b"])
 
     def test_dir_prefix_counts_as_overlap(self):
         nodes = {"a": node("a", touch=["src"]), "b": node("b", touch=["src/x.py"])}
-        waves = ready.pack_waves(nodes, ["a", "b"])
+        waves = dispatch.pack_waves(nodes, ["a", "b"])
         self.assertEqual(len(waves), 2)
 
     def test_stuck_detection(self):
