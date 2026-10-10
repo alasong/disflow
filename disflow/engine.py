@@ -12,9 +12,9 @@ from datetime import datetime, timedelta, timezone
 from . import config, gates, graph, store
 from .config import Config
 from .core import RUNNING
-from .dispatch import dispatch_plan
+from .dispatch import dispatch_plan, handoff_brief, result_contract, validate_result
 from .dispatch import drive as run_drive
-from .dispatch import handoff_brief, result_contract, validate_result
+from .metrics import parse_deadline
 from .ready import (
     blocked_by,
     is_stuck,
@@ -129,6 +129,15 @@ class Engine:
 
     def set_goal(self, tree: str, goal: str) -> dict:
         return self._write("tree.goal", tree=tree, prepare=lambda _: {"goal": goal})
+
+    def deadline(self, tree: str, value: str | None) -> dict:
+        """设树级 `deadline`（迭代边界）：日期串归一到 `YYYY-MM-DD`，`None`/`""`/`"-"` 清空。
+
+        值在写时经 `parse_deadline` 归一——非法日期**响亮报错、不落事件**，
+        与其它写动词同款契约（静默丢弃会让逾期永远发现不了）。
+        """
+        return self._write("tree.deadline", tree=tree,
+                           prepare=lambda _: {"deadline": parse_deadline(value)})
 
     # ── 节点与图 ──────────────────────────────────────────────────────────
 
