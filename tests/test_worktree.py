@@ -391,6 +391,66 @@ class WorktreeTest(DisflowTestCase):
                 worktree.reap(SPEC, "t", self.repo)
                 self.assertEqual(before, self._snapshot(), "探针坏: reap 改变了状态")
 
+    # ── 结构性守卫：不靠「结果没变」，直接审 reap 发出的 argv ─────────────────
+
+    # 写型 git 子命令（含需要的子动作）。只读的那些（status / rev-parse /
+    # for-each-ref / log / diff / cat-file / check-ignore / ls-files /
+    # worktree list / config --get）不在此列。
+    _MUTATING: frozenset[tuple[str, ...]] = frozenset({
+        ("branch", "-d"), ("branch", "-D"), ("branch", "-f"), ("branch", "-m"),
+        ("worktree", "add"), ("worktree", "remove"), ("worktree", "prune"),
+        ("worktree", "move"), ("worktree", "lock"),
+        ("update-ref",), ("reset",), ("commit",), ("checkout",), ("switch",),
+        ("clean",), ("push",), ("rm",), ("gc",), ("stash",), ("tag",),
+        ("fetch",), ("merge",), ("rebase",),
+    })
+
+    @classmethod
+    def _mutating_git_calls(cls, argv_list: list[list[str]]) -> list[str]:
+        """从记录的 argv 里挑出写型 git 调用（剥掉前置的 `git` 与 `-C <路径>` / `-c k=v`）。"""
+        bad: list[str] = []
+        for argv in argv_list:
+            rest = list(argv)
+            if not rest or rest[0] != "git":
+                continue
+            rest = rest[1:]
+            while rest and rest[0] in ("-C", "-c", "--git-dir", "--work-tree"):
+                rest = rest[2:] if rest[0] in ("-C", "-c") else rest[1:]
+            if tuple(rest[:2]) in cls._MUTATING or tuple(rest[:1]) in cls._MUTATING:
+                bad.append(" ".join(argv))
+        return bad
+
+    def test_reap_only_issues_readonly_git_calls(self):
+        """**结构性**守卫：`reap` 只允许发出只读 git 调用。
+
+        为何另加这一条（而不只留 `test_reap_never_mutates_any_state`）：
+        那条是**观测式**断言（看「状态有没有变」），于是它的牙**取决于外部工具是否配合**。
+        实测：把 `git branch -D <branch>` 注入 `reap` 后，只有 detached 象限能抓到——
+        其余象限里分支正被 worktree 检出，git **自己**拒删，状态没变，观测式断言看不出差别。
+        那时「reap 不变更」实际上靠的是 git 的保护，不是我们的判据。
+        这里改成直接审 argv：不管 git 是否放行，只要 reap 发出写型子命令就是红。
+        两个象限都测（一个 git 会拒、一个 git 会放行），就是为了钉住「与象限无关」。
+        """
+        for label, setup in (("未合并提交（git 会拒删已检出分支）", self._setup_unmerged),
+                             ("detached（git 会放行删除）", self._setup_detached)):
+            with self.subTest(kind=label):
+                setup()
+                seen: list[list[str]] = []
+                real_run = subprocess.run
+
+                # 默认参数把 `seen` / `real_run` **绑定成参数**（而不是隐式捕获循环变量）：
+                # 后者会在下一次循环重绑变量时静默被换掉，是难查的一类错。
+                def recorder(argv, *args, _seen=seen, _real=real_run, **kwargs):
+                    _seen.append([str(tok) for tok in argv] if isinstance(argv, (list, tuple))
+                                 else [str(argv)])
+                    return _real(argv, *args, **kwargs)
+
+                with mock.patch.object(subprocess, "run", side_effect=recorder):
+                    worktree.reap(SPEC, "t", self.repo)
+
+                bad = self._mutating_git_calls(seen)
+                self.assertEqual([], bad, f"{label}: reap 发出了写型 git 调用：{bad}")
+
     # ── 每种危险状态必须 safe_to_drop=False 且 discard_warnings 非空 ───────
 
     def test_reap_dangerous_states_are_unsafe_and_warned(self):
