@@ -250,29 +250,36 @@ disflow 是**语言中立**的（NFR-2：核心层零业务词），而「给哪
 
 | 视图 | 命令 | 数据源 | 它答的问题 |
 | --- | --- | --- | --- |
-| **看板（阶段列）** | `$D board <tree> [--stage S] [--json]` | disflow 自己的事件流（**纯 disflow 事实**） | 谁完成 / 谁在跑 / 谁就绪 / 谁被挡；**列** = 需求→设计→开发→验证（四列全出现，空列显式 `0/0`）；**列内**按树层级缩进（容器 = 结构行 `◦`，任务按 `parent`）+ 按状态分组（运行中/可派/待前置/被在跑挡住/完成/跳过/失败）；`--json` 带 `parent`/`depth`。布局只有 `views.board_layout` 一处实现 |
-| **运行视图** | `.agents/skills/disflow/lanes_watch.sh` | disflow 投影（**骨架**）+ **宿主（pi）的 run 目录**（实时事实，**join**） | **同一棵树的全部节点**（含 pending/skipped/failed），按**与看板同源的布局**（阶段列 + 列内树层级 + 状态分组）列出；在**在跑**节点上就地显示实时进展（`◈` 目标 / `⌘` 最后命令 / `↳` worker 自报进展）；派发批次降为**次级注解区**（排障用） |
+| **看板（阶段列）** | `$D board <tree> [--stage S] [--json]` | disflow 自己的事件流（**纯 disflow 事实**） | 谁完成 / 谁在跑 / 谁就绪 / 谁被挡；**列** = 需求→设计→开发→验证（四列全出现，空列显式 `0/0`）；**列内**按树层级缩进（容器 = 结构行 `◦`，任务按 `parent`）+ 按状态分组（运行中/可派/待前置/被在跑挡住/完成/跳过/失败）；`--json` 带 `parent`/`depth`；人读态终态行（`✓ 完成`/`— 跳过`）**不打 goal**，其余行 goal 截断到 80 字（`views.truncate_goal` 唯一实现），**完整 goal 只在 `--json`**。布局只有 `views.board_layout` 一处实现 |
+| **运行视图** | `.agents/skills/disflow/lanes_watch.sh` | disflow 投影（**骨架**）+ **宿主（pi）的 run 目录**（实时事实，**join**） | **同一棵树的全部节点**（含 pending/skipped/failed），按**与看板同源的布局**（阶段列 + 列内树层级 + 状态分组）列出；在**在跑**节点上就地显示实时进展（`◈` 目标 / `⌘` 最后命令 / `↳` worker 自报进展）；派发批次降为**次级注解区**（排障用）。可用性（2026-10-11 用户当场提）：终态行（`✓ 完成`/`— 跳过`）**不打 goal**（完整文本在 `board --json`）；默认刷新是**追加式**（每轮一整块、带时间戳头、**保留回滚**），备用屏必须显式 `--screen`（不闪，代价是**无回滚**）；**非 TTY（管道/重定向）零控制序列**；`--active`（别名 `--open`）只看「运行中 + 待完成」；无在跑节点时**显式打一句**（进展只对在跑节点显示是设计） |
 
 ⚠ **命名只认上面两个**：`done` **不是看板的列**——它是节点**状态**（「收尾没有」），
 与阶段（「流程走到哪」）是两个轴；一个 pi workflow run（= 宿主一次 subagent 调用，可含 1..N 路
 lane）是**运行视图**里的一个**派发批次**，**不许**把它叫「看板」/「工作流」（那两个词专指 disflow 的阶段列）。
 
 ```bash
-sh .agents/skills/disflow/lanes_watch.sh once   # 快照（默认是常驻刷新，会一直占着终端）
-sh .agents/skills/disflow/lanes_watch.sh        # 常驻 5s 刷新（备用屏，无闪）
-sh .agents/skills/disflow/lanes_watch.sh all    # 含已过窗口的历史 lane
+sh .agents/skills/disflow/lanes_watch.sh once          # 快照（非 TTY 重定向也不吐控制序列）
+sh .agents/skills/disflow/lanes_watch.sh               # 常驻 5s：**追加式**（保留回滚、可滞轮）
+sh .agents/skills/disflow/lanes_watch.sh --screen      # 常驻 5s：备用屏（不闪，**代价：无回滚**）
+sh .agents/skills/disflow/lanes_watch.sh --active once # 只看运行中 + 待完成（隐藏 ✓/—/✗）
+sh .agents/skills/disflow/lanes_watch.sh all           # 含已过窗口的历史 lane
 ```
+
+> **为何默认不再用备用屏**：备用屏（`\033[?1049h`）**没有回滚缓冲**，滞轮/scrollback 因此失效。
+> 默认改追加式后滞轮可用；代价是不再「就地重绘」（屏幕会向下长）。要得不闪就显式 `--screen` 并接受无回滚。
 
 **为什么是两个**：disflow **不 spawn**，所以它不知道「worker 在跑哪条命令」（`board` 只看事件流）；
 反过来 pi 不知道树的结构。两边各答一半 ⇒ **数据源与刷新节拍不同**（`board` 是一次性快照，运行视图
 是 5s 刷新）。**这才是区分两个视图的依据——不是布局**：布局是**同一个**（都走 `views.board_layout` /
 `board_lines`），否则同一棵树会长出两套缩进（本仓已知的「两面分叉」病）。
 
-运行视图**把两半接起来**（v7）：外层结构 = `$DISFLOW_STATE_DIR/state.json` 的**全部节点**（树骨架），
+运行视图**把两半接起来**（v7；v8 改默认刷新节拍）：外层结构 = `$DISFLOW_STATE_DIR/state.json` 的**全部节点**（树骨架），
 布局**逐行复用 `board_lines` 的成品行**（自己不再写一套分列/缩进）；再把 lane 名（= 派活时给的 `key`，
 即节点 id）join 到对应节点行上，就地标注「哪条 lane / 哪个批次 / run 状态 / 已跑 / 静默 / 消息数」。
 **带实时进展的是运行视图**（`◈`/`⌘`/`↳`，且只给**在跑**节点）；**读不到就明说读不到**（`state.json`
 缺失 → 显式报「读不到」；lane 名在投影里找不到 → 点名，绝不猜一个 goal 顶上）。
+v8 只改刷新节拍（数据源与布局不变）：默认**追加式**（不用备用屏 ⇒ 保留回滚），`--screen` 才显式
+切备用屏；**非 TTY 零控制序列**；`--active` 只看运行中 + 待完成；无在跑节点时显式打一句。
 
 ⚠ 它读的是 pi 的**内部布局**（`status.json` / `session.jsonl`）——所以它属于**宿主侧工具**，
 住在宿主手册旁边，**不进 `disflow/` 核心**（那会把引擎绑死在 pi 上，破 NFR-2）。

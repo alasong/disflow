@@ -7,6 +7,11 @@
 与机器态（`disflow board --json`）都从它渲染，后续宿主的**运行视图**也从同一份数据取
 「列 + 层级 + 状态分组」。**任何一侧都不许再写一套分列/缩进**——本仓已知的「两面分叉」病
 （同一个判据两份实现 ⇒ 两边给出不同答案）正是这条要防的。
+
+**人读态 vs 机器态（2026-10-11 用户当场提）**：`board_lines` 给的是**屏幕维度**——终态行
+（`✓ 完成` / `— 跳过`）默认**不打印 goal**（一行几百字没法扫），其余行的 goal 统一走
+`truncate_goal`（首行、≤80 字、`…` 结尾）；**完整 goal 只在 `board --json`**。
+`active_only=True`（运行视图的 `--active`）只留「运行中 + 待完成」那些组。
 """
 from __future__ import annotations
 
@@ -16,6 +21,13 @@ from .spec import STAGES
 
 _MARKS = {"done": "✓", "running": "▶", "failed": "✗", "skipped": "—", "pending": "·"}
 _CONTAINER_MARK = "◦"
+
+# 人读态里**不打印 goal** 的组：终态节点一行一个「几百字目标」时屏幕没法扫。
+# 完整目标留给 `board --json`（`board_layout` 的 `goal` 字段照旧全文）。
+_GOAL_OMITTED_GROUPS: frozenset[str] = frozenset({"done", "skipped"})
+# `--active`（运行视图旗标）保留的组：「运行中 + 待完成（可派/待前置/被在跑挡住）」+ 结构行。
+_ACTIVE_GROUPS: frozenset[str] = frozenset(
+    {"structure", "running", "ready", "blocked", "deferred"})
 
 # 列内**状态分组**：固定顺序 + 标签。某组无节点则整组不出现；有节点则**必须出现**
 # （绝不静默丢：每个节点恰好落进一组，见 `_group_of`）。
@@ -33,6 +45,20 @@ _GROUPS: tuple[tuple[str, str], ...] = (
     ("other", "? 非规范状态（原样显示）"),
 )
 _GROUP_LABELS: dict[str, str] = dict(_GROUPS)
+
+
+def truncate_goal(text: str | None, limit: int = 80) -> str:
+    """目标文本的单行截断 —— **本仓唯一的截断实现**（看板与运行视图都走这里）。
+
+    取**首个非空行**、折叠内部空白；超过 `limit` 字则以 `…` 结尾（总长 ≤ `limit`）。
+    为什么要截断：节点 goal 常是几百字一段，原样打出来一行占满屏幕，人读态没法扫。
+    完整文本不丢——`board --json`（`board_layout` 的 `goal`）仍是全文。
+    """
+    lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
+    one = " ".join(lines[0].split()) if lines else ""
+    if len(one) <= limit:
+        return one
+    return one[: max(limit - 1, 1)] + "…"
 
 
 def _mark(node: dict) -> str:
@@ -113,10 +139,15 @@ def _detail(node_id: str, node: dict, group: str,
     return ""
 
 
+def _status_word(group: str) -> str:
+    """终态行的「状态」词 —— **从组标签派生**（不另写一份词表，避免第二种拼法）。"""
+    return _GROUP_LABELS[group].split(" ", 1)[-1]
+
+
 def board_layout(tree: dict, stage: str | None = None,
                  stages: tuple[str, ...] | None = None, *,
                  closed: set[str] | frozenset[str] = frozenset(),
-                 tree_name: str = "") -> dict:
+                 tree_name: str = "", active_only: bool = False) -> dict:
     """看板布局的**唯一实现**：阶段列 + 列内树层级 + 列内状态分组。
 
     **列定义单一来源**：`stages`（省略取 `spec.STAGES`；CLI 传解析后的 `cfg.stages`，
@@ -145,6 +176,10 @@ def board_layout(tree: dict, stage: str | None = None,
     （CLI 侧的 `--stage` 另按配置闭集**拒收非法列名**，见 `cli.cmd_board`：视图是纯渲染器，
     对未知值容忍；「用法错误」在 CLI 这层拦。）被选中的列**没有节点时**照旧打 `[{stage}] 0/0`
     ——改动前什么都不打（与「列名拼错」无法区分）。
+
+    **`active_only`（`--active`）**：只留 `_ACTIVE_GROUPS`（运行中 / 可派 / 待前置 / 被在跑
+    挡住 + 结构行），隐藏 `✓ 完成` / `— 跳过` / `✗ 失败` / 非规范兜底 —— 「只显示运行中的
+    和待完成的」。**默认 False，行为不变**；列头计数照旧是全列的口径（隐藏 ≠ 改写事实）。
 
     **纯读**：本函数只读投影 + 只做派生计算（`dispatch.drive` 同样不写状态），不落事件。
     """
@@ -195,7 +230,8 @@ def board_layout(tree: dict, stage: str | None = None,
             "tasks": len(task_ids),
             "done": done,
             "groups": [{"group": gid, "label": _GROUP_LABELS[gid], "rows": grouped[gid]}
-                       for gid, _label in _GROUPS if gid in grouped],
+                       for gid, _label in _GROUPS
+                       if gid in grouped and (not active_only or gid in _ACTIVE_GROUPS)],
         })
     return {"tree": tree_name, "root": root, "goal": tree.get("goal", ""),
             "columns": columns_out}
@@ -204,22 +240,31 @@ def board_layout(tree: dict, stage: str | None = None,
 def board_lines(tree: dict, stage: str | None = None,
                 stages: tuple[str, ...] | None = None, *,
                 closed: set[str] | frozenset[str] = frozenset(),
-                tree_name: str = "") -> list[str]:
+                tree_name: str = "", active_only: bool = False) -> list[str]:
     """人读态看板：把 `board_layout`（唯一布局实现）渲染成行 —— 与 `board --json` **同源**。
 
     行形状：列头 `[<stage>] done/total` → 组标签（如 `▶ 运行中`）→ 行
-    `{'  ' * (depth + 1)}<mark> <id>  <goal>  （<理由>）`。缩进 = **列内深度**，
+    `{'  ' * (depth + 1)}<mark> <id>  <goal 截断>  （<理由>）`。缩进 = **列内深度**，
     所以「父子」在同一列里看得见；理由只在有话说时出现（谁在跑 / 缺哪个前置 / 与谁冲突）。
+
+    **终态行（`✓ 完成` / `— 跳过`）默认只给 `标记 + id + 状态`，不打印 goal** ——
+    一行几百字会把屏幕冲垮；完整目标在 `--json`。其余行的 goal 走 `truncate_goal`
+    （首行、≤80 字、`…` 结尾）。`active_only` 直接透传给布局（隐藏终态组）。
     """
     lines: list[str] = []
-    layout = board_layout(tree, stage, stages, closed=closed, tree_name=tree_name)
+    layout = board_layout(tree, stage, stages, closed=closed, tree_name=tree_name,
+                          active_only=active_only)
     for column in layout["columns"]:
         lines.append(column["header"])
         for group in column["groups"]:
             lines.append(group["label"])
             for row in group["rows"]:
-                line = (f"{'  ' * (row['depth'] + 1)}{row['mark']} "
-                        f"{row['node']}  {row['goal']}")
+                head = (f"{'  ' * (row['depth'] + 1)}{row['mark']} "
+                        f"{row['node']}  ")
+                if group["group"] in _GOAL_OMITTED_GROUPS:
+                    line = head + f"（{_status_word(group['group'])}）"
+                else:
+                    line = head + truncate_goal(row["goal"])
                 if row["detail"]:
                     line += f"  （{row['detail']}）"
                 lines.append(line)

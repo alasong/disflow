@@ -13,7 +13,10 @@
    就必须出现；**可派性与 `drive` 同源**（直接消费 `dispatch.drive` 的读数，视图层不重算写面冲突）；
 5. **非规范 stage 追加而不丢**（旧版本/别的配置写下的历史值仍要看得见，只标注不隐藏）；
 6. **`--stage` 过滤不变**（只输出被选中的那一列；合法空列仍打 `0/0`；`done` 不是列）；
-7. **`board_layout` 是人读态与 `--json` 的**唯一**来源**（带父子/深度，供运行视图消费）。
+7. **`board_layout` 是人读态与 `--json` 的**唯一**来源**（带父子/深度，供运行视图消费）；
+8. **goal 呈现（2026-10-11 用户当场提）**：人读态终态行（`✓ 完成` / `— 跳过`）**不打印 goal**
+   （只给 `标记 + id + 状态`），其余行走 `truncate_goal`（首行、≤80 字、`…` 结尾）；
+   **完整 goal 只在 `board --json`**；`active_only=True` 只留「运行中 + 待完成」那些组。
 """
 from __future__ import annotations
 
@@ -32,6 +35,7 @@ from disflow.views import (
     graph_lines,
     to_dot,
     tree_lines,
+    truncate_goal,
 )
 
 
@@ -274,7 +278,11 @@ class ViewsTest(DisflowTestCase):
         self.assertEqual((by_id["deep"]["parent"], by_id["deep"]["depth"]), ("inner", 2))
 
     def test_board_lines_render_that_layout(self):
-        """人读态**只是** layout 的渲染：列头与组标签（顺序、文本）逐一对得上。"""
+        """人读态**只是** layout 的渲染：列头与组标签（顺序、文本）逐一对得上。
+
+        终态行（`✓ 完成`/`— 跳过`）只给 `标记 + id + 状态`（**不打印 goal**）——整段 goal
+        会把屏幕冲垮，完整文本留在 `--json`；其余行的 goal 原样渲染（本例目标都很短）。
+        """
         layout = board_layout(self._fixture())
         lines = board_lines(self._fixture())
         self.assertEqual([line for line in lines if line.startswith("[")],
@@ -285,10 +293,94 @@ class ViewsTest(DisflowTestCase):
             for group in col["groups"]:
                 for row in group["rows"]:
                     indent = "  " * (row["depth"] + 1)
-                    self.assertTrue(
-                        any(line.startswith(f"{indent}{row['mark']} {row['node']}  ")
-                            and row["goal"] in line for line in lines),
-                        f"{row['node']} 没按列内深度 {row['depth']} 渲染")
+                    head = f"{indent}{row['mark']} {row['node']}  "
+                    line = next((x for x in lines if x.startswith(head)), None)
+                    self.assertIsNotNone(
+                        line, f"{row['node']} 没按列内深度 {row['depth']} 渲染")
+                    assert line is not None
+                    if group["group"] in ("done", "skipped"):
+                        self.assertNotIn(row["goal"], line,
+                                         "终态行默认不打印 goal（完整文本在 --json）")
+                    else:
+                        self.assertEqual(line[len(head):].split("  （")[0], row["goal"],
+                                         "非终态行 goal 原样（截断只对超长目标生效）")
+
+    # ── goal 呈现：单一截断助手 + 终态行不打 goal ─────────────────────────
+
+    def test_truncate_goal_is_the_single_truncation_helper(self):
+        """截断助手（views **唯一实现**）：取首行、折叠空白、超长以 `…` 结尾且总长 ≤ limit。"""
+        self.assertEqual(truncate_goal("短目标"), "短目标")
+        self.assertEqual(truncate_goal("首行要有\n第二行不要"), "首行要有")
+        self.assertEqual(truncate_goal(None), "")
+        self.assertEqual(truncate_goal("  \n  "), "")
+        cut = truncate_goal("目" * 200)
+        self.assertEqual(len(cut), 80, "截断后总长 ≤ 80（含省略号）")
+        self.assertEqual(cut, "目" * 79 + "…")
+        self.assertEqual(len(truncate_goal("目" * 200, limit=10)), 10)
+
+    def test_board_lines_omit_the_goal_on_done_and_skipped_rows(self):
+        """`✓ 完成` / `— 跳过` 行默认只给 `标记 + id + 状态`（整段 goal 让屏幕没法扫）。"""
+        long_goal = "把这件事做完 —— " + "细节" * 120
+        tree = {"root": "root", "goal": "树目标", "nodes": {
+            "root": {"id": "root", "parent": None, "kind": "container", "stage": "req",
+                     "goal": "树目标"},
+            "ok": {"id": "ok", "parent": "root", "kind": "task", "stage": "dev",
+                   "goal": long_goal, "status": "done"},
+            "sk": {"id": "sk", "parent": "root", "kind": "task", "stage": "dev",
+                   "goal": long_goal, "status": "skipped"},
+            "run": {"id": "run", "parent": "root", "kind": "task", "stage": "dev",
+                    "goal": long_goal, "status": "pending"},
+        }}
+        lines = board_lines(tree)
+        done = next(line for line in lines if line.lstrip().startswith("✓ ok"))
+        skip = next(line for line in lines if line.lstrip().startswith("— sk"))
+        for line in (done, skip):
+            self.assertNotIn(long_goal, line)
+            self.assertNotIn("细节", line, "终态行一个 goal 片段都不得出现")
+        self.assertIn("完成", done)
+        self.assertIn("跳过", skip)
+        self.assertFalse(any(long_goal in line for line in lines), "整段 goal 不出现在人读态")
+        pending = next(line for line in lines if line.lstrip().startswith("· run"))
+        self.assertTrue(pending.endswith("…"), "超长 goal 截断到 80 字并以 … 结尾")
+        self.assertIn("细节", pending)
+
+    def test_board_layout_keeps_the_full_goal_for_the_json_view(self):
+        """完整 goal 不丢：`board --json`（layout 的 `goal`）仍是全文——截断只属于人读态。"""
+        long_goal = "很长的目标：" + "内容" * 200
+        tree = {"root": "root", "goal": "树目标", "nodes": {
+            "root": {"id": "root", "parent": None, "kind": "container", "stage": "req",
+                     "goal": "树目标"},
+            "run": {"id": "run", "parent": "root", "kind": "task", "stage": "dev",
+                    "goal": long_goal, "status": "pending"},
+        }}
+        layout = board_layout(tree)
+        row = next(r for col in layout["columns"] for g in col["groups"]
+                   for r in g["rows"] if r["node"] == "run")
+        self.assertEqual(row["goal"], long_goal)
+
+    def test_active_only_hides_terminal_and_non_canonical_groups(self):
+        """`active_only`（运行视图 `--active`）：只留「运行中 + 待完成」（含结构行），
+        隐藏 `✓/—/✗` 与非规范兜底；**列头计数不改写事实**；默认不变。"""
+        fixture = self._fixture()
+        layout = board_layout(fixture, active_only=True)
+        labels = [g["label"] for col in layout["columns"] for g in col["groups"]]
+        self.assertEqual(labels, ["◦ 结构行（容器）", "◦ 结构行（容器）", "▶ 运行中",
+                                  "· 可派", "· 待前置", "· 被在跑挡住", "· 可派"])
+        self.assertFalse({"✓ 完成", "— 跳过", "✗ 失败", "? 非规范状态（原样显示）"}
+                         & set(labels))
+        rows = {r["node"] for col in layout["columns"] for g in col["groups"]
+                for r in g["rows"]}
+        self.assertEqual(rows, {"root", "box", "inner", "deep", "runner", "go", "late",
+                                "clash", "hold"})
+        for hidden in ("ok", "skipper", "bad", "weird"):
+            self.assertNotIn(hidden, rows)
+        self.assertEqual(self._column(layout, "dev")["header"], "[dev] 2/10",
+                         "隐藏 ≠ 改写事实：列头计数照旧是全列口径")
+        # 默认（不加旗标）行为不变：九组照旧全出现
+        default_labels = [g["label"] for col in board_layout(fixture)["columns"]
+                          for g in col["groups"]]
+        self.assertIn("✓ 完成", default_labels)
+        self.assertIn("✗ 失败", default_labels)
 
     def test_tree_indents_by_parent(self):
         lines = tree_lines(self.tree)

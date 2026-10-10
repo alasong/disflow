@@ -16,6 +16,20 @@ v7 的正源（2026-10-11 用户要求改版）——原话：「我希望看板
 join 键：lane 名（父 run 的 `workflowChildren.children[].childId`）== disflow 节点 id（宿主派活
 时 key=node）。读不到就**明说**，绝不猜一个 goal 顶上。
 
+── v8（2026-10-11 用户当场提的四条可用性修复）──
+
+1. **默认刷新模式不再吃回滚**：v7 的默认路径用**备用屏** `\033[?1049h`——备用屏**没有回滚缓冲**，
+   滞轮/scrollback 因此失效（v4 为治屏闪引入的取舍）。v8 默认改**追加式**：每轮打一整块
+   （自带时间戳头 `══ 运行视图 @ HH:MM:SS ══`）、可滞轮、块间**互不依赖**；备用屏改为**显式**
+   `--screen` 并在页脚写明代价（不闪、**不留回滚**）。**非 TTY（管道/重定向）零控制序列**：
+   只打一轮快照就退。
+2. **终态行不再打整段 goal**：`✓ 完成` / `— 跳过` 行只给 `标记 + id + 状态`，
+   其余行 goal 走 `views.truncate_goal`（首行、≤80 字）；完整 goal 留给 `board --json`。
+3. **`--active`（别名 `--open`）**：只显示「运行中 + 待完成（可派/待前置/被在跑挡住）」，
+   隐含 `✓/—/✗` 与非规范兜底组；**默认行为不变**，`once|all|N|-v` 一个都没动。
+4. **无在跑节点时明说**：`◈/⌘/↳` 只对在跑节点显示是设计；但没有在跑节点时屏幕上不能一片
+   空白，否则读者以为功能没了——显式打一句「当前无在跑节点 ⇒ 无实时进展」。
+
 ⚠ 命名（三个词不许再撞）：`done` **不是列**（是状态）；一个 pi workflow run（= 宿主一次 subagent
 调用，可含 1..N 路 lane）**不叫「看板」/「工作流」**——它是**运行视图**里的一个**派发批次**，
 v7 起只作**次级注解区**（排障用），不再是主结构。
@@ -31,9 +45,11 @@ v3 错：命令读日志被截断的 `bash:` 行；分组靠 idle，父 run 的 
 v4 错：屏闪（clear）；「进展」从日志猜，抓到的是它读的文档内容。
 
 用法（建议先 `cd` 到 disflow 仓根）:
-  sh .agents/skills/disflow/lanes_watch.sh once     # 快照
-  sh .agents/skills/disflow/lanes_watch.sh          # 持续 5s（备用屏，无闪、不留回滚）
+  sh .agents/skills/disflow/lanes_watch.sh once     # 快照（无控制序列，可直接重定向）
+  sh .agents/skills/disflow/lanes_watch.sh          # 持续 5s 追加式（保留回滚）
   sh .agents/skills/disflow/lanes_watch.sh 2
+  sh .agents/skills/disflow/lanes_watch.sh --screen # 持续 5s 用备用屏（不闪、无回滚）
+  sh .agents/skills/disflow/lanes_watch.sh --active once   # 只看运行中 + 待完成
   sh .agents/skills/disflow/lanes_watch.sh all      # 含全部历史 lane
   sh .agents/skills/disflow/lanes_watch.sh once -v  # 每个 lane 多给几行
   DISFLOW_STATE_DIR=<树的状态目录> sh .agents/skills/disflow/lanes_watch.sh once
@@ -281,12 +297,14 @@ def node_annotation(lane):
 
 
 def progress_lines(node, lane, verbose, indent):
-    """在跑节点的实时进展：`◈` 目标 · `⌘` 最后命令 · `↳` worker 自报进展；读不到就**明说**。"""
+    """在跑节点的实时进展：`◈` 目标 · `⌘` 最后命令 · `↳` worker 自报进展；读不到就**明说**。
+
+    goal 走 `views.truncate_goal`（与看板**同一份截断实现**：首行、≤80 字、`…`）。
+    """
     run = (lane or {}).get("run")
     if run is None:
         return [f"{indent}↳ （在跑，但 pi 运行目录里读不到这条 lane —— 实时进展读不到）"]
-    goal = " ".join(str(node.get("goal") or "").split())
-    out = [f"{indent}◈ {goal[:96]}{'…' if len(goal) > 96 else ''}"]
+    out = [f"{indent}◈ {dviews.truncate_goal(node.get('goal'))}"]
     out.append(f"{indent}⌘ {run['cmd'][:150]}" if run["cmd"]
                else f"{indent}⌘ （还没有工具调用）")
     for t in prog_lines(run, 6 if verbose else 2):
@@ -294,16 +312,18 @@ def progress_lines(node, lane, verbose, indent):
     return out
 
 
-def tree_block(slug, tree, lanes, closed, verbose):
+def tree_block(slug, tree, lanes, closed, verbose, active_only=False):
     """一棵树：**逐行复用看板的渲染**（列 / 缩进 / 分组），再就地追加 join 来的实时行。
 
     `board_lines` 与 `board_layout` 是同一份布局的两种投影（人读态 / 结构化），行序一一对应
     ——这里按 layout 的列→组→行顺序消费，`next(base)` 取到的就是**看板自己渲染的那一行**。
-    运行视图因此**没有第二套缩进/分列**。
+    运行视图因此**没有第二套缩进/分列**。`active_only` 同时传给两侧，否则两侧行序会错位。
     """
     cols = _stages()
-    layout = dviews.board_layout(tree, stages=cols, closed=closed, tree_name=slug)
-    base = iter(dviews.board_lines(tree, stages=cols, closed=closed, tree_name=slug))
+    layout = dviews.board_layout(tree, stages=cols, closed=closed, tree_name=slug,
+                                 active_only=active_only)
+    base = iter(dviews.board_lines(tree, stages=cols, closed=closed, tree_name=slug,
+                                   active_only=active_only))
     out = []
     for column in layout["columns"]:
         out.append(next(base))                    # 列头
@@ -372,7 +392,11 @@ def batch_section(runs, keep, parents, node_meta, verbose):
     return out
 
 
-def render(all_, verbose=False):
+def render(all_, verbose=False, only_active=False):
+    """一轮的**完整块**（自带时间戳头，不依赖上一轮）——追加式刷新直接照打。
+
+    `only_active`（`--active`）：只列「运行中 + 待完成」的组（终态组整组隐藏，与看板同源）。
+    """
     proj = load_projection()
     runs = [r for r in (load(d) for d in glob.glob(PAT)) if r]
     keep = visible(runs, all_)
@@ -392,14 +416,24 @@ def render(all_, verbose=False):
             if isinstance(node, dict):
                 node_meta[nid] = {"tree": slug, "stage": node.get("stage") or "?",
                                   "status": node.get("status") or "?"}
+    # 「在跑节点」用 `is_running` 同一判据算（disflow 持租约或 pi run 在跑）——
+    # 无在跑节点时 `◈/⌘/↳` 一个都不会出现（这是设计），但屏幕不能一片空白。
+    running_nodes = sum(
+        1 for t in trees.values() if isinstance(t, dict)
+        for nid, node in (t.get("nodes") or {}).items()
+        if isinstance(node, dict) and is_running(node, lanes.get(nid)))
     nrunning = sum(1 for r in keep if r["state"] == "running")
     cols = _stages()
     out = [f"══ 运行视图 @ {time.strftime('%H:%M:%S')} ══",
            "数据源：disflow 投影（骨架 = 全部节点，布局同看板） + pi 运行目录（实时事实）",
            f"树 {len(trees)} 棵：{', '.join(sorted(trees)) if trees else '（读不到 state.json）'}"
-           f" · 列（同看板）：{'|'.join(cols)}",
+           f" · 列（同看板）：{'|'.join(cols)}"
+           + (" · --active：只列运行中 + 待完成" if only_active else ""),
            f"在跑 lane {nrunning} 路 · 窗口内 lane {len(keep)} 路 · 静默阈值 10 分钟"
            f" · state dir {state_dir()}"]
+    if running_nodes == 0:
+        out.append("")
+        out.append("当前无在跑节点 ⇒ 无实时进展（进展只对在跑节点显示）")
     if proj is None:
         out.append("")
         out.append(f"✗ 读不到 state.json（{os.path.join(state_dir(), 'state.json')}）"
@@ -412,18 +446,31 @@ def render(all_, verbose=False):
         if not isinstance(tree, dict) or not isinstance(tree.get("nodes"), dict):
             out.append(f"▌树 {slug}  ⚠ 投影节点不是对象（读时容忍：跳过，不猜）")
             continue
-        goal = " ".join(str(tree.get("goal") or "").split())
+        goal = dviews.truncate_goal(str(tree.get("goal") or ""))
         out.append("")
-        out.append(f"▌树 {slug}  {goal[:96]}{'…' if len(goal) > 96 else ''}")
-        out.extend(tree_block(slug, tree, lanes, closed, verbose))
+        out.append(f"▌树 {slug}  {goal}")
+        out.extend(tree_block(slug, tree, lanes, closed, verbose, only_active))
     out.extend(batch_section(runs, keep, parents, node_meta, verbose))
     return out
 
 
 def draw(lines, footer=""):
+    """备用屏（`--screen`）的整屏重绘 —— **只有这条路径才发控制序列**。"""
     sys.stdout.write("\033[H" + "\n".join(x + "\033[K" for x in lines)
                      + "\n" + footer + "\033[K\033[J")
     sys.stdout.flush()
+
+
+def append_footer(iv):
+    return (f"（Ctrl-C 退出 · {iv:g}s 刷新 · 状态=status.json.state"
+            " · 列/布局=disflow 看板同源"
+            " · 追加模式：每轮一整块、保留回滚（可滞轮）"
+            " · --screen = 备用屏（不闪、**无回滚**））")
+
+
+def screen_footer(iv):
+    return (f"（Ctrl-C 退出 · {iv:g}s 刷新 · 状态=status.json.state"
+            f" · 列/布局=disflow 看板同源 · 备用屏：不闪、**无回滚**）")
 
 
 def leave(*_):
@@ -432,30 +479,59 @@ def leave(*_):
     sys.exit(0)
 
 
-def main(argv=None):
-    argv = list(sys.argv[1:] if argv is None else argv)
-    mode = argv[0] if argv else "5"
-    verbose = "-v" in argv
-    if mode in ("once", "all"):
-        print("\n".join(render(mode == "all", verbose)))
-        return 0
+def append_loop(iv, verbose, only_active):
+    """**默认刷新模式**：追加式（不用备用屏）——每轮一整个块（自带时间戳头），
+    回滚缓冲保留 ⇒ 滞轮/scrollback 可用；块间互不依赖。Ctrl-C → 干净退出。
+    """
     try:
-        iv = float(mode)
-    except ValueError:
-        iv = 5.0
+        while True:
+            block = render(False, verbose, only_active) + [append_footer(iv)]
+            sys.stdout.write("\n".join(block) + "\n")
+            sys.stdout.flush()
+            time.sleep(iv)
+    except KeyboardInterrupt:
+        return 0
+
+
+def screen_loop(iv, verbose, only_active):
+    """显式 `--screen`：备用屏整屏重绘（不闪，代价是**不留回滚**）。"""
     signal.signal(signal.SIGINT, leave)
     signal.signal(signal.SIGTERM, leave)
     sys.stdout.write("\033[?1049h\033[?25l")
     try:
         while True:
-            draw(render(False, verbose),
-                 f"（Ctrl-C 退出 · {iv:g}s 刷新 · 状态=status.json.state"
-                 f" · 列/布局=disflow 看板同源 · 备用屏：不闪不留回滚）")
+            draw(render(False, verbose, only_active), screen_footer(iv))
             time.sleep(iv)
     finally:
         sys.stdout.write("\033[?25h\033[?1049l")
         sys.stdout.flush()
     return 0
+
+
+_FLAGS = ("-v", "--screen", "--active", "--open")
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    verbose = "-v" in argv
+    screen = "--screen" in argv
+    only_active = "--active" in argv or "--open" in argv
+    rest = [a for a in argv if a not in _FLAGS]
+    mode = rest[0] if rest else "5"
+    if mode in ("once", "all"):
+        print("\n".join(render(mode == "all", verbose, only_active)))
+        return 0
+    try:
+        iv = float(mode)
+    except ValueError:
+        iv = 5.0
+    if not sys.stdout.isatty():
+        # 非 TTY（管道 / 重定向）：**零控制序列** —— 打一轮独立块就退（没人会看第二次刷新）。
+        print("\n".join(render(False, verbose, only_active)))
+        return 0
+    if screen:
+        return screen_loop(iv, verbose, only_active)
+    return append_loop(iv, verbose, only_active)
 
 
 if __name__ == "__main__":

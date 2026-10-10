@@ -102,6 +102,15 @@ d doctor                                        # 自检全绿
 `↳` worker 自报进展）。`board` 不知道 worker 在跑哪条命令，pi 不知道树的结构 —— 所以是**两个**；
 区分依据是**数据源与刷新节拍**，不是布局（布局只有 `views.board_layout` 一处实现）。
 
+人读态**屏幕维度**的两条：
+
+- **终态行不打 goal**：`✓ 完成` / `— 跳过` 行只给 `标记 + id + 状态`（一行几百字没法扫）；其余行
+goal 截断到 80 字（`views.truncate_goal` **唯一实现**）；**完整 goal 在 `board --json`**。
+- **默认刷新不吐控制序列**：`lanes_watch.sh` 默认是**追加式**（每轮一整块、带时间戳头、
+**保留回滚**——滞轮/scrollback 可用）；备用屏必须显式 `--screen`（不闪，**代价是没回滚**）；
+**非 TTY（管道/重定向）零控制序列**；`--active`（别名 `--open`）只看「运行中 + 待完成」；
+无在跑节点时显式打一句（进展只对在跑节点显示是设计）。
+
 第 ④ 步的真实输出：
 
 ```text
@@ -277,7 +286,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 604 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 615 passed（零第三方依赖）
 python3 scripts/mutation_check.py                 # 变异测试：64/64（验证测试真的有牙）
 ```
 

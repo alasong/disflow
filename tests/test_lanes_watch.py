@@ -12,6 +12,12 @@
 4. **实时进展只对在跑节点**（`◈` 目标 / `⌘` 最后命令 / `↳` worker 自报进展）：pending/done 不显示
    （避免刷屏）。
 5. **读不到就明说**：`state.json` 缺失时**不崩**，且显式写明读不到；无 pi 运行目录时也能跑。
+6. **可用性四修（b7，2026-10-11 用户当场提的四条）**：
+   ① 默认刷新模式 = **追加式**（每轮一整块、带时间戳头、保留回滚），**不出现** `\033[?1049` /
+      `\033[2J`；备用屏只能**显式** `--screen`（并写明代价）；**非 TTY 零控制序列**；
+   ② `✓ 完成` / `— 跳过` 行默认**不打 goal**（只给 `标记 + id + 状态`）；
+   ③ `--active`（别名 `--open`）只留运行中 + 待完成；**默认不变**；
+   ④ 无在跑节点时**显式打一句**（进展只对在跑节点显示是设计，不是没了）。
 """
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ import pathlib
 import shutil
 import tempfile
 import unittest
+import unittest.mock
 from typing import Any
 
 from base import DisflowTestCase
@@ -41,6 +48,13 @@ def _load_lanes_watch() -> Any:
 
 
 lanes_watch: Any = _load_lanes_watch()
+
+
+class _FakeTTY(io.StringIO):
+    """`isatty()` 为真的假 stdout：让 `main` 走常驻（追加 / 备用屏）分支而不碰真终端。"""
+
+    def isatty(self) -> bool:
+        return True
 
 
 def _tree() -> dict:
@@ -110,6 +124,29 @@ class LanesWatchTest(DisflowTestCase):
                                   "runId": "child-run"}])
         self._fake_run("child", run_id="child-run", mode="single", state="running",
                        command="grep -n foo tests/x.py", text="⟳ 干活 · 1/3\n下一步 写测试")
+
+    def _one_round(self, argv):
+        """让常驻循环只跑**一轮**：把 `time.sleep` 换成抛 `KeyboardInterrupt` 的侧效。
+
+        `--screen` 路径的 KeyboardInterrupt 会穿过 `finally` 向外抛（那是它恢复备用屏的
+        时机），本助手吞掉它并把 `code` 置 None；追加式路径自己捕获后返回 0。
+        """
+        buf = _FakeTTY()
+        code: int | None = None
+        with unittest.mock.patch.object(lanes_watch.time, "sleep",
+                                        side_effect=KeyboardInterrupt), \
+                contextlib.redirect_stdout(buf):
+            try:
+                code = lanes_watch.main(list(argv))
+            except KeyboardInterrupt:
+                code = None
+        return code, buf.getvalue()
+
+    def _cli(self, argv) -> str:
+        buf = io.StringIO()                 # isatty() → False ⇒ 非 TTY 路径
+        with contextlib.redirect_stdout(buf):
+            lanes_watch.main(list(argv))
+        return buf.getvalue()
 
     # ── 骨架 = 全部节点 + 四列（含空列）──────────────────────────────────
 
@@ -210,6 +247,96 @@ class LanesWatchTest(DisflowTestCase):
         self.assertEqual(code, 0)
         self.assertIn("运行视图", buf.getvalue())
         self.assertIn("读不到", buf.getvalue())
+
+    # ── 第 1 条：默认追加式（保留回滚）· 备用屏显式 · 非 TTY 零控制序列 ──────
+
+    def test_default_refresh_mode_appends_and_never_uses_the_alternate_screen(self):
+        """判据①：默认路径**不出现** `\033[?1049` 与 `\033[2J`；追加模式零控制序列。"""
+        self._write_state()
+        code, out = self._one_round(["1"])
+        self.assertNotIn("\033[?1049", out, "默认刷新不许吃回滚（备用屏无 scrollback）")
+        self.assertNotIn("\033[2J", out)
+        self.assertNotIn("\033", out, "追加模式一个控制字符都不发")
+        self.assertEqual(code, 0, "追加式：Ctrl-C 后干净退出")
+        self.assertTrue(any(line.startswith("══ 运行视图 @ ") for line in out.splitlines()),
+                        "每块自带时间戳头")
+
+    def test_screen_mode_is_explicit_and_names_its_cost(self):
+        """备用屏保留但**显式**：`--screen` 才切备用屏，并在页脚写明代价（不闪、无回滚）。"""
+        self._write_state()
+        _, out = self._one_round(["--screen", "1"])
+        self.assertIn("\033[?1049h", out, "--screen 才用备用屏")
+        self.assertIn("无回滚", out, "备用屏的代价要写在屏幕上")
+        self.assertIn("\033[?1049l", out, "退出时还原备用屏")
+
+    def test_non_tty_output_contains_no_control_sequences(self):
+        """判据②：非 TTY（管道 / 重定向）**零控制序列** —— 常驻模式也必须（之前会吐）。"""
+        self._write_state()
+        for argv in (["1"], ["once"], ["all"]):
+            with self.subTest(argv=argv):
+                out = self._cli(argv)
+                self.assertNotIn("\033", out, f"{argv} 在非 TTY 下不许吐控制字符")
+                self.assertIn("══ 运行视图 @ ", out)
+
+    def test_each_appended_block_is_readable_on_its_own(self):
+        """判据③：追加模式下每块自带时间戳，且**不依赖上一块**即可独立阅读。"""
+        self._write_state()
+        first = lanes_watch.render(False)
+        second = lanes_watch.render(False)
+        for block in (first, second):
+            self.assertRegex(block[0], r"^══ 运行视图 @ \d\d:\d\d:\d\d ══$")
+        self.assertEqual(first, second, "同一状态下每块内容独立可复现（不依赖上一块）")
+        self.assertIn("· dev1", "\n".join(second), "块内含完整骨架，不用回头看上一块")
+
+    # ── 第 2 条：终态行不打 goal ──────────────────────────────────────
+
+    def test_done_and_skipped_rows_do_not_print_the_goal(self):
+        """`✓ 完成` / `— 跳过` 行只给 `标记 + id + 状态`，不打整段 goal（屏幕才扫得动）。"""
+        long_goal = "把这件事做完 —— " + "细节" * 120
+        tree = _tree()
+        tree["nodes"]["done1"]["goal"] = long_goal
+        tree["nodes"]["skip1"]["goal"] = long_goal
+        self._write_state({"t": tree})
+        lines = self._render()
+        done = next(line for line in lines if line.lstrip().startswith("✓ done1"))
+        skip = next(line for line in lines if line.lstrip().startswith("— skip1"))
+        for line in (done, skip):
+            self.assertNotIn(long_goal, line)
+            self.assertNotIn("细节", line, "终态行一个 goal 片段都不得出现")
+        self.assertFalse(any(long_goal in line for line in lines),
+                         "整段 goal 不出现在运行视图的任何一行")
+        pending = next(line for line in lines if line.lstrip().startswith("· dev1"))
+        self.assertLessEqual(len(pending), 2 + 2 + len("dev1") + 2 + 80,
+                             "非终态行的 goal 也截断到 80 字")
+
+    # ── 第 3 条：`--active` 只留运行中 + 待完成 ─────────────────────────
+
+    def test_active_flag_hides_done_skipped_and_failed(self):
+        """第 3 条：`--active`／`--open` 只留「运行中 + 待完成」；**默认行为不变**。"""
+        self._write_state()
+        for flag in ("--active", "--open"):
+            with self.subTest(flag=flag):
+                active = self._cli([flag, "once"])
+                for hidden in ("done1", "skip1", "fail1"):
+                    self.assertNotIn(hidden, active, f"{flag} 必须隐藏终态节点 {hidden}")
+                for kept in ("dev1", "ver1", "wait"):
+                    self.assertIn(kept, active, f"{flag} 必须保留 {kept}")
+                for label in ("✓ 完成", "— 跳过", "✗ 失败"):
+                    self.assertNotIn(label, active)
+        default = self._cli(["once"])
+        for shown in ("done1", "skip1", "fail1"):
+            self.assertIn(shown, default, "默认行为不变：终态照旧出现")
+
+    # ── 第 4 条：无在跑节点时明说 ──────────────────────────────────────────
+
+    def test_no_running_node_is_stated_explicitly(self):
+        """无在跑节点时屏幕上**不能一片空白**：显式打一句（进展只对在跑节点显示是设计）。"""
+        self._write_state()                 # 无 pi run ⇒ 无在跑节点
+        text = "\n".join(self._render())
+        self.assertIn("当前无在跑节点", text)
+        self.assertIn("只对在跑节点显示", text)
+        self._running_lane()                # 有在跑节点时这句不许出现（否则是噪声）
+        self.assertNotIn("当前无在跑节点", "\n".join(self._render()))
 
 
 if __name__ == "__main__":
