@@ -453,8 +453,24 @@ def _days(text: str, *, remaining: int | None, overdue: int | None) -> str:
 _NO_DEADLINE = "未声明"
 
 
+def _burn_line(label: str, series: list[dict], *, field: str, ideal) -> str:
+    """一行燃尽读数：`<维度> 首日 值 → 末日 值（理想线 → 日 归零）`。
+
+    `field` 明确指定取哪一列（`remaining` 点数 / `remaining_nodes` 节点数）——两个维度
+    各打印一行、各有标签，不把两个数混成一个。
+    """
+    first, last = series[0], series[-1]
+    tail = f"（理想线 → {ideal[-1]['day']} 归零）" if ideal else ""
+    return (f"{label}{first['day']} {_pts(first[field])}"
+            f" → {last['day']} {_pts(last[field])}{tail}")
+
+
 def cmd_metrics(engine: Engine, args) -> int:
-    """量化：`points`（声明）+ `velocity`/`burndown`（派生）。只读，不改任何状态。"""
+    """量化：节点数（永远有）+ `points`（声明）+ `velocity`/`burndown`（派生）。只读。
+
+    节点数维度与点数维度并列打印、各带标签：只声明 points 时，未声明点数的树也能看到
+    「几个节点、完几个、剩几个」——否则燃尽只剩「0 → 0」，一行没有信息量。
+    """
     tree = engine.tree(args.tree)
     events = store.load_events(engine.spec)
     now_ts = time.time()
@@ -464,8 +480,11 @@ def cmd_metrics(engine: Engine, args) -> int:
         _dump({"summary": summary, "burndown": burn})
         return 0
     print(f"树 {args.tree}：量化")
-    estimated = summary["points_total"] > 0
-    if not estimated:
+    points_declared = summary["points_total"] > 0
+    # 节点数维度：不受 points 是否声明影响（标签写明是「节点」）。
+    print(f"  节点    {summary['nodes_total']}"
+          f"（已完成 {summary['nodes_done']}，剩 {summary['nodes_left']}）")
+    if not points_declared:
         print(f"  点数    未声明——{summary['points_unestimated']} 个 task 节点都没给 `points`")
         print("          （估点是**人给的声明**，引擎不猜；所以这里不会自己编一个数出来）")
     else:
@@ -487,11 +506,13 @@ def cmd_metrics(engine: Engine, args) -> int:
     if summary["deadline_reason"]:
         print(f"          ⚠ {summary['deadline_reason']}")
     if burn["series"]:
-        first, last = burn["series"][0], burn["series"][-1]
-        line = f"  燃尽    {first['day']} {_pts(first['remaining'])} → {last['day']} {_pts(last['remaining'])}"
-        if burn["ideal"]:
-            line += f"（理想线 → {burn['ideal'][-1]['day']} 归零）"
-        print(line)
+        # 两行：节点数与点数各带标签（点数未声明时点数那一行不打印——留着只会是「0 → 0」）。
+        print("  燃尽    " + _burn_line("节点  ", burn["series"],
+                                              field="remaining_nodes",
+                                              ideal=burn["ideal_nodes"]))
+        if points_declared:
+            print("          " + _burn_line("点数  ", burn["series"],
+                                            field="remaining", ideal=burn["ideal"]))
     if burn["ideal_reason"]:
         print(f"  理想线  ⚠ {burn['ideal_reason']}")
     return 0

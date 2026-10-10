@@ -1,10 +1,10 @@
 """disflow · 量化指标（纯函数，**零时钟**）。
 
-事件流 + 投影 → 点数汇总 / 速度 / 燃尽。本模块内部**绝不读时钟**：`now_ts` 一律由调用方
-传入——否则同一份事件在不同机器、不同时刻会算出不同的天数（不可复现、无法对比）。
+事件流 + 投影 → 节点数分母 + 点数汇总 / 速度 / 燃尽。本模块内部**绝不读时钟**：`now_ts`
+一律由调用方传入——否则同一份事件在不同机器、不同时刻会算出不同的天数（不可复现、无法对比）。
 
-**统一语义：as-of `now_ts`。** 完工一律「截至 `now_ts`」判定——`points_done` 只计
-完工事件 `ts <= now_ts` 的节点。为何选这个语义而不是「按投影里当前 status 全算」：
+**统一语义：as-of `now_ts`。** 完工一律「截至 `now_ts`」判定——`points_done` / `nodes_done`
+只计完工事件 `ts <= now_ts` 的节点。为何选这个语义而不是「按投影里当前 status 全算」：
 `burndown` 是时间序列，必须截断到 `now_ts`（否则序列末行在未来的完工也会把曲线压低）；
 若 `summary` 另按当前 status 全算，同一份事实就会出现两个数（`summary.points_left`
 对不上 `series[-1].remaining`）。两处共用 `_done_as_of`，不变量才成立。
@@ -12,6 +12,13 @@
 **未估（`points is None`）的节点不进任何分母**：把它当 0 会把「没估」读成「不用干」，
 velocity 被凭空抬高、eta 被凭空压低——这是量化最容易骗自己的地方，故单独计入
 `points_unestimated` 并在所有求和中排除。
+
+**两个维度并列，不许混成一个数**：`nodes_*`（节点数）**永远**有读数，与 `points` 是否
+声明无关；`points_*`（点数）在没人声明 `points` 时如实报 `points_total == 0` +
+`points_unestimated == 全部 task 数`。为何要节点数这一维：只声明 points 时，一棵 33 个
+task、0 个 points 声明的树的燃尽只剩「0 → 0」，一行没有信息量，读的人会以为「没什么可干」
+——而实际上有 33 个节点在。两个维度共用同一个 `as-of now_ts` 截点（`_done_as_of`），
+`summary.nodes_left` 因此恒等于 `burndown.series[-1].remaining_nodes`（与点数维度同一条不变量）。
 
 **读路径不抛异常，但绝不静默**（NFR-7）：起点未知、存储的 deadline 不可解析这类
 「数据有洞」的情形，一律给显式 `*_reason` 字段说明原因，绝不假装读数是合法的。
@@ -184,24 +191,38 @@ def _done_as_of(completion: dict[str, float], node_id: str, terminal_ids: set[st
 
 
 def summary(tree: dict, events: list[dict], *, slug: str, now_ts: float) -> dict:
-    """点数汇总 + 速度 + 预计完工 + deadline 余量。纯函数，时间只来自 `now_ts`。
+    """节点数汇总 + 点数汇总 + 速度 + 预计完工 + deadline 余量。纯函数，时间只来自 `now_ts`。
 
-    完工按 **as-of `now_ts`** 截断（见模块 docstring）：`points_done` 只计完工事件
-    `ts <= now_ts` 的节点，与 `burndown` 的 `series[-1]` 同口径。
+    完工按 **as-of `now_ts`** 截断（见模块 docstring）：`points_done` / `nodes_done` 只计
+    完工事件 `ts <= now_ts` 的节点，与 `burndown` 的 `series[-1]` 同口径。
+
+    `nodes_*` 是节点数维度（container 不算，与点数维度同一份 `_tasks`）；`points_*` 是点数
+    维度，未声明时 `points_total` 就是 0（**不是**把节点数冒充成点数）。
     """
     nodes = tree.get("nodes") or {}
     tasks = _tasks(nodes)
     estimated = _estimated(tasks)
 
-    points_total = sum(estimated.values())
-    terminal_ids = {node_id for node_id in estimated
-                    if nodes[node_id].get("status") in TERMINAL}
+    # 终态节点集合按**全部 task 节点**取（不再只取已估的）：两个维度必须共用同一个
+    # `as-of now_ts` 截点，否则同一份事实会给出两个「已完成」。已估节点是 task 的子集，
+    # 故点数求和的逐项判据与「只取已估 ∩ 终态」时**逐字相同**。
+    terminal_ids = {task["id"] for task in tasks
+                    if nodes[task["id"]].get("status") in TERMINAL}
     completion = _completion_ts(events, terminal_ids)
     today = _day(now_ts)
+    done_ids = {node_id for node_id in terminal_ids
+                if _done_as_of(completion, node_id, terminal_ids, now_ts, today)}
+
+    points_total = sum(estimated.values())
     points_done = sum(points for node_id, points in estimated.items()
-                      if _done_as_of(completion, node_id, terminal_ids, now_ts, today))
+                      if node_id in done_ids)
     points_left = points_total - points_done
     points_unestimated = len(tasks) - len(estimated)
+
+    # 节点数维度：「没给点数」不等于「没有节点」，故这一维不受 points 声明影响。
+    nodes_total = len(tasks)
+    nodes_done = len(done_ids)
+    nodes_left = nodes_total - nodes_done
 
     start_ts = tree_start_ts(events, slug=slug)
     # 起点未知与「起点就是今天」都可能给出 days_elapsed == 0，故用 start_reason 显式区分：
@@ -230,6 +251,9 @@ def summary(tree: dict, events: list[dict], *, slug: str, now_ts: float) -> dict
         deadline_overdue_days = max(0, -delta)
 
     return {
+        "nodes_total": nodes_total,
+        "nodes_done": nodes_done,
+        "nodes_left": nodes_left,
         "points_total": points_total,
         "points_done": points_done,
         "points_left": points_left,
@@ -247,11 +271,14 @@ def summary(tree: dict, events: list[dict], *, slug: str, now_ts: float) -> dict
 
 
 def burndown(tree: dict, events: list[dict], *, slug: str, now_ts: float) -> dict:
-    """逐日剩余点数（series）+ 理想线（ideal）。
+    """逐日剩余（series：节点数 + 点数两列）+ 两维理想线（ideal / ideal_nodes）。
 
-    - `series`：从树开始那天到今天，每天一行 `{"day", "remaining"}`；完工同样按
-      **as-of `now_ts`** 截断（末行与 `summary.points_left` 同口径）；
-    - `ideal`：从 `points_total` 直线降到 deadline 那天归零；**无 deadline 时为 `None`**，
+    - `series`：从树开始那天到今天，每天一行
+      `{"day", "remaining", "remaining_nodes"}`——`remaining` 是**点数**维度、
+      `remaining_nodes` 是**节点数**维度，两个数并列不合并（节点数维度不受 points 是否
+      声明影响：没人声明 points 时点数那一列恒为 0，节点数那一列照样逐日下降）；
+    - `ideal` / `ideal_nodes`：分别从 `points_total` / `nodes_total` 直线降到 deadline 那天
+      归零，两维共用一条成因（`ideal_reason`）；**无 deadline 时为 `None`**（两维都是），
       并在 `ideal_reason` 里说明原因（不伪造一条线——假线比没有线更误导）；
     - 无 `tree.init` 时 `series` 为 `[]`，但带显式 `start_reason`（与 `summary` 同一种报告方式）。
     """
@@ -266,7 +293,8 @@ def burndown(tree: dict, events: list[dict], *, slug: str, now_ts: float) -> dic
         # 没有起点就画不出序列——但绝不静默：给显式 reason（与 summary 同一措辞，且同样
         # 区分「未知 slug」与「树真没 init」）。
         reason = _start_reason(events, slug, start_ts)
-        return {"series": [], "ideal": None, "deadline": normalized,
+        return {"series": [], "ideal": None, "ideal_nodes": None,
+                "deadline": normalized,
                 "ideal_reason": reason, "start_ts": None,
                 "start_reason": reason, "deadline_reason": deadline_reason}
 
@@ -278,18 +306,24 @@ def burndown(tree: dict, events: list[dict], *, slug: str, now_ts: float) -> dic
     span = max(0, (today - start_day).days)
     days = [start_day + timedelta(days=offset) for offset in range(span + 1)]
 
-    terminal_ids = {node_id for node_id in estimated
-                    if nodes[node_id].get("status") in TERMINAL}
+    # 与 `summary` 同一样：终态集合按全部 task 节点取，两维共用同一个截点。
+    terminal_ids = {task["id"] for task in tasks
+                    if nodes[task["id"]].get("status") in TERMINAL}
     completion = _completion_ts(events, terminal_ids)
+    nodes_total = len(tasks)
 
     series: list[dict] = []
     for day in days:
         # 逐日截点：`cutoff_day = day`，完工时刻统一受 `now_ts` 约束（未来完工不算）。
-        remaining = sum(points for node_id, points in estimated.items()
-                        if not _done_as_of(completion, node_id, terminal_ids, now_ts, day))
-        series.append({"day": day.isoformat(), "remaining": remaining})
+        done_today = {node_id for node_id in terminal_ids
+                      if _done_as_of(completion, node_id, terminal_ids, now_ts, day)}
+        series.append({"day": day.isoformat(),
+                       "remaining": sum(points for node_id, points in estimated.items()
+                                        if node_id not in done_today),
+                       "remaining_nodes": nodes_total - len(done_today)})
 
     ideal: list[dict] | None = None
+    ideal_nodes: list[dict] | None = None
     ideal_reason: str | None = None
     if normalized is None:
         ideal_reason = "无 deadline，不构造理想线（不伪造一条线）"
@@ -300,11 +334,15 @@ def burndown(tree: dict, events: list[dict], *, slug: str, now_ts: float) -> dic
                             f"（{start_day.isoformat()}），无法构造理想线")
         else:
             ideal = []
+            ideal_nodes = []
             for day in days:
                 fraction = (day - start_day).days / horizon
                 ideal.append({"day": day.isoformat(),
                               "ideal": max(0.0, points_total * (1.0 - fraction))})
+                ideal_nodes.append({"day": day.isoformat(),
+                                    "ideal_nodes": max(0.0, nodes_total * (1.0 - fraction))})
 
-    return {"series": series, "ideal": ideal, "deadline": normalized,
+    return {"series": series, "ideal": ideal, "ideal_nodes": ideal_nodes,
+            "deadline": normalized,
             "ideal_reason": ideal_reason, "start_ts": start_ts,
             "start_reason": start_reason, "deadline_reason": deadline_reason}
