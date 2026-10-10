@@ -116,7 +116,9 @@ vacuous    = {}                     # 没有“空洞通过”的门
 或者树根声明一个带理由的逃生口（`design.md` §7）。上面的第 ⑧ 步把两个分支都走了。
 
 想用它在**真活**上驱动一个循环（我跑过两遍的那个），配方见
-`docs/dev-board.md` §0.1 与 §0.6：`drive` → `brief` → 干活 → `collect` → `done`。
+`docs/dev-board.md` §0.1 与 §0.6：`drive` → `brief` → **`start`** → 干活 → `collect` → `done`。
+循环里两条别抄漏：**每轮先 `start`**（领租约 + 拍开工基线，不 start 门就在空基线上跑）；
+**worker 不许自己 `git commit`，提交由宿主统一做**（worker 自己提交会让门看不见改动——见 `.agents/skills/disflow/SKILL.md` §3/§5）。
 
 ## 量化、迭代、worktree
 

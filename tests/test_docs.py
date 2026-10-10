@@ -20,6 +20,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOC_FILES = ["README.md"] + [
     str(p.relative_to(ROOT)) for p in sorted((ROOT / "docs").glob("*.md"))
 ]
+# 宿主手册：不在 docs/（那是给使用者的文档），但读者同样会照它做——同样要防漂移。
+SKILL = ROOT / ".agents/skills/disflow/SKILL.md"
 
 # `[ \t]+` 而非 `\s+`：后者会跨行匹配，把下一行开头的 `python3` 当成动词（实测踩过）。
 # `(?:\.cli)?` 必须允许：用法块里写的是 `python3 -m disflow.cli <动词>`（点），
@@ -53,6 +55,30 @@ def _mentioned() -> dict[str, set[str]]:
     for rel in DOC_FILES:
         found[rel] = _verbs_in((ROOT / rel).read_text(encoding="utf-8"))
     return found
+
+
+def _section(text: str, number: str) -> str:
+    """取 `## <number> …` 到下一个同级 `## ` 之间的**正文**（不含标题行）。
+
+    抽成函数与 `_verbs_in` 同理：让「仓库恰好干净」与「尺子有效」分得开。
+    """
+    out: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if inside:
+                break
+            inside = line.startswith(f"## {number} ")
+            continue                      # 标题行本身不进正文
+        if inside:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _section_heading(text: str, number: str) -> str:
+    """`## <number> …` 标题行（层级/编号变化时守卫要能看见）。"""
+    return next((line for line in text.splitlines()
+                 if line.startswith(f"## {number} ")), "")
 
 
 def _cells(row: str) -> int:
@@ -127,6 +153,54 @@ class DocDriftTest(DisflowTestCase):
                             f"{rel}:{offset + 1} {_cells(lines[offset])}列 vs 表头{head}列")
                 index = end
         self.assertEqual(offenders, [], f"表格列数不齐（渲染会错）：{offenders}")
+
+
+class HostManualTest(DisflowTestCase):
+    """宿主手册 `.agents/skills/disflow/SKILL.md` 的防漂移守卫。
+
+    钉的是两个实测会让使用者踩坑的缺陷：
+    ① §2 宿主循环漏了 `start` —— 不 start 就没有开工基线，门在空基线上跑；
+    ② 没写明「worker 不许自己 commit」（自提交后工作区干净 ⇒ 门看不见改动、exit 0）。
+    """
+
+    def test_matcher_extracts_a_section_and_ignores_the_rest(self):
+        """**尺子自测**：分节提取要正确切片，否则下面的断言可能是摆设。"""
+        sample = "## 1 甲\n正文一\n$D start a b\n\n## 2 乙\n正文二\n## 3 丙\n正文三\n"
+        self.assertIn("$D start a b", _section(sample, "1"))
+        self.assertIn("正文二", _section(sample, "2"))
+        self.assertNotIn("正文三", _section(sample, "2"))
+        self.assertEqual(_section_heading(sample, "2"), "## 2 乙")
+        # 反向：不存在的编号 → 空节（否则断言永远绿）
+        self.assertEqual(_section(sample, "9"), "")
+
+    def test_host_manual_exists(self):
+        self.assertTrue(os.path.isfile(SKILL), f"宿主手册缺失：{SKILL}")
+
+    def test_host_loop_includes_the_start_step(self):
+        """§2 的每轮循环必须含 `start`：它领租约并拍开工基线。
+
+        实测：不 start 直接 `collect`+`done` 也能 exit 0，但门在**空基线**上跑——
+        开工前己脏的文件被算成本节点引入的改动，或（真没改时）`introduced=[]` 空洞通过。
+        """
+        text = SKILL.read_text(encoding="utf-8")
+        loop = _section(text, "2")
+        self.assertRegex(loop, r"\$D start <tree> <node>",
+                         "§2 宿主循环必须列出 start 步骤（否则派活没有开工基线）")
+        self.assertIn("七步", _section_heading(text, "2"),
+                      "§2 标题的步数要随步骤数走（补了 start 就是七步）")
+
+    def test_worker_contract_forbids_self_commit(self):
+        """§3 worker 契约必须写明「worker 不许自己 commit、宿主统一提交」。"""
+        contract = _section(SKILL.read_text(encoding="utf-8"), "3")
+        self.assertIn("git commit", contract,
+                      "§3 要点必须出现 `git commit` 这条硬纪律")
+        self.assertIn("宿主统一提交", contract,
+                      "§3 必须写明提交由宿主统一做")
+
+    def test_start_trap_is_documented(self):
+        """§5 陷阱必须写明「不 start 就没有开工基线」。"""
+        traps = _section(SKILL.read_text(encoding="utf-8"), "5")
+        self.assertIn("开工基线", traps, "§5 陷阱必须写明不 start 就没有开工基线")
 
 
 if __name__ == "__main__":
