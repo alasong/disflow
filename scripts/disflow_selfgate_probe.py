@@ -4,7 +4,7 @@
 本文件是**写在被测代码之前的独立判据**：它不 import `disflow` 的内部实现，只把
 `python -m disflow.cli` 当黑盒跑一遍，再从 `<state_dir>/state.json` 读门的**原始读数**
 （`acceptance.exit` / `introduced` / `vacuous`）。被测实现被改坏时它必须变红——「绿不是
-证据、能红才是」（与 `scripts/independent_checks.py` 同一立场的第二条独立入口）。
+证据、能红才是」（独立入口：判据必须**能红**才算证据）。
 
 五个情形各自测的机制：
 
