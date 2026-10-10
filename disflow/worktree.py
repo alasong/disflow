@@ -51,13 +51,21 @@ from . import store
 from .spec import TERMINAL
 
 __all__ = [
-    "WorktreeProbeError",
+    "WorktreeError", "WorktreeProbeError",
     "root", "path_for", "branch_for", "commands",
     "registered", "status", "plan", "reconcile", "reap", "apply",
 ]
 
 
-class WorktreeProbeError(RuntimeError):
+class WorktreeError(RuntimeError):
+    """worktree 模块的**运行时失败**基类：探针读数不可信、真跑 git 失败。
+
+    统一成一类是为了让组装层（`cli._worktree_call`）只需归一一次 —— 否则 `apply` 里裸抛的
+    `RuntimeError` 会漏出 `main` 的 `except`，用户看到的是抛栈而不是一行人话。
+    """
+
+
+class WorktreeProbeError(WorktreeError):
     """`git worktree list` 探针失败：读数不可信。
 
     与「确实没有 worktree」区分开——空集会被下游读成「一个都没有」，从而对在跑节点
@@ -83,6 +91,26 @@ def root(spec: dict) -> str:
     return os.path.join(store.state_dir(spec), "worktrees")
 
 
+def _assert_strictly_under(base: str, path: str, *, tree: str, node: str) -> None:
+    """断言 `path` **严格**位于 `base` 之下（相等不算），否则抛 `ValueError`。
+
+    用 `abspath`+`commonpath` 做**词法**归一：`..` 会在此展开，故 `<root>/t/..`（= 根本身）
+    与 `<root>/t/../..…`（逃出根）都被判出。比对两侧都先 `abspath`，故与进程 cwd 无关
+    （相对 state_dir 下两个 cwd 结论一致）；符号链接不在此展开——本道只保证**词法**上不逃逸，
+    真仓内/符号链接型越界由带 repo 的 `_reject_if_inside` / `_norm(realpath)` 兜。
+    """
+    abs_base = os.path.abspath(base)
+    abs_path = os.path.abspath(path)
+    try:
+        common = os.path.commonpath([abs_base, abs_path])
+    except ValueError:                    # 不同盘符（Windows）等：不可判定 → 一律拒绝
+        common = None
+    if abs_path == abs_base or common != abs_base:
+        raise ValueError(
+            f"worktree 路径逃出根目录：tree={tree!r} node={node!r} 算出 {path!r}"
+            f"（根 {base!r}）——名字含路径分隔符/`..`，请用非路径形名字")
+
+
 def path_for(spec: dict, tree: str, node: str) -> str:
     """节点 worktree 落点：`<root>/<tree>/<node>`。纯函数，无 IO、无副作用。
 
@@ -90,8 +118,18 @@ def path_for(spec: dict, tree: str, node: str) -> str:
     `_repo_path` 以 repo 为基准解析成绝对（`os.path.isdir` 等按进程 cwd 解析，
     否则相对 state_dir 下换个 cwd 整棵树会「消失」）；git 子进程一律带 `cwd=repo`，
     相对路径由 git 按 repo 解析。故返回值可安全跨 cwd 传递。
+
+    **fail-closed（第二道防线）**：算完路径后断言它**严格位于 `root(spec)` 之下**，
+    不满足即抛 `ValueError`，**绝不返回**逃逸路径。为什么留两道：写时（`model.validate_path_name`
+    在 `Engine.init_tree` / `validate_node_spec`）管「坏名字进不了事实源」；本道管「就算事实源里
+    已有坏名字（老状态目录可能残留），算路径这一步也不放行」。只靠写时校验不够——**旧数据
+    已经存在**；只靠本道也不够——它会等到算路径才拒绝，且下游别处可能绕过 `path_for` 自拼路径。
+    两者是不同失效模式，不可互相替代。
     """
-    return os.path.join(root(spec), tree, node)
+    base = root(spec)
+    path = os.path.join(base, tree, node)
+    _assert_strictly_under(base, path, tree=tree, node=node)
+    return path
 
 
 def branch_for(tree: str, node: str) -> str:
@@ -357,7 +395,7 @@ def apply(spec: dict, tree: str, repo: str, *, nodes: list[str] | None = None) -
             cmd = ["git", "worktree", "add", path, branch]
             proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, check=False)
             if proc.returncode != 0:
-                raise RuntimeError(
+                raise WorktreeError(
                     f"git worktree add（re-attach）失败（{nid}）："
                     f"{proc.stderr.strip() or proc.stdout.strip()}")
             reattached.append(nid)
@@ -371,7 +409,7 @@ def apply(spec: dict, tree: str, repo: str, *, nodes: list[str] | None = None) -
         proc = subprocess.run(entry["add_cmd"], cwd=repo,
                               capture_output=True, text=True, check=False)
         if proc.returncode != 0:
-            raise RuntimeError(
+            raise WorktreeError(
                 f"git worktree add 失败（{nid}）：{proc.stderr.strip() or proc.stdout.strip()}")
         created.append(nid)
     return {"tree": tree, "created": created, "reattached": reattached,
