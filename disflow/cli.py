@@ -16,8 +16,8 @@ from .ready import lease_expired
 from .state import project
 
 
-def _dump(payload) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+def _dump(payload, file=None) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2), file=file)
 
 
 def _loads(text: str):
@@ -93,11 +93,11 @@ def cmd_done(engine: Engine, args) -> int:
     try:
         engine.done(args.tree, args.node, declarations, dry_run=dry)
     except GateReject as reject:
-        print(f"✗ {'预演会被拒' if dry else '门拒收'} {args.node}：")
+        print(f"✗ {'预演会被拒' if dry else '门拒收'} {args.node}：", file=sys.stderr)
         for item in reject.missing:
-            print(f"  - {item}")
-        print("契约片段：")
-        _dump(reject.contract)
+            print(f"  - {item}", file=sys.stderr)
+        print("契约片段：", file=sys.stderr)
+        _dump(reject.contract, file=sys.stderr)
         return 2
     if dry:
         print(f"✓ 预演通过：{args.node} 的验收/作用域/规模门均会过（**未落事件**）")
@@ -225,9 +225,10 @@ def cmd_doctor(engine: Engine, args) -> int:
                 if consumed not in tree["assets"]:
                     problems.append(f"{name}/{node_id}: consumes 未登记 {consumed}")
     if problems:
-        print("✗ doctor 发现：")
+        # 失败报文统一走 stderr（与 GateReject 一致）：脚本 2>/dev/null 时不会把失败看成成功
+        print("✗ doctor 发现：", file=sys.stderr)
         for item in problems:
-            print(f"  - {item}")
+            print(f"  - {item}", file=sys.stderr)
         return 1
     print("✓ doctor 全绿")
     return 0
@@ -275,11 +276,11 @@ def cmd_close(engine: Engine, args) -> int:
     try:
         engine.close(args.tree, dry_run=dry)
     except GateReject as reject:
-        print(f"✗ {'预演会被拒' if dry else '树级门拒收'} {args.tree}：")
+        print(f"✗ {'预演会被拒' if dry else '树级门拒收'} {args.tree}：", file=sys.stderr)
         for item in reject.missing:
-            print(f"  - {item}")
-        print("契约片段：")
-        _dump(reject.contract)
+            print(f"  - {item}", file=sys.stderr)
+        print("契约片段：", file=sys.stderr)
+        _dump(reject.contract, file=sys.stderr)
         return 2
     if dry:
         print(f"✓ 预演通过：{args.tree} 的 tree_closure + tree_coverage 门均会过（**未落事件**）")
