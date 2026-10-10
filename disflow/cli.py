@@ -247,6 +247,8 @@ def cmd_host_next(engine: Engine, args) -> int:
           f" · 卡死 {'是' if payload['stuck'] else '否'}")
     if not payload["plan"]:
         # 无就绪节点：**显式**说清是全部完成还是卡住，不静默空。
+        # 全被在跑节点挡下那一格（`state=waiting`）的 deferred 已在 `state_message` 里说清 ⇒
+        # 此处不重复打印（同一屏不出现两遍同样的话）。
         print(f"[{payload['state']}] {payload['state_message']}")
         for node_id, deps in sorted(payload["blocked"].items()):
             print(f"  被阻塞 {node_id} ← {', '.join(deps)}")
@@ -263,6 +265,15 @@ def cmd_host_next(engine: Engine, args) -> int:
         print(f"    collect: {entry['collect_cmd']}")
         print(f"    done:    {entry['done_cmd']}")
         print(f"    提问纪律：{entry['brief']['question_protocol']}")
+    deferred = payload.get("deferred") or []
+    if deferred:
+        # **绝不静默丢**：就绪却与在跑节点写面重叠的候选不进 plan，但不许在屏幕上无声消失
+        # （JSON 里有、屏幕上没有 = 只对机器人诚实）——逐条报出节点 + 在跑的谁 + 重叠哪些路径。
+        # 措辞与 `drive` 的人读态一致（同一批读者）；全被挡那格由 `state_message` 说（见上分叉），
+        # 此处不重复打印。
+        print("写面被在跑节点占用（本轮不派，防并写冲突；等它们收尾或改 touch_plan）：")
+        for item in deferred:
+            print(f"  {item['node']}  {item['why']}")
     print("（完整 brief 见 --json：宿主可直接把 plan[].brief 作为 worker 的 task）")
     return 0
 
