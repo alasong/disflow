@@ -189,6 +189,12 @@ class Engine:
                            guard=lambda t: self._need(t, node),
                            prepare=lambda _: {"reason": reason})
 
+    def import_node(self, tree: str, node: str, status: str, note: str = "") -> dict:
+        """导入既有状态（不可经验收门直接构造 done）——显式标记 imported。"""
+        return self._write("node.import", tree=tree, node=node,
+                           guard=lambda t: self._need(t, node),
+                           prepare=lambda _: {"status": status, "note": note})
+
     # ── 推进面（只读）──────────────────────────────────────────────────────
 
     def drive(self, tree: str) -> dict:

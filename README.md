@@ -8,7 +8,7 @@
 | --- | --- |
 | `docs/requirements.md` | 需求 v0.1：mgt 复盘 + 29 条可验收 FR/NFR |
 | `docs/design.md` | 设计 v0.1：数据模型、`ready()`、分发器、看板、门 |
-| `docs/dev-board.md` | **开发看板**（POC 完成状态 + 证据） |
+| `docs/dev-board.md` | **开发看板**（14/15，仅 PM 审批未做） |
 | `docs/design-dispatch-tree-graph.md` | 早期讨论稿（历史） |
 
 ## 核心判断
@@ -18,10 +18,10 @@
 - **看板是投影，不是第二份存储**；多块板 = 多棵作用域隔离的树。
 - **引擎只推不跑**，无常驻 daemon。
 
-## 用法（POC）
+## 用法
 
 ```bash
-export DISFLOW_STATE_DIR=.disflow        # 状态目录（默认 .disflow）
+export DISFLOW_STATE_DIR=.disflow
 python3 -m disflow.cli init demo --goal "目标"
 python3 -m disflow.cli expand demo root --children '[{"id":"a","goal":"做A","acceptance":{"cmd":"true","expect":"exit0"}}]'
 python3 -m disflow.cli require demo b a          # 建图（写时拒环）
@@ -30,20 +30,37 @@ python3 -m disflow.cli brief demo a              # worker 的完整输入契约
 python3 -m disflow.cli start demo a --holder w1
 python3 -m disflow.cli collect demo a --result '{"status":"ok","summary":"…","changed_files":[]}'
 python3 -m disflow.cli done demo a --decl '{"note":"…"}'   # 跑门；无证据拒收
+
+# 三种视图（同一投影）
+python3 -m disflow.cli board demo          # 按 stage
+python3 -m disflow.cli tree demo           # 按 parent
+python3 -m disflow.cli graph demo [--dot]  # 按边
+
+# 从 mgt 导入
+python3 -m disflow.cli import mgt <project-root> --tree imported
+
 python3 -m disflow.cli doctor
+```
+
+## 开发看板（dogfooding）
+
+```bash
+python3 scripts/seed_dev_board.py      # 把 docs/dev-board.md 种进 .disflow/（每步真跑验收）
+python3 -m disflow.cli board disflow-v0.1
+python3 -m disflow.cli drive disflow-v0.1
 ```
 
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 37 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 52 passed（零第三方依赖）
 ```
 
 ## 结构
 
 ```text
-disflow/          # 包（store 为 vendored 自 fat3 flowcore）
-  store.py        # L0 事件流 + 原子投影（vendored）
+disflow/
+  store.py        # L0 事件流 + 原子投影（vendored 自 fat3 flowcore）
   state.py        # 事件 → 投影 reducer
   model.py        # 节点模型 / 树语义
   graph.py        # requires/relates + 环检测
@@ -51,12 +68,15 @@ disflow/          # 包（store 为 vendored 自 fat3 flowcore）
   context.py      # brief() 上下文投影
   gates.py        # 验收门 + 证据 + 作用域
   dispatch.py     # drive/brief/collect（只推不跑）
+  views.py        # board/tree/graph（同源视图）
+  import_mgt.py   # mgt 导入器
   engine.py       # 动词面（锁 + append）
   cli.py          # 命令装配
 tests/            # stdlib unittest
+scripts/          # seed_dev_board.py
 ```
 
 ## 状态
 
-POC 完成（W1–W3 + acceptance 门）：37 测试通过，CLI 端到端跑通，`drive` 确定性，`doctor` 全绿。
-未做：专用视图（`board`/`tree`/`graph`）、mgt 导入器、独立验证（V1–V4）。见 `docs/dev-board.md`。
+v0.1 完成（14/15，仅 PM1 审批未做）：52 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、`doctor` 全绿。
+已知局限见 `docs/dev-board.md` §0（V1–V4 未独立复跑、V4 用合成 fixture、缺 `size_budget`/`tree_closure` 门）。

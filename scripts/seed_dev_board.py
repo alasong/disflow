@@ -21,6 +21,10 @@ GOAL = "交付 disflow v0.1：树+图+只推不跑分发器的最小闭环"
 TEST_CORE = "python3 -m unittest discover -s tests -t tests -p test_core.py"
 TEST_STORE = "python3 -m unittest discover -s tests -t tests -p test_store.py"
 TEST_ENGINE = "python3 -m unittest discover -s tests -t tests -p test_engine.py"
+TEST_VIEWS = "python3 -m unittest discover -s tests -t tests -p test_views.py"
+TEST_IMPORT = "python3 -m unittest discover -s tests -t tests -p test_import_mgt.py"
+TEST_E2E = "python3 -m unittest discover -s tests -t tests -p test_e2e.py"
+REBUILD_CHECK = "python3 -m disflow.cli rebuild --check"
 
 
 def acc(cmd: str | None) -> dict | None:
@@ -36,18 +40,19 @@ NODES: list[tuple[str, str, str, str, list[str], str | None]] = [
     ("D50", "上下文投影 brief()", "dev", "dev", ["D20", "D30"], TEST_CORE),
     ("D60", "分发器 drive/brief/collect（只推不跑）", "dev", "dev", ["D10", "D40", "D50"], TEST_ENGINE),
     ("D70", "门与证据（acceptance + 作用域）", "dev", "dev", ["D10", "D20"], TEST_ENGINE),
-    ("D80", "视图层 board/tree/graph", "dev", "dev", ["D20", "D30", "D40"], None),
-    ("D90", "mgt 导入器", "dev", "dev", ["D20", "D30"], None),
+    ("D80", "视图层 board/tree/graph", "dev", "dev", ["D20", "D30", "D40"], TEST_VIEWS),
+    ("D90", "mgt 导入器", "dev", "dev", ["D20", "D30"], TEST_IMPORT),
     ("D95", "CLI 装配 + doctor", "dev", "dev", ["D60", "D70"], TEST_ENGINE),
-    ("V1", "端到端：含跨子树依赖的树，drive 确定性", "verify", "qa", ["D60"], None),
-    ("V2", "证据门：构造一次假完成，必须被拒", "verify", "qa", ["D70"], None),
-    ("V3", "state rebuild --check 一致", "verify", "qa", ["D10"], None),
-    ("V4", "从 mgt 导入真实项目，status 等价", "verify", "qa", ["D90"], None),
+    ("V1", "端到端：含跨子树依赖的树，drive 确定性", "verify", "qa", ["D60"], TEST_E2E),
+    ("V2", "证据门：构造一次假完成，必须被拒", "verify", "qa", ["D70"], TEST_ENGINE),
+    ("V3", "state rebuild --check 一致", "verify", "qa", ["D10"], REBUILD_CHECK),
+    ("V4", "从 mgt 导入项目，status 等价（合成 fixture）", "verify", "qa", ["D90"], TEST_IMPORT),
     ("PM1", "批准发布 v0.1", "verify", "pm", ["V1", "V2", "V3", "V4"], None),
 ]
 
 # 已实现且验证通过、可以 done 的节点（其余留 pending，供后续 drive 推进）
-DONE_NODES = ["D10", "D20", "D30", "D40", "D50", "D60", "D70", "D95"]
+DONE_NODES = ["D10", "D20", "D30", "D40", "D50", "D60", "D70", "D80", "D90", "D95",
+              "V1", "V2", "V3", "V4"]
 
 # 写面（供波次打包；同波不重叠者才并行）
 TARGETS: dict[str, list[str]] = {

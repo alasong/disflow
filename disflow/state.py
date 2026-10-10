@@ -141,6 +141,14 @@ def _on_node_skip(state: dict, event: dict) -> None:
     node["skip_reason"] = event.get("reason")
 
 
+def _on_node_import(state: dict, event: dict) -> None:
+    """导入既有状态（如从 mgt）——标记 imported，**不声称经过本引擎的门**。"""
+    node = _node(state, event["slug"], event["node"])
+    node["status"] = event.get("status", "pending")
+    node["imported"] = True
+    node["evidence"] = {"imported": True, "note": event.get("note", "")}
+
+
 _HANDLERS = {
     "tree.init": _on_tree_init,
     "tree.goal": _on_tree_goal,
@@ -155,4 +163,5 @@ _HANDLERS = {
     "node.fail": _on_node_fail,
     "node.retry": _on_node_retry,
     "node.skip": _on_node_skip,
+    "node.import": _on_node_import,
 }

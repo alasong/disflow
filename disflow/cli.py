@@ -8,8 +8,9 @@ import argparse
 import json
 import sys
 
-from . import graph, store
+from . import graph, store, views
 from .engine import Engine, EngineError, GateReject
+from .import_mgt import apply_import, build_import, load_mgt
 from .state import project
 
 
@@ -216,6 +217,37 @@ def cmd_doctor(engine: Engine, args) -> int:
     return 0
 
 
+def cmd_board(engine: Engine, args) -> int:
+    for line in views.board_lines(engine.tree(args.tree), args.stage):
+        print(line)
+    return 0
+
+
+def cmd_tree(engine: Engine, args) -> int:
+    for line in views.tree_lines(engine.tree(args.tree)):
+        print(line)
+    return 0
+
+
+def cmd_graph(engine: Engine, args) -> int:
+    target = engine.tree(args.tree)
+    print(views.to_dot(target, args.tree) if args.dot else "\n".join(views.graph_lines(target)))
+    return 0
+
+
+def cmd_import(engine: Engine, args) -> int:
+    if args.what != "mgt":
+        print(f"不支持导入源：{args.what}（当前仅 mgt）", file=sys.stderr)
+        return 1
+    mgt = load_mgt(args.path)
+    if not mgt["todos"]:
+        print(f"未找到 mgt 状态：{args.path}/.fat/**/state.json", file=sys.stderr)
+        return 1
+    stats = apply_import(engine, args.tree, build_import(mgt))
+    _dump(stats)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="disflow", description="任务分发流引擎（只推不跑）")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -304,6 +336,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     node = add("rebuild", cmd_rebuild)
     node.add_argument("--check", action="store_true")
+
+    node = add("board", cmd_board)
+    node.add_argument("tree")
+    node.add_argument("--stage", default=None)
+
+    node = add("tree", cmd_tree)
+    node.add_argument("tree")
+
+    node = add("graph", cmd_graph)
+    node.add_argument("tree")
+    node.add_argument("--dot", action="store_true")
+
+    node = add("import", cmd_import)
+    node.add_argument("what")
+    node.add_argument("path")
+    node.add_argument("--tree", required=True)
 
     add("doctor", cmd_doctor)
     return parser

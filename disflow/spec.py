@@ -30,7 +30,7 @@ ROLES: tuple[str, ...] = ("dev", "qa", "pm")
 # 事件 kind 闭集（投影 reducer 只认这些；出现未知 kind 即报错）
 EVENT_KINDS: tuple[str, ...] = (
     "tree.init", "tree.goal",
-    "node.expand", "node.require", "node.relate",
+    "node.expand", "node.require", "node.relate", "node.import",
     "asset.produce", "asset.consume",
     "node.start", "node.collect", "node.done",
     "node.fail", "node.retry", "node.skip",
