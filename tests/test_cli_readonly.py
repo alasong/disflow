@@ -18,6 +18,41 @@ from base import DisflowTestCase, acceptance
 from disflow import spec, store
 from disflow.cli import main
 
+# ── 回归基线：改动前（本节点起点 HEAD）在「无任何节点在跑」时抓取的 `drive --json` 输出 ──
+#   逐字节固化在此，用于判据「无在跑 ⇒ 输出与基线一致」（design.md 对 drive 的「两次同输入
+#   同输出」承诺）。带末尾换行，与 `_dump` 的 `print(json.dumps(..., indent=2))` 同形。
+_BASELINE_DRIVE_NO_RUNNING = """\
+{
+  "tree": "t",
+  "goal": "只读测试",
+  "root": "root",
+  "live": [
+    "a",
+    "b"
+  ],
+  "running": [],
+  "ready_wave": [
+    "a"
+  ],
+  "waves": [
+    [
+      "a"
+    ]
+  ],
+  "blocked": {
+    "b": [
+      "a"
+    ]
+  },
+  "stuck": false,
+  "progress": {
+    "tasks": 2,
+    "done": 0,
+    "pct": 0
+  }
+}
+"""
+
 
 class CliReadOnlyVerbTest(DisflowTestCase):
     def _run(self, argv: list[str]) -> tuple[int, str, str]:
@@ -72,6 +107,55 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         self._seed()
         _code, out, _err = self._run(["drive", "t", "--dry-run", "--json"])
         self.assertTrue(json.loads(out)["dry_run"])
+
+    # ── 写面占用：在跑节点的 touch_plan 算已占用（不许派出与在跑者抢同一文件的节点）──
+
+    def _seed_two_writers(self, running_touch: str, other_touch: str) -> None:
+        """两个就绪节点 runner / clash，写面可配 —— 用于「在跑占用」判据。"""
+        self._run(["init", "t", "--goal", "在跑占用"])
+        acc = json.dumps(acceptance(), ensure_ascii=False)
+        self._run(["expand", "t", "root", "--children",
+                   '[{"id":"runner","goal":"在跑","stage":"dev","touch_plan":['
+                   + json.dumps(running_touch) + '],"acceptance":' + acc + '},'
+                   '{"id":"clash","goal":"候选","stage":"dev","touch_plan":['
+                   + json.dumps(other_touch) + '],"acceptance":' + acc + '}]'])
+
+    def test_drive_defers_clash_with_running_writer_and_reports_why(self):
+        """与在跑节点写面重叠 ⇒ 不进 ready_wave，但**必须报因**（绝不静默丢）。"""
+        self._seed_two_writers("disflow/engine.py", "disflow/engine.py")
+        code, _out, err = self._run(["start", "t", "runner",
+                                     "--holder", "host", "--ttl", "3600"])
+        self.assertEqual(code, 0, err)
+        _code, out, _err = self._run(["drive", "t", "--json"])
+        payload = json.loads(out)
+        self.assertEqual(payload["ready_wave"], [], "重叠候选不许进就绪首波")
+        self.assertEqual(payload["waves"], [])
+        self.assertEqual([entry["node"] for entry in payload["deferred"]], ["clash"])
+        why = payload["deferred"][0]["why"]
+        self.assertIn("runner", why, "理由必须点名在跑的谁")
+        self.assertIn("disflow/engine.py", why, "理由必须点名重叠哪条路径")
+        # 人读态同样要报（两条路都要有）
+        _code, human, _err = self._run(["drive", "t"])
+        self.assertIn("clash", human)
+        self.assertIn("runner", human)
+
+    def test_drive_keeps_non_overlapping_candidate_in_ready_wave(self):
+        """不重叠 ⇒ 并行照旧：在跑节点不误伤无关候选（也不冒 deferred 键）。"""
+        self._seed_two_writers("src/a.py", "src/b.py")
+        self._run(["start", "t", "runner", "--holder", "host", "--ttl", "3600"])
+        _code, out, _err = self._run(["drive", "t", "--json"])
+        payload = json.loads(out)
+        self.assertEqual(payload["ready_wave"], ["clash"])
+        self.assertNotIn("deferred", payload)
+
+    def test_drive_no_running_matches_baseline_byte_for_byte(self):
+        """回归判据：无任何节点在跑时，`drive --json` 必须与改动前基线**逐字节一致**。"""
+        self._seed()
+        code, out, _err = self._run(["drive", "t", "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(out, _BASELINE_DRIVE_NO_RUNNING,
+                         "无在跑节点时输出必须与基线逐字节一致（无新闻 = 不加键）")
+        self.assertNotIn("deferred", json.loads(out))
 
     def test_brief_is_a_complete_contract(self):
         self._seed()
