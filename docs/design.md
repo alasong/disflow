@@ -276,6 +276,7 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 | `disflow reap <tree>` | 回收**过期**租约（running → pending） | 显式事件；不自动”看时钟“ |
 | `disflow trees` | 列出所有树 + 是否 closed | 投影，不是第二存储 |
 | `disflow close <tree>` | 终止树（跑 `tree_closure` + `tree_coverage` 门） | 供跨树 `awaits` 信号 |
+| `disflow reopen <tree> [--reason S]` | 显式撤销 `closed`（落 `tree.reopen`，理由进 `reopen_log`） | 关错了 / 漏了活时的正路：不至于要么造新树、要么静默失效 |
 
 ### 5.3 spawn 归宿主
 
@@ -511,6 +512,7 @@ disflow done <tree> <node> [--decl '<json>'] [--dry-run]
 disflow fail/retry/skip <tree> <node>
 disflow reap <tree>                                # 回收过期租约（running → pending）
 disflow close <tree> [--dry-run]                   # 树级门
+disflow reopen <tree> [--reason S]                 # 显式撤销 closed（关树后想接着干的正路）
 disflow drive <tree> [--json] [--dry-run]          # 只推不跑
 disflow brief <tree> <node>                        # 写全派发契约
 disflow plan <tree>
@@ -526,7 +528,7 @@ disflow import mgt <path> --tree <T>               # 迁移（§10）
 disflow doctor                                     # 自检
 ```
 
-> 共 33 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
+> 共 34 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
 
 ### 9.1 边界：`apply` 执行、`reap` 只计划
 

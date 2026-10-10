@@ -167,12 +167,25 @@ class Engine:
                     f"{node_id}: role 取值非法：{role!r}（允许：{list(self.cfg.roles)}）"
                     "——自定义负责方请写进 disflow.json 的 \"roles\"")
 
-    def expand(self, tree: str, parent: str, children: list[dict]) -> dict:
+    def expand(self, tree: str, parent: str, children: list[dict], *, holder: str = "") -> dict:
+        """在 `parent` 下挂子节点。
+
+        `holder` 是「谁挂的」——`start` 早就有 `--holder` 可追溯「谁在干」，而 `expand`
+        一直没有，于是树长了任务却查不到是谁挂的。补上（可选，不填就为空字符串）。
+
+        **已关闭的树拒收**：`closed` 是跳树完成信号（`awaits` 读它）。允许在关闭后继续挂
+        任务 = 让该信号失真而不自知（消费方会基于一个未真正完成的上游开工）。要加就先
+        显式重开（`disflow reopen`）——报错文本直接给出该命令，不让人猜。
+        """
         def guard(t: dict) -> None:
             self._need(t, parent)
+            if t.get("closed"):
+                raise EngineError(
+                    f"{tree} 已关闭（tree.close）：在关闭后挂任务会让 awaits 的完成信号失真——\n"
+                    f"  要接着干就先显式重开：disflow reopen {tree} --reason '<为何重开>'")
             self._validate_vocabulary(children)
         return self._write("node.expand", tree=tree, node=parent, guard=guard,
-                           prepare=lambda _: {"children": children})
+                           prepare=lambda _: {"children": children, "holder": holder})
 
     def require(self, tree: str, node: str, dep: str) -> dict:
         def guard(t: dict) -> None:
@@ -405,6 +418,20 @@ class Engine:
         return self._write("node.rescope", tree=tree, node=node, guard=guard,
                            prepare=lambda _: {"touch_plan": touch, "reason": reason},
                            dry_run=dry_run)
+
+    def reopen(self, tree: str, *, reason: str = "") -> dict:
+        """显式撤销 `tree.close`（与 `close` 同一形状：幂等——重复调不会报错）。
+
+        为何要有这个动词：`close` 之后想接着干就只有两条路——要么造一个新树（丢掉原树
+        的历史与 `awaits` 信号），要么静默失效（删事件/改投影，不可接受）。`reopen` 是
+        第三条：留下 `tree.reopen` 事件，`reopen_log` 记下重开理由。
+
+        `reason` 可选（不填就是无名重开）——与 `skip --reason` 的宽容度保持一致；真正的
+        审计价值在「至少有一次显式事件」，而不是在强逼字符串。
+        """
+        def prepare(_: dict) -> dict:
+            return {"reason": reason}
+        return self._write("tree.reopen", tree=tree, prepare=prepare)
 
     def close(self, tree: str, dry_run: bool = False) -> dict:
         """树级门（两个）：`tree_closure`（终止条件）+ `tree_coverage`（需求已登记 + 可跑判据）。"""

@@ -41,5 +41,5 @@ EVENT_KINDS: tuple[str, ...] = (
     "asset.produce", "asset.consume",
     "node.start", "node.collect", "node.done",
     "node.fail", "node.retry", "node.skip", "node.reclaim",
-    "tree.close",
+    "tree.close", "tree.reopen",
 )

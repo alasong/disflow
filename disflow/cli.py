@@ -23,7 +23,7 @@ from .engine import Engine, EngineError, GateReject
 from .import_mgt import apply_import, build_import, load_mgt
 from .metrics import parse_deadline
 from .ready import lease_overdue_seconds
-from .state import project
+from .state import expands_after_close, project
 
 
 def _dump(payload, file=None) -> None:
@@ -52,7 +52,8 @@ def cmd_goal(engine: Engine, args) -> int:
 
 
 def cmd_expand(engine: Engine, args) -> int:
-    engine.expand(args.tree, args.parent, _loads(args.children))
+    engine.expand(args.tree, args.parent, _loads(args.children),
+                  holder=getattr(args, "holder", "") or "")
     print(f"✓ {args.parent} 展开子节点")
     return 0
 
@@ -293,6 +294,14 @@ def cmd_doctor(engine: Engine, args) -> int:
             for consumed in node.get("consumes") or []:
                 if consumed not in tree["assets"]:
                     problems.append(f"{name}/{node_id}: consumes 未登记 {consumed}")
+    # 「关树后又挂任务」：**只能从事件顺序判**（终态里它和「合法地带着未完成任务关树」
+    # 长得一模一样）。这条不是新守卫，而是**事后探测**：`expand` 的拒收只管从今往后。
+    for item in expands_after_close(store.load_events(engine.spec)):
+        who = f"（holder={item['holder']}）" if item["holder"] else ""
+        problems.append(
+            f"{item['tree']}: {item['closed_at']} 已关闭，但之后又挂了任务"
+            f"（{item['expanded_at']} · node={item['node']}）{who}"
+            f"—— awaits 的完成信号已失真；若确实要继续，应显式 `disflow reopen {item['tree']}`")
     if problems:
         # 失败报文统一走 stderr（与 GateReject 一致）：脚本 2>/dev/null 时不会把失败看成成功。
         # stdout 必须为空——“失败时 stdout 干净”是既有契约（tests/test_cli_readonly.py）。
@@ -365,6 +374,17 @@ def cmd_rescope(engine: Engine, args) -> int:
         print(f"✓ 预演通过：{args.node} 的声明可改为 {touch}（**未落事件**）")
         return 0
     print(f"✓ {args.node} 写面声明已更新：{touch}")
+    return 0
+
+
+def cmd_reopen(engine: Engine, args) -> int:
+    reason = getattr(args, "reason", "") or ""
+    engine.reopen(args.tree, reason=reason)
+    print(f"✓ {args.tree} 已重开（tree.reopen）")
+    if reason:
+        print(f"  理由已留痕：{reason}")
+    else:
+        print("  （未给 --reason——事件已落，但事后无法知道为何重开）")
     return 0
 
 
@@ -653,6 +673,7 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("tree")
     node.add_argument("parent")
     node.add_argument("--children", required=True)
+    node.add_argument("--holder", default="", help="谁挂的，记入事件（便于事后追溯）")
 
     node = add("require", cmd_require)
     node.add_argument("tree")
@@ -768,6 +789,11 @@ def build_parser() -> argparse.ArgumentParser:
     node = add("close", cmd_close)
     node.add_argument("tree")
     node.add_argument("--dry-run", action="store_true", help="预演：跑两门但不落事件")
+
+    node = add("reopen", cmd_reopen)
+    node.add_argument("tree")
+    node.add_argument("--reason", default="",
+                      help="为何重开（可选；不填事件也会落，但事后查不到原因）")
 
     node = add("reap", cmd_reap)
     node.add_argument("tree")

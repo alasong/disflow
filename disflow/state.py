@@ -22,6 +22,49 @@ def project(events: list[dict]) -> dict:
     return state
 
 
+def expands_after_close(events: list[dict]) -> list[dict]:
+    """找「树已关闭后又挂任务」的历史事件（每棵违规树一条，取最早的违规 expand）。
+
+    为何要这道检查：`closed` 是**跳树完成信号**（另一棵树的 `awaits` 读它）。树一旦关闭，
+    它的完成就被消费方读走了，此时再挂任务会让信号失真——所以 `Engine.expand` 已对已关闭
+    的树拒收（2026-10-10）。
+
+    为何不能用**终态**判：「已关闭 **且** 还有未完成任务」是**合法状态**——`close` 本来就不
+    要求没有未完成任务（`tree_closure_check` 只看有没有 done 的 evaluate/沉淀），
+    「放弃剩余活、就这么关」是正当意图。两种情形在 `state.json` 里长得一模一样，
+    只有**事件顺序**能分开：真正的违规是「`node.expand` 晚于该树最后一次 `tree.close`」。
+
+    何以仍要它：`expand` 的拒收只能管**从今往后**；本条管**已经落在事件流里的**违规
+    （修复前建的状态目录、或手改事件）。
+
+    **`tree.reopen` 会把违规清掉**——这不是掩盖：与 `scope_waiver` 同一形状（显式破例、
+    留痕、然后放行）。宿主重开时已经知道了「信号可能已被读走」，而那件事的事实留在事件
+    日志里（`tree.reopen` + `reopen_log`），doctor 只报**当下还需要动作**的那些。
+    否则这条会变成一条永远消不掉的红，结果是人学会无视 doctor。
+    """
+    last_close: dict[str, str] = {}
+    seen: dict[str, dict] = {}
+    for event in events:
+        slug = event.get("slug")
+        kind = event.get("kind")
+        if not slug:
+            continue
+        if kind == "tree.close":
+            last_close[slug] = event.get("ts") or ""
+        elif kind == "tree.reopen":
+            last_close.pop(slug, None)          # 显式重开：前一条 close 不再算数
+            seen.pop(slug, None)                # 且承认并清掉由它引起的那条违规
+        elif kind == "node.expand" and slug in last_close:
+            seen.setdefault(slug, {
+                "tree": slug,
+                "closed_at": last_close[slug],
+                "expanded_at": event.get("ts") or "",
+                "node": event.get("node") or "",
+                "holder": event.get("holder") or "",
+            })
+    return list(seen.values())
+
+
 def apply_event(state: dict, event: dict) -> None:
     kind = str(event.get("kind") or "")
     handler = _HANDLERS.get(kind)
@@ -276,6 +319,22 @@ def _on_tree_close(state: dict, event: dict) -> None:
     state["trees"][event["slug"]]["closed"] = True
 
 
+def _on_tree_reopen(state: dict, event: dict) -> None:
+    """撤销 `tree.close`：**显式、留痕**。
+
+    为何必须显式：`closed` 是**跳树完成信号**（另一棵树的 `awaits` 读它）。若「挂任务」能
+    悄悄让该信号失效，消费方就会基于一个未真正完成的上游开工——所以「重开」得是一次
+    可审计的动作。历史（重开过几次、为何）进 `reopen_log`，与 `rescope_log` 同一形状。
+    """
+    tree = state["trees"][event["slug"]]
+    if tree.get("closed"):                 # 只在真的从「已关闭」变回「未关闭」时记一笔
+        tree.setdefault("reopen_log", []).append({
+            "reason": event.get("reason") or "",
+            "at": event.get("ts") or "",
+        })
+    tree["closed"] = False
+
+
 def _on_node_reclaim(state: dict, event: dict) -> None:
     """回收过期租约：回到 pending，保留回收原因（可审计）。"""
     node = _node(state, event["slug"], event["node"])
@@ -305,5 +364,6 @@ _HANDLERS = {
     "node.context": _on_node_context,
     "node.rescope": _on_node_rescope,
     "tree.close": _on_tree_close,
+    "tree.reopen": _on_tree_reopen,
     "node.reclaim": _on_node_reclaim,
 }
