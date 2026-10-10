@@ -270,17 +270,26 @@ def rebuild(spec: dict, *, project, offset: int | None = None) -> dict:
 
 
 def _persist(spec: dict, record: dict, project) -> dict:
-    """唯一落盘+刷新点：先形状校验 → O_APPEND 落一行 → 随即用注入的 `project` 重算投影并原子写，
-    并给投影盖自述偏移 `projection_offset = len(events)`（与正文同一次原子写落盘）。
-    落盘不变式（hard）：磁盘投影正文必须恰好等于 `project(events[:projection_offset])`；
-    存活性（soft）：写出点落事件后立即把投影刷到 `len(events)`，故此处 lag=0。
-    失败分态（混在一句里会把诊断说反）：append 失败 → `append_jsonl` 抛「事件未落盘（kind）…」；
-    投影失败 → 「事件已落盘（kind）但投影未刷新… 可由 rebuild 重建」（事件已改，故不谎称全失败）。"""
+    """唯一落盘+刷新点：形状校验 → **先重投影试算（语义闸门）** → O_APPEND 落一行 → 原子写投影。
+
+    **为何先试算（曾是真缺陷的修法）**：`project` 就是语义校验点（重复 id / 环 / 悬空引用
+    都在这里抛）。若先落盘再重投影，**被拒的事件会留在事件流里**，使此后任何重投影
+    （rebuild / 下一次写）都失败——即「一次非法写入 = 状态永久不可恢复」。
+    先试算则非法输入**一条事件都不落**，状态零变化。
+
+    失败分态（混在一句里会把诊断说反）：
+    - 形状非法 / **语义非法**（project 抛）→ 未落盘，上抛（可安全重试）。
+    - append 失败 → `append_jsonl` 抛「事件未落盘（kind）…」。
+    - 投影写盘失败 → 「事件已落盘（kind）但投影未刷新… 可由 rebuild 重建」（事件合法，不谎称全失败）。
+    """
     _validate_record(spec, record)
+    events = load_events(spec)
+    candidate = events + [record]
+    # 语义闸门：非法即抛，此时**尚未落盘**（这是「事件流永远可重放」的保证）
+    state = stamp_projection(project(candidate), len(candidate))
     append_jsonl(events_path(spec), record)     # 失败已带「事件未落盘（<kind>）」措辞，直接上抛
-    try:                                        # 投影失败 ≠ 事件失败
-        events = load_events(spec)
-        write_projection(spec, stamp_projection(project(events), len(events)))
+    try:
+        write_projection(spec, state)
     except OSError as exc:
         raise OSError(
             f"事件已落盘（{record.get('kind')}）但投影未刷新：{exc} —— 可由 rebuild 重建"
@@ -392,16 +401,21 @@ def batch_append(spec: dict, records: Iterable[dict], *, project) -> dict:
 
     锁：与单条写点一致，**由调用方**在「读判定 → 写事件」整段持 `store.lock`；本函数不自锁。
     `project` 必填（与 `append_event` 同规，不给默认值，以免造出静默不刷新的第二路径）。
-    返回 `{"appended": 本批落盘条数, "projection_offset": 批末事件数}`。"""
+    返回 `{"appended": 本批落盘条数, "projection_offset": 批末事件数}`。
+
+    **注意**：disflow 目前不为任何调用方（`tree.batch_phase` 那套批处理未落地），
+    但仍采用与 `_persist` 同款的**先试算后落盘**语义，以免成为哑雷。"""
+    pending = list(records)
+    events = load_events(spec)
+    # 语义闸门（与 _persist 同款）：先整批试算，非法则**一条都不落**
+    candidate = stamp_projection(project(events + pending), len(events) + len(pending))
     appended = 0
-    for record in records:
+    for record in pending:
         _validate_record(spec, record)
         append_jsonl(events_path(spec), record)   # 失败已带「事件未落盘（<kind>）」措辞，直接上抛
         appended += 1
-    try:                                          # 批末一次性重算+写投影（投影失败 ≠ 事件失败）
-        events = load_events(spec)
-        offset = len(events)
-        write_projection(spec, stamp_projection(project(events), offset))
+    try:                                          # 批末一次性写投影（写盘失败 ≠ 事件失败）
+        write_projection(spec, candidate)
     except OSError as exc:
         raise OSError(
             f"批次已落盘（{appended} 条）但投影未刷新：{exc} —— 可由 rebuild 重建"
