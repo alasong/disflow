@@ -84,5 +84,76 @@ class StoreTest(DisflowTestCase):
         self.assertEqual(pathlib.Path(path).read_bytes(), raw)
 
 
+class BatchAppendTest(DisflowTestCase):
+    """`batch_append`：批内逐条 append、批末**恰好一次**写投影。
+
+    **为何直到现在才补测**：它当前**零调用方**（`tree.batch_phase` 那套批处理未落地），
+    于是 285 个测试、变异测试、逐文件 LSP 探针全部没碰到它——里面藏了一个**真实 `NameError`**
+    （返回行引用了未定义的 `offset`）。它是全仓 pyright 扫出来的。
+    讽刺的是它自己的 docstring 写着“仍采用先试算后落盘语义，**以免成为哑雷**”。
+    **死路径 + 零测试 = 哑雷**；这条教训写进 `docs/dev-board.md` §0.11。
+    """
+
+    def _batch(self, kinds: list[tuple[str, str, dict]]) -> dict:
+        records = [store.build_event(kind, slug=slug, extra=extra)
+                   for kind, slug, extra in kinds]
+        return store.batch_append(spec.SPEC, records, project=state.project)
+
+    def test_returns_the_batch_end_offset(self):
+        """**回归**：返回行曾用未定义的 `offset` ⇒ 任何调用方都拿不到结果（`NameError`）。
+
+        断言的是**返回值与盘上现实一致**，而不只是“不报错”。
+        """
+        result = self._batch([("tree.init", "t", {"goal": "g"}),
+                              ("tree.goal", "t", {"goal": "g2"})])
+        self.assertEqual(result["appended"], 2)
+        self.assertEqual(result["projection_offset"], len(store.load_events(spec.SPEC)))
+        self.assertEqual(store.read_projection_offset(spec.SPEC), result["projection_offset"])
+
+    def test_projection_reflects_the_whole_batch(self):
+        self._batch([("tree.init", "t", {"goal": "g"}),
+                     ("tree.goal", "t", {"goal": "新目标"})])
+        self.assertEqual(store.read_json(store.projection_path(spec.SPEC))["trees"]["t"]["goal"],
+                         "新目标")
+        matched, diffs = store.projection_matches(spec.SPEC, project=state.project)
+        self.assertTrue(matched, diffs)
+
+    def test_empty_batch_is_a_noop_that_still_reports_truthfully(self):
+        self._batch([("tree.init", "t", {"goal": "g"})])
+        before = len(store.load_events(spec.SPEC))
+        result = store.batch_append(spec.SPEC, [], project=state.project)
+        self.assertEqual(result["appended"], 0)
+        self.assertEqual(result["projection_offset"], before)
+        self.assertEqual(len(store.load_events(spec.SPEC)), before)
+
+    def test_semantically_illegal_batch_lands_nothing(self):
+        """整批试算失败 ⇒ **一条都不落**（与 `_persist` 同款的先试算后落盘）。
+
+        用未知 kind：它无字段模板（`_validate_record` 放行），靠 `project` 里的语义闸门拦下。
+        """
+        self._batch([("tree.init", "t", {"goal": "g"})])
+        events_before = len(store.load_events(spec.SPEC))
+        proj_path = store.projection_path(spec.SPEC)
+        raw_before = pathlib.Path(proj_path).read_bytes()
+        records = [store.build_event("tree.goal", slug="t", extra={"goal": "g2"}),
+                   store.build_event("node.不存在", slug="t")]
+        with self.assertRaises(ValueError):
+            store.batch_append(spec.SPEC, records, project=state.project)
+        self.assertEqual(len(store.load_events(spec.SPEC)), events_before,
+                         "被拒的批次不许落任何一条")
+        self.assertEqual(pathlib.Path(proj_path).read_bytes(), raw_before,
+                         "投影也要字节级不变")
+        matched, diffs = store.projection_matches(spec.SPEC, project=state.project)
+        self.assertTrue(matched, diffs)
+
+    def test_the_returned_offset_agrees_with_disk_after_a_second_batch(self):
+        """第二批的偏移必须接着第一批算（不是从 0 重来）。"""
+        first = self._batch([("tree.init", "t", {"goal": "g"})])
+        second = self._batch([("tree.goal", "t", {"goal": "g2"}),
+                              ("tree.goal", "t", {"goal": "g3"})])
+        self.assertEqual(second["projection_offset"], len(store.load_events(spec.SPEC)))
+        self.assertGreater(second["projection_offset"], first["projection_offset"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -191,7 +191,7 @@ def persist_event(*, events_file, projection_file, record, validate=None, reduce
 
 def stamp_projection(state: dict, offset: int) -> dict:
     """给投影正文盖**控制键** `projection_offset`（自述偏移），返回新 dict（不改入参）。
-    只由写点调用（`_persist` / `persist_event` / `batch_append` / `cmd_state_restore`）—— 与正文
+    只由写点调用（`_persist` / `persist_event` / `batch_append`）—— 与正文
     同一次原子写落盘，故声明偏移与正文不可能不同步。"""
     return dict(state) | {PROJECTION_OFFSET: offset}
 
@@ -439,4 +439,4 @@ def batch_append(spec: dict, records: Iterable[dict], *, project) -> dict:
         raise OSError(
             f"批次已落盘（{appended} 条）但投影未刷新：{exc} —— 可由 rebuild 重建"
         ) from exc
-    return {"appended": appended, "projection_offset": offset}
+    return {"appended": appended, "projection_offset": len(events) + appended}

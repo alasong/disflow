@@ -272,7 +272,7 @@ class ExpectSemanticsTest(DisflowTestCase):
         self.assertFalse(ok)
         self.assertIn("缺少 acceptance.cmd", why)
 
-    def test_unparseable_cmd_is_rejected_not_crashed(self):
+    def test_unparsable_cmd_is_rejected_not_crashed(self):
         ok, why, _meta = gates.run_acceptance({"cmd": 'echo "未闭合', "expect": "exit0"}, self.tmp)
         self.assertFalse(ok)
         self.assertIn("argv", why)

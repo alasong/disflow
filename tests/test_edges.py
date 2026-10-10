@@ -89,6 +89,80 @@ class EdgeTest(DisflowTestCase):
         matched, diffs = store.projection_matches(spec.SPEC, project=project)
         self.assertTrue(matched, diffs)                 # 事件流仍可重放
 
+    # ── 删信息边（`unrelate`）──────────────────────────────────────────
+
+    def test_unrelate_removes_the_edge(self):
+        self.engine.relate("t", "A", "B")
+        self.assertEqual(self._tree()["nodes"]["A"]["relates"], ["B"])
+        self.engine.unrelate("t", "A", "B")
+        self.assertEqual(self._tree()["nodes"]["A"]["relates"], [])
+
+    def test_unrelate_only_touches_the_named_edge(self):
+        self.engine.relate("t", "A", "B")
+        self.engine.relate("t", "A", "C")
+        self.engine.unrelate("t", "A", "B")
+        self.assertEqual(self._tree()["nodes"]["A"]["relates"], ["C"])
+
+    def test_unrelate_does_not_touch_requires(self):
+        """两个边种分得很清：删 `relates` 不能碰 `requires`。
+
+        两者语义不同（调度 vs 信息），一个动词不能同时管两边。
+        """
+        self.engine.require("t", "B", "A")
+        self.engine.relate("t", "B", "C")
+        self.engine.unrelate("t", "B", "C")
+        node = self._tree()["nodes"]["B"]
+        self.assertEqual(node["relates"], [])
+        self.assertEqual(node["requires"], ["A"], "requires 不该被动到")
+
+    def test_unrelate_can_clear_a_dangling_edge(self):
+        """对端不存在也要能删（与 `unrequire` 同样的理由）。"""
+        store.append_event(spec.SPEC, "node.relate", project=project,
+                           slug="t", node="A", extra={"other": "ghost"})
+        self.assertEqual(self._tree()["nodes"]["A"]["relates"], ["ghost"])
+        self.engine.unrelate("t", "A", "ghost")
+        self.assertEqual(self._tree()["nodes"]["A"]["relates"], [])
+
+    def test_unrelate_rejects_a_missing_edge(self):
+        self.engine.relate("t", "A", "B")
+        with self.assertRaises(EngineError):
+            self.engine.unrelate("t", "A", "C")
+
+    def test_unrelate_rejects_an_unknown_node(self):
+        with self.assertRaises(EngineError):
+            self.engine.unrelate("t", "没有这个节点", "A")
+
+    def test_rejected_unrelate_writes_nothing(self):
+        """被拒的写入不得进事件流（`store._persist` 的先试算契约）。"""
+        before = self._events()
+        for _ in range(2):
+            with self.assertRaises(EngineError):
+                self.engine.unrelate("t", "A", "B")
+        self.assertEqual(self._events(), before)
+        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        self.assertTrue(matched, diffs)                 # 事件流仍可重放
+
+    def test_relates_never_affects_readiness(self):
+        """`unrelate` 优先级低的原因，写成断言：信息边**不参与就绪判定**。
+
+        加/删 `relates` 前后，就绪集合必须一模一样——否则就不叫“信息边”了。
+        """
+        baseline = self._ready()
+        self.engine.relate("t", "B", "A")
+        self.assertEqual(self._ready(), baseline, "relate 不该改变就绪集合")
+        self.engine.unrelate("t", "B", "A")
+        self.assertEqual(self._ready(), baseline, "unrelate 不该改变就绪集合")
+
+    def test_relates_replay_reconstructs_the_net_edges(self):
+        self.engine.relate("t", "A", "B")
+        self.engine.relate("t", "A", "C")
+        self.engine.unrelate("t", "A", "B")
+        self.engine.relate("t", "A", "B")              # 删错了能加回来
+        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        self.assertTrue(matched, diffs)
+        self.assertEqual(sorted(self._tree()["nodes"]["A"]["relates"]), ["B", "C"],
+                         "删错了能加回来；顺序按追加顺序（删 B 后是 ['C']，再加 B → ['C','B']）")
+
     # ── 加边的校验没有被放松（反向保护）─────────────────────────────────
 
     def test_require_still_rejects_cycles_and_self_loops(self):

@@ -1,6 +1,14 @@
 """disflow · 命令行（只装配，不含业务逻辑）。
 
 所有业务在 `engine` / `dispatch` / `gates`；本模块只做参数解析与打印。
+
+**两条装配约定**（历史上在这两处各遗漏过一次，合计三种“静默错”）：
+1. **旗标必须真接上引擎**：`--dry-run` / `--ttl` 漏传时命令看着成功、却真写了事件/用错租约。
+2. **报文通道分明**：成功 → stdout；**失败与门拒收 → stderr**。否则脚本 `2>/dev/null`
+   会把失败看成成功。
+
+另：只做形状/存在性校验的动词（`require`/`unrequire`/`relate`/`unrelate`/`produce`/`consume`）
+**不配** `--dry-run`——只有跑门的写动词（`start`/`done`/`close`/`drive`）才配（见 `design.md` §7.3）。
 """
 from __future__ import annotations
 
@@ -63,6 +71,12 @@ def cmd_unrequire(engine: Engine, args) -> int:
 def cmd_relate(engine: Engine, args) -> int:
     engine.relate(args.tree, args.node, args.other)
     print(f"✓ {args.node} relates {args.other}")
+    return 0
+
+
+def cmd_unrelate(engine: Engine, args) -> int:
+    engine.unrelate(args.tree, args.node, args.other)
+    print(f"✓ {args.node} 不再 relates {args.other}")
     return 0
 
 
@@ -409,6 +423,11 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("dep")
 
     node = add("relate", cmd_relate)
+    node.add_argument("tree")
+    node.add_argument("node")
+    node.add_argument("other")
+
+    node = add("unrelate", cmd_unrelate)
     node.add_argument("tree")
     node.add_argument("node")
     node.add_argument("other")

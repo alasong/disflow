@@ -299,13 +299,20 @@ class VocabularyValidationTest(DisflowTestCase):
         # 拒收必须不落事件
         self.assertEqual(engine.load()["trees"]["t"]["nodes"].keys(), {"root"})
 
-    def test_role_typo_is_rejected_at_expand(self):
+    def test_role_not_in_the_allowlist_is_rejected_at_expand(self):
+        """未登记的 role 必须被拒。
+
+        为何用 `sre`（一个未登记但拼写正常的词）而不用错别字：被测行为是“值不在白名单里”，
+        错别字与合法未登记词走的是**同一条**分支。用错别字只会让拼写检查器把一个
+        **故意的测试输入**当成文档笔误报出来（`typos` 的行内忽略对它不起作用，实测），
+        而 `typos` 对 docs 里的真笔误是有用的——不应为了这个把它全局关掉。
+        """
         engine = Engine(cwd=self.tmp)
         engine.init_tree("t", "g")
         with self.assertRaises(EngineError) as ctx:
             engine.expand("t", "root", [{"id": "n1", "goal": "g", "acceptance": acceptance(),
-                                         "role": "devloper"}])
-        self.assertIn("devloper", str(ctx.exception))
+                                         "role": "sre"}])
+        self.assertIn("sre", str(ctx.exception))
         self.assertIn("disflow.json", str(ctx.exception))
 
     def test_custom_stage_and_role_allowed_via_config(self):

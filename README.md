@@ -143,6 +143,9 @@ export DISFLOW_STATE_DIR=.disflow
 python3 -m disflow.cli init demo --goal "目标"
 python3 -m disflow.cli expand demo root --children '[{"id":"a","goal":"做A","acceptance":{"cmd":"true","expect":"exit0"}}]'
 python3 -m disflow.cli require demo b a          # 建图（写时拒环）
+python3 -m disflow.cli unrequire demo b a        # 建错了就删（删边不要求对端存在）
+python3 -m disflow.cli relate demo b a           # 信息边（不参与就绪判定）
+python3 -m disflow.cli unrelate demo b a         # 信息边建错了也删得掉
 python3 -m disflow.cli drive demo                # 只推不跑：就绪波次 + brief 命令
 python3 -m disflow.cli brief demo a              # worker 的完整输入契约
 python3 -m disflow.cli start demo a --holder w1
@@ -214,8 +217,8 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 276 passed（零第三方依赖）
-python3 scripts/mutation_check.py                 # 变异测试：39/39（验证测试真的有牙）
+python3 -m unittest discover -s tests -t tests    # 295 passed（零第三方依赖）
+python3 scripts/mutation_check.py                 # 变异测试：41/41（验证测试真的有牙）
 ```
 
 > 上面那段「5 分钟上手」本身也被测试盯着：`tests/test_readme_walkthrough.py` 会

@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 276 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 295 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -177,7 +177,7 @@ disflow 决定，**无硬编码列表**。
 
 **变异测试抳出 2 个「测试自身的洞」**（已补：`test_declared_dangling_relates_is_rejected`、
 `test_per_file_agrees_with_total`）——详见 backlog §B3/B4 已结节。
-可复跑回归口：`python3 scripts/mutation_check.py`（**39/39**，有漏抓则退出码 1）。
+可复跑回归口：`python3 scripts/mutation_check.py`（**41/41**，有漏抓则退出码 1）。
 
 ### 0.7 python-expert 12 类审查（按“该配置化却硬编码”切入）
 
@@ -275,6 +275,69 @@ harness 却把它们报成**「漏抓」**——凭空多出 3 个根本不存�
 开工前就位不进 `introduced`；开工后出现则被拒且报错点名到文件。
 
 > 只钉前者是不够的：那样的话把 README 的配置挪到 `run` 块里**不会有人发现**。
+
+### 0.11 全仓类型检查抓到一个真 bug——以及“检查器被按住”的代价
+
+#### ① 真 bug（已修）：`store.batch_append` 的返回行引用了**未定义的 `offset`**。
+
+| 手段 | 结果 |
+| --- | --- |
+| 293 个单元测试 | ✅ 全绿（**零调用方的死路径**，从未被执行） |
+| 变异测试 | ✅ 全过（针脚覆盖的是别处） |
+| 逐文件 LSP 探针 | ✅ 干净（**只探改过的文件**，没探 `store.py`） |
+| **全仓 pyright** | ❌ **`"offset" is not defined`** |
+
+两条可迁移的结论：
+
+1. **“测试全绿”不覆盖死路径，类型检查覆盖。** 零调用方 + 零测试 = 哑雷。
+   讽刺的是 `batch_append` 自己的 docstring 写着“以免成为哑雷”——它自己就是。
+2. **逐文件探针不够**：只探改过的文件 ⇒ **没改过的文件里的既存 bug 永远看不见**。
+
+已补 `tests/test_typecheck.py`（本机没 pyright 则 `skipTest`）把全仓类型检查变成回归门，
+以及 `BatchAppendTest` 六条（含“返回值与盘上现实一致”的回归）。
+
+#### ② 为何 293 个测试都没看到它：`.pi-lens.json` 把整个文件致盲了
+
+```jsonc
+// 从**第一个 commit**（24e88fe）起就是这句
+{ "ignore": ["disflow/store.py"] }
+```
+
+而 bug 恰恰藏在这个被致盲的文件里。修法不是删了了事，而是**把粒度从“文件”收窄到“规则”**：
+
+| 手段 | 粒度 | 能否致盲一个文件 |
+| --- | --- | --- |
+| `ignore` | 整文件 / 整目录 | ✅ **已禁止**（守卫测试） |
+| `rules.<id>.disable` | 规则（全项目） | ❌ |
+| `# pi-lens-ignore: <rule>` | 站点 | ❌ |
+
+**关掉的两个规则，依据是实测**（全仓 45 文件 18 条，逐条看过）：
+
+| 规则 | 实测 | 为何前提在本仓不成立 |
+| --- | --- | --- |
+| `unchecked-numeric-parse-python` | 8/8 都是对**已是数值**的值取整（`int()` 在 `isinstance`/`isdigit` 守卫之后，或对 float 取整） | 规则假设的是 `int("abc")` 这种**字符串解析**，本仓 0 例 |
+| `unchecked-throwing-call-python` | 7/7 都是本仓**故意的响亮失败契约**（坏事件必须抛；`test_bad_jsonl_line_raises` 就在测它） | 规则预置了“凞掉异常”的偏好，与本仓的错误哲学相反 |
+
+效果：**18 条 → 0 条**。余下 3 条 `typos` 的处理值得记：它打在**故意写错的测试输入**上，
+而 `typos` 的**行内 `# pi-lens-ignore` 对它不起作用**（实测：加了仍被报）。
+没有为它叠加抑制机制（那会堆第二层“按住检查器”），而是**改测试输入**：
+被测行为是“值不在白名单里”——错别字与合法未登记词（`sre`）走**同一条**分支，
+覆盖率不变，而 `typos` 对 docs 里真笔误的检测力保住了。
+探针会明说“**suppressed by disposition: 15 finding(s) … Not a clean verdict**”——这是对的：
+**它们被找到了，然后被有意隐藏**，不是本就没有。
+
+守卫（`tests/test_typecheck.py::AnalyzerConfigTest`）：
+① `.pi-lens.json` 的 `ignore` 必须为空（不许整文件致盲）；
+② 每条 `rules.<id>.disable` 必须在本文件里写明理由。
+
+#### ③ 工具教训：报告的缓存键是“文件内容”
+
+给 `cli.py` 加 `unrelate` **引用**时（`engine.py` 还没加方法）报的错，被挂在 **cli.py 的内容哈希**上。
+此后我改的一直是 `engine.py`，cli.py 字节未变 ⇒ 那条旧结论**反复回放**。
+`pkill` 语言服务器、清缓存目录都无用；**修改 cli.py 的内容**才使它重分析。
+
+> 识别方法：一条报错经过「清 `__pycache__` + 重启服务器 + 全仓跑同一分析器」后仍然存在，
+> 且**直接跑分析器报 0 条**，那就是内容哈希挂着的陈旧结论——改动**被报的那个文件**（而不是它引用的那个）就能破。
 
 ### 0.3 随后修掉的 C4.2 与顺手补的两个可执行检查
 

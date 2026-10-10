@@ -332,27 +332,32 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
 对应对称：`rescope` ≈ `node.context.size_budget` 覆盖（改声明），
 `scope_waiver` / `size_waiver` ≈ 同一个破例形状（不改声明，留痕放行）。
 
-### 7.3 边的增与删（`require` / `unrequire`）：故意不对称
+### 7.3 边的增与删（`require`/`unrequire`、`relate`/`unrelate`）：故意不对称
 
 `requires` 是唯一的调度边，建错方向很常见（真跑循环里 `C7` 就被废掉了）。
 但**删边不能把加边的校验搞松**，所以两者故意不对称：
 
-| | `require`（加边） | `unrequire`（删边） |
+| | 加边（`require` / `relate`） | 删边（`unrequire` / `unrelate`） |
 | --- | --- | --- |
-| 两端节点存在 | 必须 | 只要求 `node` 存在——**不要求 `dep` 存在** |
-| 自环 / 成环 | 拒（写时拒环） | 不适用 |
+| 两端节点存在 | 必须 | 只要求 `node` 存在——**不要求对端存在** |
+| 自环 / 成环 | `require` 拒（写时拒环）；`relate` 不适用 | 不适用 |
 | 边已存在 / 不存在 | 幂等（`_append_unique`） | 不存在则拒（报出当前出边） |
 
-**为何删边不要求 `dep` 存在**：否则**悬空边反而清不掉**——`doctor` 报得出、却没有动词修得了。
+**为何删边不要求对端存在**：否则**悬空边反而清不掉**——`doctor` 报得出、却没有动词修得了。
 悬空边不可能由 `require` 造成（它要求两端存在），只能由导入 / 手工修复路径写进来；
 所以“能清”是必需的，即使它罕见。
 
-**不带 `--dry-run`**：本动词只做**存在性**校验、不跑门。厂内规则：
-只有跑门的写动词（`start` / `done` / `close` / `drive`）才配 `--dry-run`，
-其余只做形状校验的动词（`require`/`relate`/`produce`/`consume`/`unrequire`）不配。
+**`unrelate` 为何存在（曾经缺了）**：`relate` 能建不能删，与 `unrequire` 修之前是
+**同一个缺口家族**——当时建错依赖只能 `skip` 整个节点。信息边不参与就绪判定，
+所以优先级低；但“建错了改不了”仍然只能靠 `skip`，那不是个可接受的答案。
 
-> 已知不对称（未做）：没有 `unrelate`。`relates` 只是信息边、**不参与就绪判定**，
-> 建错不影响调度，所以优先级低于 `unrequire`。
+**不带 `--dry-run`**：这些动词只做**存在性/形状**校验、不跑门。厂内规则：
+只有跑门的写动词（`start` / `done` / `close` / `drive`）才配 `--dry-run`，
+其余（`require`/`unrequire`/`relate`/`unrelate`/`produce`/`consume`）不配。
+
+> 仍开的边侧不对称：资产产出物可增不可撤（`produce` 无 `unproduce`）。
+> 理由：`tree.assets[name] → node` 是**唯一归属**，撤掉后已 `consumes` 它的节点会落下悬空引用，
+> 得先定“撤了之后那些 consumes 怎么办”才谈得上做——已登记在 `docs/v0.2-backlog.md` §C。
 
 ### 7.4 验收判据与规模读数
 

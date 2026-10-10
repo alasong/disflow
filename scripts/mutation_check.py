@@ -194,6 +194,16 @@ MUTATIONS: list[Mutation] = [
      'def _covered(path: str, touch_plan: list[str]) -> bool:\n    return True\n    for entry in touch_plan:',
      "test_config.py"),
 
+    # ── batch_append：零调用方的死路径（曾被整文件屏蔽藏住）────────────────
+    ("batch_append 返回旧的/错的偏移（曾是真 NameError）", "disflow/store.py",
+     '    return {"appended": appended, "projection_offset": len(events) + appended}',
+     '    return {"appended": appended, "projection_offset": 0}',
+     "test_store.py"),
+    ("batch_append 不再做整批试算（非法批次会落一半）", "disflow/store.py",
+     '    candidate = stamp_projection(project(events + pending), len(events) + len(pending))',
+     '    candidate = stamp_projection(events[-1] if events else {}, 0)',
+     "test_store.py"),
+
     # ── 空洞通过：记录与报出 ────────────────────────────────────────────
     ("空洞检测失效（永远返回空）", "disflow/gates.py",
      '    reasons: dict[str, str] = {}\n'

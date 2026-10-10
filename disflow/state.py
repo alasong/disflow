@@ -159,6 +159,21 @@ def _on_node_relate(state: dict, event: dict) -> None:
     _append_unique(_node(state, event["slug"], event["node"]), "relates", event["other"])
 
 
+def _on_node_unrelate(state: dict, event: dict) -> None:
+    """删 `relates` 边。
+
+    为何要有：`relate` 建错了却没有任何删除动词 —— 与 `unrequire` 修之前是**同一个缺口**
+    （当时建错依赖只能 `skip` 整个节点）。信息边虽不参与就绪判定，但错了还得能改。
+
+    边不存在即 `ValueError`（`project` 是语义闸门，非法事件既不许落盘也不许重放）。
+    """
+    node = _node(state, event["slug"], event["node"])
+    other = str(event["other"])
+    if other not in (node.get("relates") or []):
+        raise ValueError(f"{event['node']} 没有 relates 边：{other}")
+    node["relates"] = [item for item in node["relates"] if item != other]
+
+
 def _on_asset_produce(state: dict, event: dict) -> None:
     tree = state["trees"][event["slug"]]
     _append_unique(_node(state, event["slug"], event["node"]), "produces", event["name"])
@@ -258,6 +273,7 @@ _HANDLERS = {
     "node.require": _on_node_require,
     "node.unrequire": _on_node_unrequire,
     "node.relate": _on_node_relate,
+    "node.unrelate": _on_node_unrelate,
     "asset.produce": _on_asset_produce,
     "asset.consume": _on_asset_consume,
     "node.start": _on_node_start,

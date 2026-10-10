@@ -197,6 +197,23 @@ class Engine:
         return self._write("node.relate", tree=tree, node=node, guard=guard,
                            prepare=lambda _: {"other": other})
 
+    def unrelate(self, tree: str, node: str, other: str) -> dict:
+        """删 `relates` 边 —— 与 `unrequire` 同形状、同理由。
+
+        `relate` 能建不能删是**同一个缺口家族**：`unrequire` 修之前，建错依赖只能 `skip`
+        整个节点。信息边不参与就绪判定，所以优先级低——但“建错了改不了”仍然只能靠 `skip`。
+
+        与 `relate` **故意不对称**：加边要求两端存在；删边只要求边存在。
+        不带 `--dry-run`（只做存在性校验，不跑门）。
+        """
+        def guard(t: dict) -> None:
+            item = self._need(t, node)
+            current = list(item.get("relates") or [])
+            if other not in current:
+                raise EngineError(f"{node} 没有 relates {other}（现有：{current}）")
+        return self._write("node.unrelate", tree=tree, node=node, guard=guard,
+                           prepare=lambda _: {"other": other})
+
     def produce(self, tree: str, node: str, name: str) -> dict:
         return self._write("asset.produce", tree=tree, node=node,
                            guard=lambda t: self._need(t, node),
