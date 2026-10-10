@@ -118,6 +118,48 @@ vacuous    = {}                     # 没有“空洞通过”的门
 想用它在**真活**上驱动一个循环（我跑过两遍的那个），配方见
 `docs/dev-board.md` §0.1 与 §0.6：`drive` → `brief` → 干活 → `collect` → `done`。
 
+## 量化、迭代、worktree
+
+三个动词，各对应一类「声明 vs 派生」的边界。
+
+**量化**：点数由**人**在 `expand` 时声明（`points` 是唯一入口，引擎不猜）：
+
+```bash
+python3 -m disflow.cli expand demo root --children '[{"id":"a","goal":"做A","points":3,"acceptance":{"cmd":"true","expect":"exit0"}}]'
+python3 -m disflow.cli metrics demo            # 点数/已完成/剩 + 速度 + 预计完工 + 燃尽
+python3 -m disflow.cli metrics demo --json     # 机器可读（summary + burndown）
+```
+
+**没给 `points` 的节点不进任何分母**——`metrics` 报「未声明」而**不是**替它编一个 0
+（把「没估」当 0 会把速度抬高、预计完工压低）。`points` 是人的**声明**，`velocity` / `burndown`
+是**派生**；派生只吃事件流里的完工时刻，**不读时钟**（同一份事件在任何时刻、任何机器都算出同一个数）。
+
+**迭代**：`deadline` 是树级声明，用来给燃尽图一条理想线：
+
+```bash
+python3 -m disflow.cli deadline demo 2026-12-31   # 设（回显剩余天数）
+python3 -m disflow.cli deadline demo -            # 清空
+```
+
+它是**声明不是闸门**：逾期**不拒任何动词**，只是被显式报出来（`metrics` / `trees` 里会写
+「逾期 N 天」）。非法日期在**写入时**就响亮拒收（退出码非 0、不落事件），不会静默当成「没有截止」。
+
+**worktree**：每节点一个独立 git 工作区（`<state dir>/worktrees/<tree>/<node>`），
+把并发 worker 从物理上隔开：
+
+```bash
+python3 -m disflow.cli worktree plan demo         # 只给计划，零副作用
+python3 -m disflow.cli worktree apply demo        # 真建（可逆、幂等；跑两次结果一样）
+python3 -m disflow.cli worktree list demo         # 对账：leak / missing / orphan / residual
+python3 -m disflow.cli worktree reap demo         # 只打印命令，**不执行**
+```
+
+`apply`（**创建**）真跑 git——创建可逆、错了能删了重来；`reap`（**删除**）是**纯计划**：
+只列出判据、理由、以及宿主该跑的命令，**永不执行**。分界不是「一律不执行」，而是**可逆 vs 不可逆**——
+删除会连带丢掉未提交改动、被 `.gitignore` 忽略的文件、未合并的提交，是唯一不可逆动作，
+所以引擎不替人删数据。宿主读完计划后自己跑那两条命令，**顺序要紧：先删工作区、再删分支**
+（工作区还在时 git 会拒删它占用的分支）；分支一律用 `-d`（安全删），`-D` 会制造不可达提交。
+
 ## 文档
 
 | 文档 | 内容 |
