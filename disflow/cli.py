@@ -273,6 +273,17 @@ def cmd_context(engine: Engine, args) -> int:
     return 0
 
 
+def cmd_rescope(engine: Engine, args) -> int:
+    touch = _loads(args.touch)
+    dry = bool(getattr(args, "dry_run", False))
+    engine.rescope(args.tree, args.node, touch, args.reason, dry_run=dry)
+    if dry:
+        print(f"✓ 预演通过：{args.node} 的声明可改为 {touch}（**未落事件**）")
+        return 0
+    print(f"✓ {args.node} 写面声明已更新：{touch}")
+    return 0
+
+
 def cmd_close(engine: Engine, args) -> int:
     dry = bool(getattr(args, "dry_run", False))
     try:
@@ -427,6 +438,15 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("tree")
     node.add_argument("node")
     node.add_argument("--set", required=True)
+
+    node = add("rescope", cmd_rescope)
+    node.add_argument("tree")
+    node.add_argument("node")
+    node.add_argument("--touch", required=True,
+                       help='新的写面声明，如 \'["src/a.py","docs/"]\'')
+    node.add_argument("--reason", required=True,
+                       help="为何现在才要加范围（必填，记入 rescope_log）")
+    node.add_argument("--dry-run", action="store_true", help="预演：跑门但不落事件")
 
     node = add("close", cmd_close)
     node.add_argument("tree")

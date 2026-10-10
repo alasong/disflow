@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 161 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 178 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -104,10 +104,29 @@ disflow 决定，**无硬编码列表**。
 
 | # | 缺口 | 证据 |
 | --- | --- | --- |
-| 1 | **`touch_plan` 建树后不可更新**，且 `design_first` **无逃生口** | 干活时发现需多改一个文件 → 门拒收，但无合法路径改声明 |
+| 1 | ~~**`touch_plan` 建树后不可更新**，且 `design_first` **无逃生口**~~ ✅ **已修**（设计 §7.2）：新增 `rescope`（计划先于改动）+ `scope_waiver`（显式破例、留痕）；现在有合法路径改声明 | 干活时发现需多改一个文件 → 门拒收，但无合法路径改声明 |
 | 2 | ~~**baseline 是文件粒度**~~ ✅ **已修**：改为 `{路径: 内容指纹}`（`design.md` §7.1），并加反向验证（退回路径差集 → 新测试失败） | C6 的 scope 检查曾空转（C5 先弄脏了 `cli.py`） |
 | 3 | 无 `unrequire`：建错依赖只能 `skip` 整节点 | C7 的 requires 方向建反，只能 skip 并记录 |
 | 4 | **陈旧 `__pycache__` 会静默跑旧代码** | store 修复已落盘但行为仍旧；清字节码后立即生效 |
+
+### 0.4 再接着修 C4.1 + C4.4（写面声明的当口改动）
+
+**设计难点**：不能只开一个「随便改计划」的口子——`design_first` 的力量全来自
+**计划先于改动**，能事后把计划改成“我刚改过的东西”就等于没门。所以拆两条：
+
+| 路径 | 何时用 | 判据 | 留违规记录？ |
+| --- | --- | --- | --- |
+| `rescope` | 要碰 X，**还没碰** | 只能纳入**不在本节点 `introduced`** 里的路径（复用 §7.1 的内容指纹） | 否 |
+| `scope_waiver` | **已碰**了 X 且有理 | 无技术判据，就是显式破例 | **是**（`violations` 照记） |
+
+| 验收点 | 反向验证 |
+| --- | --- |
+| 5 处新判据（已碰过拒收 / reason 必填 / 只限 running / 无空操作 / 破例留痕） | 逐个抖回缺陷 → **5/5 被新测试抓到** ✅ |
+| 破例不能把门变松（无 waiver 照拒） | 单测固定 |
+| 新增动词被 doc-drift 守卫拦下 → 补 `design.md` §7.2 后通过 | 真实发生（178 测试才转绿） |
+
+> `rescope` 的对偶是「改声明」，`scope_waiver` 的对偶是 `size_waiver`（破例）——
+> 现在两个门（`design_first` / `size_budget`）形状对称了。
 
 ### 0.3 随后修掉的 C4.2 与顺手补的两个可执行检查
 

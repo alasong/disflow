@@ -157,6 +157,21 @@ def _on_node_context(state: dict, event: dict) -> None:
     node.setdefault("context", {}).update(event.get("context") or {})
 
 
+def _on_node_rescope(state: dict, event: dict) -> None:
+    """改节点的写面声明：`touch_plan` 换成新值，并把**变更历史**留在 `rescope_log`。
+
+    历史必须留：否则“计划先于改动”这个前提交代不清，事后无法审计
+    （谁在什么时候把范围改宽了、理由是什么）。
+    """
+    node = _node(state, event["slug"], event["node"])
+    old = list(node.get("touch_plan") or [])
+    node["touch_plan"] = list(event.get("touch_plan") or [])
+    node.setdefault("rescope_log", []).append({
+        "from": old, "to": list(node["touch_plan"]),
+        "reason": event.get("reason") or "",
+    })
+
+
 def _on_tree_close(state: dict, event: dict) -> None:
     state["trees"][event["slug"]]["closed"] = True
 
@@ -185,6 +200,7 @@ _HANDLERS = {
     "node.skip": _on_node_skip,
     "node.import": _on_node_import,
     "node.context": _on_node_context,
+    "node.rescope": _on_node_rescope,
     "tree.close": _on_tree_close,
     "node.reclaim": _on_node_reclaim,
 }

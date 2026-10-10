@@ -35,6 +35,7 @@ SEDIMENT_ENTRIES: tuple[str, ...] = ("reflect", "standardize")
 EVENT_KINDS: tuple[str, ...] = (
     "tree.init", "tree.goal",
     "node.expand", "node.require", "node.relate", "node.import", "node.context",
+    "node.rescope",
     "asset.produce", "asset.consume",
     "node.start", "node.collect", "node.done",
     "node.fail", "node.retry", "node.skip", "node.reclaim",

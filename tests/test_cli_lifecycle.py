@@ -178,6 +178,41 @@ class CliLifecycleVerbTest(DisflowTestCase):
         self.assertIn("无过期", out)
         self.assertEqual(self._node("a")["status"], "running")
 
+    # ── rescope（写面声明的当口改动，§7.2）───────────────────────────────
+
+    def test_rescope_wires_touch_and_reason_to_the_engine(self):
+        self._one_node_tree()
+        self._run(["start", "t", "a", "--holder", "w1"])
+        code, out, _err = self._run(["rescope", "t", "a",
+                                     "--touch", '["new.py"]', "--reason", "要新建"])
+        self.assertEqual(code, 0)
+        self.assertIn("new.py", out)
+        node = self._node("a")
+        self.assertEqual(node["touch_plan"], ["new.py"])
+        self.assertEqual(node["rescope_log"][0]["reason"], "要新建")
+
+    def test_rescope_dry_run_does_not_write(self):
+        self._one_node_tree()
+        self._run(["start", "t", "a", "--holder", "w1"])
+        before = self._events()
+        code, out, _err = self._run(["rescope", "t", "a", "--touch", '["n.py"]',
+                                     "--reason", "预演", "--dry-run"])
+        self.assertEqual(code, 0)
+        self.assertIn("未落事件", out)
+        self.assertEqual(self._events(), before)
+
+    def test_rescope_rejection_goes_to_stderr(self):
+        """错误报文必须走 stderr（否则脚本 2>/dev/null 会把拒收看成功）。"""
+        self._one_node_tree()
+        self._run(["start", "t", "a", "--holder", "w1"])
+        before = self._events()
+        code, out, err = self._run(["rescope", "t", "a", "--touch", '["x.py"]',
+                                    "--reason", "   "])
+        self.assertNotEqual(code, 0)
+        self.assertIn("✗", err)
+        self.assertEqual(out, "")
+        self.assertEqual(self._events(), before)          # 拒收不得落事件
+
 
 if __name__ == "__main__":
     unittest.main()

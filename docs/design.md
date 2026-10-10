@@ -258,7 +258,7 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
 | 门 | 判什么 | 挂在 |
 | --- | --- | --- |
 | `acceptance` | 验收命令跑过 + 期望匹配（或 `acceptance.waiver` 显式豁免，记入证据） | 所有 task |
-| `design_first` | 改动集落在 `touch_plan` 内 | implement/configure |
+| `design_first` | 改动集落在 `touch_plan` 内（`scope_waiver` 破例） | implement/configure |
 | `size_budget` | 改动不超预算（`size_waiver` 破例） | implement/configure/merge |
 | `tree_closure` | 树根有 done 的 evaluate（收益验证）与 reflect/standardize（沉淀） | 树根 / `close` |
 | `tree_coverage` | 每个叶子任务有 `goal` 与可跑判据；非根容器有子节点 | 树根 / `close` |
@@ -290,6 +290,28 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
 **局限（诚实标注）**：指纹只比内容，**不知道是谁改的**。两个节点真同时改同一文件时，
 两者都会被归因——本机制消除的是「**静默**漏判」，不是「并发写同一文件的冲突检测」
 （后者靠写面打包与单写者收口）。旧事件（基线是路径列表）归一为未知指纹，一律判为已改（保守）。
+
+### 7.2 写面声明的**当口改动**：`rescope` 与 `scope_waiver`
+
+`touch_plan` 在 `expand` 时就声明。但「干活时才发现要多碰一个文件」是**常态**，
+不是例外——没有合法路径时，`design_first` 会把人逼到「还原重做」或「废掉节点」。
+
+但也不能就开一个「随便改计划」的口子：`design_first` 的全部力量来自
+**计划先于改动**——若能把计划改成“我刚改过的东西”，门等于不存在。所以拆成两条路：
+
+| 路径 | 何时用 | 判据 | 是否留违规记录 |
+| --- | --- | --- | --- |
+| `rescope <tree> <node> --touch <json> --reason <why>` | 发现要碰 X，**还没碰** X | 只允许纳入**不在本节点 `introduced` 里**的路径（与 §7.1 同一原语） | 否（计划仍先于改动） |
+| `done --decl '{"scope_waiver": "<理由>"}'` | **已经**碰了 X，且有理 | 无技术判据——就是显式破例 | **是**：`violations` 照记，`scope_waiver` 原文进 `evidence` |
+
+- `rescope` 只对 `running` 节点开放（没开工就没有“发现”可言），`--reason` **必填**，
+  且每次变更（`from` / `to` / `reason`）累进 `node.rescope_log`——否则“计划先于改动”
+  这个前提交代不清，事后无法审计。
+- 已碰过的路径被拒时，报错会**点名替代路径**（走 `scope_waiver`）——拒收必须给出路。
+- 两个破例口（`scope_waiver` / `size_waiver`）都**记入证据**：破例可以，装没发生不行。
+
+对应对称：`rescope` ≈ `node.context.size_budget` 覆盖（改声明），
+`scope_waiver` / `size_waiver` ≈ 同一个破例形状（不改声明，留痕放行）。
 
 ---
 
@@ -327,6 +349,7 @@ disflow require <tree> <node> <dep>                # 建图（写时拒环）
 disflow relate <tree> <node> <node>
 disflow produce/consume <tree> <node> <name>
 disflow context <tree> <node> --set '<json>'       # 合并 context（根用声明逃生口）
+disflow rescope <tree> <node> --touch '<json>' --reason <why> [--dry-run]  # 改写面声明（§7.2）
 disflow start <tree> <node> [--holder H] [--ttl N] [--dry-run]
 disflow collect <tree> <node> --result '<json>'    # 校验结果契约，不写 done
 disflow done <tree> <node> [--decl '<json>'] [--dry-run]
@@ -344,7 +367,7 @@ disflow import mgt <path> --tree <T>               # 迁移（§10）
 disflow doctor                                     # 自检
 ```
 
-> 共 27 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
+> 共 28 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
 
 ### 9.1 模块分层与 NFR-2（核心语言中立）
 

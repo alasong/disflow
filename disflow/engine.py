@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from . import gates, graph, store
+from .core import RUNNING
 from .dispatch import dispatch_plan
 from .dispatch import drive as run_drive
 from .dispatch import handoff_brief, result_contract, validate_result
@@ -210,6 +211,11 @@ class Engine:
             evidence["scope"] = scope
             evidence["size"] = size
             evidence["budget"] = budget
+            # 破例必须**记入证据**（显式、可审计），而不是默默放行
+            for key in ("scope_waiver", "size_waiver"):
+                waiver = (declarations or {}).get(key)
+                if waiver:
+                    evidence[key] = waiver
             contract = {"node": node, "acceptance": item.get("acceptance"),
                         "touch_plan": item.get("touch_plan"), "size_budget": budget,
                         "expect": "验收命令通过；改动落在 touch_plan 内；改动行数不超预算"}
@@ -221,8 +227,10 @@ class Engine:
                       if not str((declarations or {}).get(name) or "").strip()]
             if absent:
                 missing.append(f"缺必填声明：{absent}")
-            if scope["checked"] and scope["violations"]:
-                missing.append(f"改动超出 touch_plan：{scope['violations']}")
+            if scope["checked"] and scope["violations"] and \
+                    not (declarations or {}).get("scope_waiver"):
+                missing.append(f"改动超出 touch_plan：{scope['violations']}（归属错了就 rescope，"
+                               f"已动手则声明 scope_waiver 破例）")
             if (size is not None and size["total"] > budget
                     and not (declarations or {}).get("size_waiver")):
                 missing.append(f"规模超预算：{size['total']} 行 > {budget} 行"
@@ -277,6 +285,46 @@ class Engine:
         return self._write("node.context", tree=tree, node=node,
                            guard=lambda t: self._need(t, node),
                            prepare=lambda _: {"context": context})
+
+    def rescope(self, tree: str, node: str, touch: list[str], reason: str,
+                dry_run: bool = False) -> dict:
+        """改节点的写面声明（**发现型改动**：干活时才知道要多碰一个文件）。
+
+       为什么不能随便改：`design_first` 的全部力量来自「**计划先于改动**」。若能把计划
+       改成“我刚改过的东西”，门就白设了。所以判据是：
+
+        - 只能把**本节点尚未碰过**的路径纳进来（用内容指纹判，与 `introduced` 同一原语）；
+        - 已经碰过才想补声明 → 必须走 `done --decl '{"scope_waiver": "<理由>"}'` 破例，
+          那会留下**违规记录**（显式、可审计），而不是把计划偷偷改宽。
+
+       对应对称性：`rescope` ≈ `size_budget` 的 `node.context` 覆盖（改声明）；
+       `scope_waiver` ≈ `size_waiver`（破例）。
+       """
+        if not str(reason or "").strip():
+            raise EngineError("rescope 必须给 --reason：为什么现在才要加范围")
+        if not isinstance(touch, list) or not touch or \
+                not all(isinstance(path, str) and path.strip() for path in touch):
+            raise EngineError('--touch 必须是非空字符串列表，如 \'["src/a.py"]\'')
+
+        def guard(t: dict) -> None:
+            item = self._need(t, node)
+            if item.get("status") != RUNNING:
+                raise EngineError(
+                    f"{node} 状态为 {item.get('status')}，只有 {RUNNING} 的节点可 rescope")
+            old = set(item.get("touch_plan") or [])
+            added = [path for path in touch if path not in old]
+            if not added:
+                raise EngineError(f"新声明未增加任何路径（现有 {sorted(old)}），不必 rescope")
+            touched = set(gates.newly_changed(self.cwd, item.get("baseline")) or [])
+            dirty = sorted(set(added) & touched)
+            if dirty:
+                raise EngineError(
+                    f"这些路径本节点**已经改过**，不能再声明进 touch_plan：{dirty}"
+                    "—— 计划先于改动才叫计划；已动手的请用"
+                    " done --decl '{\"scope_waiver\": \"<理由>\"}' 显式破例（会留违规记录）")
+        return self._write("node.rescope", tree=tree, node=node, guard=guard,
+                           prepare=lambda _: {"touch_plan": touch, "reason": reason},
+                           dry_run=dry_run)
 
     def close(self, tree: str, dry_run: bool = False) -> dict:
         """树级门（两个）：`tree_closure`（终止条件）+ `tree_coverage`（需求已登记 + 可跑判据）。"""
