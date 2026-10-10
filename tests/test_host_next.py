@@ -10,8 +10,8 @@
 5. **无就绪节点时不静默**：显式报 `complete`（全部完成）/ `stuck`（卡住）/ `waiting`（就绪
    候选全被在跑节点的写面挡下），另附 `running` / `failed` 两种诚实读数；
 6. **写面被在跑节点占用 ⇒ 绝不静默丢**：被挡下的候选不进 `plan`，但**与 `drive` 同源**地出现在
-   `deferred` 里（点名在跑者 + 重叠路径），人读态（`state_message`）也点名；无在跑 ⇒ 输出与
-   改动前**逐字节一致**（有基线钉住）。
+   `deferred` 里（点名在跑者 + 重叠路径）；人读态同样报（全被挡 = `state_message`；混合场景
+   另打一行 deferred，不重复），无在跑 ⇒ 输出与改动前**逐字节一致**（有基线钉住）。
 """
 from __future__ import annotations
 
@@ -382,6 +382,26 @@ class HostNextTest(DisflowTestCase):
         _code, human, _err = self._host_next()
         for token in ("clash", "runner", "src/x.py"):
             self.assertIn(token, human)
+        # **不重复打印**：全被挡那格由 `state_message` 说，人读输出不得再打一行 deferred
+        self.assertNotIn("写面被在跑节点占用", human)
+
+    def test_mixed_human_output_names_deferred_and_stays_readonly(self):
+        """混合场景：`ok` 可派、`clash` 被挡 —— 人读输出必须点名 `clash`（屏幕上不许无声消失）。"""
+        self._seed_runner_and_overlapping_candidate(with_bystander=True)
+        before_events, before_state = self._events_bytes(), self._state_bytes()
+        code, human, err = self._host_next()
+        self.assertEqual(code, 0, err)
+        # 可派的 `ok` 照常列出
+        self.assertIn("disflow start t ok", human)
+        # 被挡的 `clash` 必须点名在跑者与重叠路径（不能说去就没了）
+        for token in ("clash", "runner", "src/x.py"):
+            self.assertIn(token, human)
+        self.assertIn("写面被在跑节点占用", human)
+        # 纯读：人读打印不得写事件 / 动投影（照本仓既有 byte-identical 测法）
+        self.assertEqual(self._events_bytes(), before_events,
+                         "host-next 人读态也不许写事件")
+        self.assertEqual(self._state_bytes(), before_state,
+                         "host-next 人读态也不许改投影")
 
     def test_no_running_payload_is_byte_identical_to_baseline(self):
         """回归判据：无任何节点在跑时，`host-next --json` 与改动前基线**逐字节一致**。
