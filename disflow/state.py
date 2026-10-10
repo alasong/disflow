@@ -88,6 +88,19 @@ def _on_node_require(state: dict, event: dict) -> None:
     _append_unique(_node(state, event["slug"], event["node"]), "requires", event["dep"])
 
 
+def _on_node_unrequire(state: dict, event: dict) -> None:
+    """删 `requires` 边（建错依赖的合法出口）。
+
+    边不存在即 `ValueError`：`project` 是**语义闸门**——非法事件既不许落盘也不许重放。
+    有了这条，被拒的 unrequire 不会在事件流里留下痕（与 `store._persist` 的先试算一致）。
+    """
+    node = _node(state, event["slug"], event["node"])
+    dep = str(event["dep"])
+    if dep not in (node.get("requires") or []):
+        raise ValueError(f"{event['node']} 没有 requires 边：{dep}")
+    node["requires"] = [item for item in node["requires"] if item != dep]
+
+
 def _on_node_relate(state: dict, event: dict) -> None:
     _append_unique(_node(state, event["slug"], event["node"]), "relates", event["other"])
 
@@ -189,6 +202,7 @@ _HANDLERS = {
     "tree.goal": _on_tree_goal,
     "node.expand": _on_node_expand,
     "node.require": _on_node_require,
+    "node.unrequire": _on_node_unrequire,
     "node.relate": _on_node_relate,
     "asset.produce": _on_asset_produce,
     "asset.consume": _on_asset_consume,

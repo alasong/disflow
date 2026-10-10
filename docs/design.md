@@ -88,7 +88,7 @@ disflow rebuild [--check]                # 从事件重建；--check 比对一�
 | 概念 | 住哪 | 谁写 |
 | --- | --- | --- |
 | 层级（part-of） | `parent`（树，唯一） | `expand` |
-| 调度依赖（顺序） | `requires`（图，DAG） | `require` |
+| 调度依赖（顺序） | `requires`（图，DAG） | `require` / `unrequire` |
 | 软引用 | `relates`（图，任意） | `relate` |
 | 供给-消费 | `produces`/`consumes`（图） | `produce`/`consume` |
 | 跨树依赖 | `awaits`（**非图边**；信号 = 对方树 `closed`） | `expand` |
@@ -313,6 +313,28 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
 对应对称：`rescope` ≈ `node.context.size_budget` 覆盖（改声明），
 `scope_waiver` / `size_waiver` ≈ 同一个破例形状（不改声明，留痕放行）。
 
+### 7.3 边的增与删（`require` / `unrequire`）：故意不对称
+
+`requires` 是唯一的调度边，建错方向很常见（真跑循环里 `C7` 就被废掉了）。
+但**删边不能把加边的校验搞松**，所以两者故意不对称：
+
+| | `require`（加边） | `unrequire`（删边） |
+| --- | --- | --- |
+| 两端节点存在 | 必须 | 只要求 `node` 存在——**不要求 `dep` 存在** |
+| 自环 / 成环 | 拒（写时拒环） | 不适用 |
+| 边已存在 / 不存在 | 幂等（`_append_unique`） | 不存在则拒（报出当前出边） |
+
+**为何删边不要求 `dep` 存在**：否则**悬空边反而清不掉**——`doctor` 报得出、却没有动词修得了。
+悬空边不可能由 `require` 造成（它要求两端存在），只能由导入 / 手工修复路径写进来；
+所以“能清”是必需的，即使它罕见。
+
+**不带 `--dry-run`**：本动词只做**存在性**校验、不跑门。厂内规则：
+只有跑门的写动词（`start` / `done` / `close` / `drive`）才配 `--dry-run`，
+其余只做形状校验的动词（`require`/`relate`/`produce`/`consume`/`unrequire`）不配。
+
+> 已知不对称（未做）：没有 `unrelate`。`relates` 只是信息边、**不参与就绪判定**，
+> 建错不影响调度，所以优先级低于 `unrequire`。
+
 ---
 
 ## 8. 角色与阶段（修 mgt 的 P7）
@@ -346,6 +368,7 @@ disflow init <tree> --goal <g>
 disflow goal <tree> <g>                            # 改目标
 disflow expand <tree> <node> --children '<json>'   # 建树
 disflow require <tree> <node> <dep>                # 建图（写时拒环）
+disflow unrequire <tree> <node> <dep>              # 删边（增/删**故意不对称**，§7.3）
 disflow relate <tree> <node> <node>
 disflow produce/consume <tree> <node> <name>
 disflow context <tree> <node> --set '<json>'       # 合并 context（根用声明逃生口）
@@ -367,7 +390,7 @@ disflow import mgt <path> --tree <T>               # 迁移（§10）
 disflow doctor                                     # 自检
 ```
 
-> 共 28 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
+> 共 29 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
 
 ### 9.1 模块分层与 NFR-2（核心语言中立）
 

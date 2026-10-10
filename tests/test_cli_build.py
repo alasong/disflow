@@ -36,6 +36,9 @@ class CliBuildVerbTest(DisflowTestCase):
     def _node(self, node: str, tree: str = "t") -> dict:
         return self._tree(tree)["nodes"][node]
 
+    def _events(self) -> int:
+        return len(store.read_jsonl(store.events_path(spec.SPEC)))
+
     # ── init / goal ───────────────────────────────────────────────────────
 
     def test_init_creates_tree_with_goal(self):
@@ -102,6 +105,34 @@ class CliBuildVerbTest(DisflowTestCase):
         self._run(["expand", "t", "root", "--children", '[{"id":"a","goal":"A"}]'])
         code, _out, _err = self._run(["require", "t", "a", "a"])
         self.assertNotEqual(code, 0)
+
+    def test_unrequire_removes_the_edge_and_unblocks_drive(self):
+        """删边的价值要看**就绪波次真的变了**，而不只看字段被抹了。"""
+        self._run(["init", "t", "--goal", "g"])
+        self._run(["expand", "t", "root", "--children",
+                   '[{"id":"a","goal":"A"},{"id":"b","goal":"B"}]'])
+        self._run(["require", "t", "b", "a"])
+        _code, blocked, _err = self._run(["drive", "t"])
+        self.assertIn("b ← a", blocked)                  # 加边后 b 被阻塞
+
+        code, out, _err = self._run(["unrequire", "t", "b", "a"])
+        self.assertEqual(code, 0)
+        self.assertIn("不再 requires", out)
+        self.assertEqual(self._node("b")["requires"], [])
+        _code, freed, _err = self._run(["drive", "t"])
+        self.assertNotIn("b ← a", freed)
+        self.assertIn("  b  ", freed)                     # b 出现在就绪波次里
+
+    def test_unrequire_missing_edge_goes_to_stderr_and_writes_nothing(self):
+        self._run(["init", "t", "--goal", "g"])
+        self._run(["expand", "t", "root", "--children",
+                   '[{"id":"a","goal":"A"},{"id":"b","goal":"B"}]'])
+        before = self._events()
+        code, out, err = self._run(["unrequire", "t", "b", "a"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("✗", err, "错误报文必须走 stderr")
+        self.assertEqual(out, "")
+        self.assertEqual(self._events(), before, "被拒的写入不得落事件")
 
     def test_relate_is_soft_and_may_cycle(self):
         self._run(["init", "t", "--goal", "g"])

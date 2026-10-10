@@ -53,6 +53,12 @@ def cmd_require(engine: Engine, args) -> int:
     return 0
 
 
+def cmd_unrequire(engine: Engine, args) -> int:
+    engine.unrequire(args.tree, args.node, args.dep)
+    print(f"✓ {args.node} 不再 requires {args.dep}")
+    return 0
+
+
 def cmd_relate(engine: Engine, args) -> int:
     engine.relate(args.tree, args.node, args.other)
     print(f"✓ {args.node} relates {args.other}")
@@ -348,6 +354,11 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("--children", required=True)
 
     node = add("require", cmd_require)
+    node.add_argument("tree")
+    node.add_argument("node")
+    node.add_argument("dep")
+
+    node = add("unrequire", cmd_unrequire)
     node.add_argument("tree")
     node.add_argument("node")
     node.add_argument("dep")

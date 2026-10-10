@@ -62,7 +62,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 178 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 189 passed（零第三方依赖）
 ```
 
 ## 结构
@@ -96,7 +96,7 @@ scripts/          # seed_dev_board.py
 其中 `store._persist` 的「先落盘再试算」是真缺陷（**一次非法写入 = 事件流永久不可重放**）。
 详见 `docs/dev-board.md` §0.1/§0.2；暴露的机制缺口见 `docs/v0.2-backlog.md` §C4。
 
-v0.1 完成（**17/17**）：178 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、五道门（acceptance/design_first/size_budget/tree_closure/**tree_coverage**）、**多块板**（多树作用域隔离 + 跨树 `awaits` 信号）、**租约超时回收 `reap`**、**核心层零业务词**（NFR-2，逆向自检）、**`--dry-run` 预演**（FR-13）、**改动归因用内容指纹**（设计 §7.1）、**写面声明的当口改动 `rescope` + 破例 `scope_waiver`**（设计 §7.2）、`doctor` 全绿。需求覆盖见 `docs/requirements.md` §7（FR/NFR **全覆盖**）。
+v0.1 完成（**17/17**）：189 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、五道门（acceptance/design_first/size_budget/tree_closure/**tree_coverage**）、**多块板**（多树作用域隔离 + 跨树 `awaits` 信号）、**租约超时回收 `reap`**、**核心层零业务词**（NFR-2，逆向自检）、**`--dry-run` 预演**（FR-13）、**改动归因用内容指纹**（设计 §7.1）、**写面声明的当口改动 `rescope` + 破例 `scope_waiver`**（设计 §7.2）、**边的增删 `require`/`unrequire`**（设计 §7.3）、`doctor` 全绿。需求覆盖见 `docs/requirements.md` §7（FR/NFR **全覆盖**）。
 
 > `PM1`（最后一个节点）是初始种下的「批准发布」仪式，但本看板只是 dogfooding 演示、无下游消费者。
 > 已如实 `skip`（理由入库），**不假装发生过真实审批**——种子脚本里可复现，不是一次性手工操作。

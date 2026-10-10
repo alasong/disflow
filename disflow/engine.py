@@ -143,6 +143,23 @@ class Engine:
         return self._write("node.require", tree=tree, node=node, guard=guard,
                            prepare=lambda _: {"dep": dep})
 
+    def unrequire(self, tree: str, node: str, dep: str) -> dict:
+        """删 `requires` 边 —— 建错依赖时的合法出口（否则只能 `skip` 整个节点）。
+
+        与 `require` **故意不对称**：加边要求两端都存在（不许造悬空边）；
+        删边不要求 `dep` 节点存在——否则悬空边反而清不掉（`doctor` 报得出、没人修得了）。
+
+        不带 `--dry-run`：本动词只做**存在性**校验，不跑门。
+        厂内规则：跑门的写动词（`start`/`done`/`close`/`drive`）才配 `--dry-run`。
+        """
+        def guard(t: dict) -> None:
+            item = self._need(t, node)
+            current = list(item.get("requires") or [])
+            if dep not in current:
+                raise EngineError(f"{node} 没有 requires {dep}（现有：{current}）")
+        return self._write("node.unrequire", tree=tree, node=node, guard=guard,
+                           prepare=lambda _: {"dep": dep})
+
     def relate(self, tree: str, node: str, other: str) -> dict:
         def guard(t: dict) -> None:
             self._need(t, node)

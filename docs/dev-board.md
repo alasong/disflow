@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 178 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 189 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -124,6 +124,25 @@ disflow 决定，**无硬编码列表**。
 | 5 处新判据（已碰过拒收 / reason 必填 / 只限 running / 无空操作 / 破例留痕） | 逐个抖回缺陷 → **5/5 被新测试抓到** ✅ |
 | 破例不能把门变松（无 waiver 照拒） | 单测固定 |
 | 新增动词被 doc-drift 守卫拦下 → 补 `design.md` §7.2 后通过 | 真实发生（178 测试才转绿） |
+
+### 0.5 收尾 C4.3：`unrequire`（边可删）
+
+建错依赖此前只能 `skip` 整节点（真跑循环里 `C7` 就这样废掉）。
+关键判断：**删边不能把加边的校验搞松**，所以两者**故意不对称**：
+
+| | `require`（加边） | `unrequire`（删边） |
+| --- | --- | --- |
+| 两端节点存在 | 必须 | **不要求 `dep` 存在** |
+| 自环 / 成环 | 写时拒 | 不适用 |
+| 边已存在 / 不存在 | 幂等 | 不存在则拒（报出当前出边） |
+
+**为何删边不要求 `dep` 存在**：否则**悬空边反而清不掉**——`doctor` 报得出、没人修得了。
+
+| 验收点 | 反向验证 |
+| --- | --- |
+| 4 处判据（边必须存在 / reducer 真删 / 只删指定边 / 不要求 dep 存在） | 逐个抖回缺陷 → **4/4 被新测试抓到** ✅ |
+| `drive` 的就绪波次真的变了（不只字段被抹） | 装配层测试断言阻塞行消失、节点进入波次 |
+| 被拒的写入不落事件、事件流仍可重放 | 单测断言事件数不变 + `projection_matches` 通过 |
 
 > `rescope` 的对偶是「改声明」，`scope_waiver` 的对偶是 `size_waiver`（破例）——
 > 现在两个门（`design_first` / `size_budget`）形状对称了。
