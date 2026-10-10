@@ -97,7 +97,7 @@ d doctor                                        # 自检全绿
 
 两个视图各答一半（**数据源分离、布局同源**）：`board` 是**纯 disflow 事实**的一次性快照
 （阶段列 + 列内树层级 + 状态分组，含 pending/skipped/failed）；`lanes_watch.sh` 以**同一棵树的
-全部节点**为骨架（**逐行复用** `board_lines`，不另写一套缩进/分列），再把宿主 pi 运行目录
+全部节点**为条目（一列一块，按 `stage` 归列），再把宿主 pi 运行目录
 （lane 名 = 节点 id）join 上来，在**在跑**节点上就地显示实时进展（`◈` 目标 / `⌘` 最后命令 /
 `↳` worker 自报进展）。`board` 不知道 worker 在跑哪条命令，pi 不知道树的结构 —— 所以是**两个**；
 区分依据是**数据源与刷新节拍**，不是布局（布局只有 `views.board_layout` 一处实现）。
@@ -108,7 +108,7 @@ d doctor                                        # 自检全绿
 goal 截断到 80 字（`views.truncate_goal` **唯一实现**）；**完整 goal 在 `board --json`**。**看板默认只列运行中 + 待完成**（终态与空列在表头两行报数，`--all` / `--all-columns` 展开）；运行视图默认只显示**有活的树**（`--tree <slug>` 指定、`--all-boards` 不筛）。
 - **默认刷新不吐控制序列**：`lanes_watch.sh` 默认是**追加式**（每轮一整块、带时间戳头、
 **保留回滚**——滞轮/scrollback 可用）；备用屏必须显式 `--screen`（不闪，**代价是没回滚**）；
-**非 TTY（管道/重定向）零控制序列**；**默认只列「运行中 + 待完成」**（`--full` 显示全部状态）；派发批次注解区默认不显示（`-v` 展开）；
+**非 TTY（管道/重定向）零控制序列**；**按阶段列（需求/设计/开发/验证）分别列出「运行中 + 待完成」**（`--all` 连终态）；派发批次注解区默认不显示（`-v` 展开）；
 无在跑节点时显式打一句（进展只对在跑节点显示是设计）。
 
 第 ④ 步的真实输出：
@@ -287,7 +287,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 634 passed（零第三方依赖）——收尾全量，保留可用
+python3 -m unittest discover -s tests -t tests    # 621 passed（零第三方依赖）——收尾全量，保留可用
 python3 scripts/test_changed.py                   # 迭代期：只跑改动相关的子集（带「这不是全量」横幅）
 python3 scripts/mutation_check.py                 # 变异测试：64/64（验证测试真的有牙）
 ```
