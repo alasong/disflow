@@ -345,8 +345,28 @@ MUTATIONS: list[Mutation] = [
      '    for _entry in leaks_plan + residual_plan:\n'
      '        subprocess.run(["git", "-C", repo, "branch", "-D", _entry["branch"]],\n'
      "                       capture_output=True, text=True, check=False)\n"
-     "    entries = leaks_plan + residual_plan",
-     "test_worktree.py"),
+       "    entries = leaks_plan + residual_plan",
+       "test_worktree.py"),
+
+    # ── 关树之后的边界（closed 是跳树完成信号，FR-23）───────────────────
+    #   ⚠️ 本组守的是一个**已修的真缺陷**：修复前 `expand` 对已关闭的树照收，于是
+    #      「已完成」的上游能继续长出未完成的任务，而 `awaits` 消费方已经开工了。
+    ("expand 不再拦已关闭的树（跳树信号可被静默弄假）", "disflow/engine.py",
+     '            if t.get("closed"):',
+     '            if t.get("closed") and False:',
+     "test_reopen.py"),
+    ("reopen 不真的撤销 closed（则 expand 一直拒、逃生口是假的）", "disflow/state.py",
+     '    tree["closed"] = False',
+     '    tree["closed"] = tree.get("closed", False)',
+     "test_reopen.py"),
+    ("reopen 不清那条已承认的历史违规（则 doctor 永远消不掉一条红）", "disflow/state.py",
+     '            seen.pop(slug, None)                # 且承认并清掉由它引起的那条违规\n',
+     '',
+     "test_reopen.py"),
+    ("expand 事件不带 holder（则谁挂的无从追溯）", "disflow/engine.py",
+     '                           prepare=lambda _: {"children": children, "holder": holder})',
+     '                           prepare=lambda _: {"children": children})',
+     "test_reopen.py"),
 ]
 
 
