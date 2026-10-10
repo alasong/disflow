@@ -44,6 +44,11 @@ def _mentioned() -> dict[str, set[str]]:
     return found
 
 
+def _cells(row: str) -> int:
+    """一行 markdown 表格的列数（转义竖线 `\\|` 不计）。"""
+    return len(re.findall(r"(?<!\\)\|", row)) - 1
+
+
 class DocDriftTest(DisflowTestCase):
     def test_no_doc_mentions_a_nonexistent_verb(self):
         real = _real_verbs()
@@ -66,6 +71,32 @@ class DocDriftTest(DisflowTestCase):
     def test_doc_files_exist(self):
         for rel in DOC_FILES:
             self.assertTrue(os.path.isfile(ROOT / rel), f"文档缺失：{rel}")
+
+    def test_markdown_tables_are_rectangular(self):
+        """每个 markdown 表格的所有行（含 `---` 分隔行）必须与表头**同列数**。
+
+        为何要断言：分隔行写少一列时，markdown-lint 不报，但渲染结果是错的
+        （实测：`| --- | --- |` 配 3 列表头，表格在 GitHub 上直接不成立）。
+        转义竖线 `\\|` 不算分隔（`devflow handoff brief\\|collect` 这种写法合法）。
+        """
+        offenders: list[str] = []
+        for rel in DOC_FILES:
+            lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
+            index = 0
+            while index < len(lines):
+                if not lines[index].startswith("|"):
+                    index += 1
+                    continue
+                end = index                        # 表格块 = 连续以 | 开头的行
+                while end < len(lines) and lines[end].startswith("|"):
+                    end += 1
+                head = _cells(lines[index])
+                for offset in range(index, end):
+                    if _cells(lines[offset]) != head:
+                        offenders.append(
+                            f"{rel}:{offset + 1} {_cells(lines[offset])}列 vs 表头{head}列")
+                index = end
+        self.assertEqual(offenders, [], f"表格列数不齐（渲染会错）：{offenders}")
 
 
 if __name__ == "__main__":

@@ -209,6 +209,8 @@ def cmd_doctor(engine: Engine, args) -> int:
     matched, diffs = store.projection_matches(engine.spec, project=project)
     if not matched:
         problems.extend(f"投影漂移：{d}" for d in diffs)
+        # 报告要带修法：漂移是投影函数变了/被手改，事件才是真相
+        problems.append("修法：`disflow rebuild` 从事件重算投影（投影是派生的，事件是真相）")
     state = engine.load()
     now_ts = time.time()
     for name, tree in sorted(state.get("trees", {}).items()):

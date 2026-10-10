@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 156 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 161 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -103,17 +103,27 @@ disflow 决定，**无硬编码列表**。
 ### 0.2 本轮暴露的产品/流程缺口（已登记 backlog §C4）
 
 | # | 缺口 | 证据 |
-| --- | --- |
+| --- | --- | --- |
 | 1 | **`touch_plan` 建树后不可更新**，且 `design_first` **无逃生口** | 干活时发现需多改一个文件 → 门拒收，但无合法路径改声明 |
-| 2 | **baseline 是文件粒度**：同一文件被两个节点先后修改，第二个节点的 `introduced` 为空 | C6 的 scope 检查空转（C5 先弄脏了 `cli.py`） |
+| 2 | ~~**baseline 是文件粒度**~~ ✅ **已修**：改为 `{路径: 内容指纹}`（`design.md` §7.1），并加反向验证（退回路径差集 → 新测试失败） | C6 的 scope 检查曾空转（C5 先弄脏了 `cli.py`） |
 | 3 | 无 `unrequire`：建错依赖只能 `skip` 整节点 | C7 的 requires 方向建反，只能 skip 并记录 |
 | 4 | **陈旧 `__pycache__` 会静默跑旧代码** | store 修复已落盘但行为仍旧；清字节码后立即生效 |
 
+### 0.3 随后修掉的 C4.2 与顺手补的两个可执行检查
+
+| 改动 | 为何值得 | 反向验证 |
+| --- | --- | --- |
+| **C4.2 修复**：`baseline` 从路径集合改为 `{路径: 内容指纹}` | 路径差集看不见「同一文件被两节点先后改」⇒ 作用域门**静默失效** | 退回路径差集 → `test_engine` 失败 ✅ |
+| `doctor` 报漂移时**给出修法**（`disflow rebuild`） | 只报“坏了”不报“怎么修”，用户只能猜 | 新测试断言 `rebuild` 出现在报文里 |
+| 新增**表格列数守卫**（`test_docs.py`） | 分隔行少写几列时 markdown-lint 不报，但**渲染是错的**——本轮刚踩过两次 | 把分隔行少写一列 → 测试精确指出行号 ✅ |
+
+> 投影函数的变更（`baseline` 形状）会合法地使磁盘上的旧投影漂移；
+> `doctor` 抓到了，`rebuild` 重建后两棵树仍 10/10 与 17/17。**事件未动**。
+
 > #4 值得单独记：当时我差点把「陈旧字节码」误判为「修复无效 / 测试隔离有问题」。
 > 判据：`inspect.getsource` 显示新代码而行为是旧的 → 先清 `__pycache__` 再下结论。
->
-> **证据边界**：`cli-cov` 树的状态只活在本机 `.disflow/`（已 gitignore）。
-> 本文件记录的是**结果与教训**；树的节点级证据（每节点的 `introduced`/`size`/门报文）是本地产物。
+> **证据边界**：`cli-cov` 树的状态只活在本机 `.disflow/`（已 gitignore）；
+> 本文件记录的是**结果与教训**，树的节点级证据是本地产物。
 
 ---
 

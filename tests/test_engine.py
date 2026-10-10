@@ -158,6 +158,65 @@ class EngineFlowTest(DisflowTestCase):
         self.assertEqual(node["evidence"]["introduced"], [])
         self.assertIn("other.py", node["evidence"]["baseline"])
 
+    def _git_engine(self, files: dict[str, str]) -> tuple[Engine, str]:
+        repo = tempfile.mkdtemp(prefix="disflow-git-")
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        for name, body in files.items():
+            full = os.path.join(repo, name)
+            parent = os.path.dirname(full)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(full, "w", encoding="utf-8") as handle:
+                handle.write(body)
+        return Engine(cwd=repo), repo
+
+    def test_second_writer_of_same_dirty_file_is_attributed(self):
+        """回归（真缺口 C4.2）：同一文件被前一节点弄脏后，本节点再改它时，
+        「按路径做差集」看不见（两边集合都有它）⇒ `introduced=[]` ⇒ **scope 门静默失效**。
+        改成「路径 → 内容指纹」后必须被归因并拒收。"""
+        engine, repo = self._git_engine({"a.py": "x = 1\n", "b.py": "y = 1\n"})
+        engine.init_tree("t", "g")
+        engine.expand("t", "root", [
+            {"id": "n1", "goal": "写 a", "touch_plan": ["a.py"], "acceptance": acceptance()},
+            {"id": "n2", "goal": "写 b", "touch_plan": ["b.py"], "acceptance": acceptance()},
+        ])
+        # n1 合法地弄脏 a.py
+        engine.start("t", "n1", "w")
+        with open(os.path.join(repo, "a.py"), "w", encoding="utf-8") as handle:
+            handle.write("x = 2\n")
+        engine.done("t", "n1")
+        self.assertEqual(engine.load()["trees"]["t"]["nodes"]["n1"]["evidence"]["introduced"],
+                         ["a.py"])
+
+        # n2 开工（基线含已脏的 a.py），然后**越界**又改 a.py
+        engine.start("t", "n2", "w")
+        with open(os.path.join(repo, "a.py"), "w", encoding="utf-8") as handle:
+            handle.write("x = 3\n")
+        with self.assertRaises(GateReject) as ctx:
+            engine.done("t", "n2")
+        self.assertTrue(any("touch_plan" in m for m in ctx.exception.missing),
+                        f"越界改动必须被拒，实测 {ctx.exception.missing}")
+
+    def test_untouched_preexisting_dirt_stays_excluded(self):
+        """反向：基线里已脏、但本节点**没碰**的文件仍不算引入（不能误伤）。"""
+        engine, _repo = self._git_engine({"other.py": "x = 1\n", "b.py": "y = 1\n"})
+        engine.init_tree("t", "g")
+        engine.expand("t", "root", [{"id": "n", "goal": "写 b",
+                                      "touch_plan": ["b.py"], "acceptance": acceptance()}])
+        engine.start("t", "n", "w")
+        engine.done("t", "n")
+        self.assertEqual(engine.load()["trees"]["t"]["nodes"]["n"]["evidence"]["introduced"],
+                         [])
+
+    def test_fingerprint_sees_content_change_with_same_size(self):
+        """指纹必须能区分**同长度**的改动（路径/大小都看不出的那种）。"""
+        engine, repo = self._git_engine({"a.py": "aaa\n"})
+        before = gates.fingerprint(repo, "a.py")
+        with open(os.path.join(repo, "a.py"), "w", encoding="utf-8") as handle:
+            handle.write("bbb\n")
+        self.assertNotEqual(before, gates.fingerprint(repo, "a.py"))
+
     def test_scope_dot_covers_all_and_prefix_matches(self):
         self.assertEqual(gates.scope_check(["."], ["a.py", "dir/b.py"])["violations"], [])
         self.assertEqual(gates.scope_check(["src"], ["src/a.py", "other/b.py"])["violations"],

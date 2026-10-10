@@ -106,7 +106,9 @@ def _on_node_start(state: dict, event: dict) -> None:
     node = _node(state, event["slug"], event["node"])
     node["status"] = "running"
     node["lease"] = event.get("lease")
-    node["baseline"] = event.get("baseline") or []
+    raw = event.get("baseline") or {}
+    # 基线统一为 {路径: 内容指纹}；旧事件（路径列表）归一为 None 指纹 ⇒ 一律判为已改（保守）
+    node["baseline"] = raw if isinstance(raw, dict) else dict.fromkeys(raw)
 
 
 def _on_node_collect(state: dict, event: dict) -> None:

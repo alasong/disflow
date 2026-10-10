@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 import subprocess
@@ -83,6 +84,60 @@ def git_changed_files(cwd: str) -> list[str] | None:
             path = path.split(" -> ", 1)[1]
         files.append(path.strip())
     return sorted(files)
+
+
+def _file_digest(path: str) -> str:
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 16), b""):
+                digest.update(chunk)
+    except OSError:
+        return ""                      # 读不到 ⇒ 与「指纹不同」同义，保守判为已改
+    return digest.hexdigest()
+
+
+def fingerprint(cwd: str, relpath: str) -> str:
+    """单条改动路径的**内容指纹**。目录（`git status` 会把未跟踪目录折叠成 `dir/`）
+    递归按 `(相对路径, 内容指纹)` 计入；读不到返回 `""`。"""
+    full = os.path.join(cwd, relpath.rstrip("/"))
+    if os.path.isdir(full):
+        parts: list[str] = []
+        for base, _dirs, files in os.walk(full):
+            for name in files:
+                sub = os.path.join(base, name)
+                parts.append(f"{os.path.relpath(sub, full)}:{_file_digest(sub)}")
+        return hashlib.sha256("\n".join(sorted(parts)).encode()).hexdigest()
+    return _file_digest(full)
+
+
+def snapshot(cwd: str) -> dict[str, str] | None:
+    """开工基线：**当前脏文件 → 内容指纹**。非 git 仓返回 None（不假装有基线）。"""
+    changed = git_changed_files(cwd)
+    if changed is None:
+        return None
+    return {path: fingerprint(cwd, path) for path in changed}
+
+
+def newly_changed(cwd: str, baseline: dict | list | None) -> list[str] | None:
+    """`done` 时归因：**相对基线内容真的变了**的路径（新出现 / 内容变 / 被删）。
+
+    为何不用「按路径做差集」：同一文件被前一个节点弄脏后，本节点再改它时，
+    差集看不见（两边的集合都有它）⇒ `introduced=[]` ⇒ **scope 门静默失效**。
+    指纹能看见。
+
+    兼容旧事件：基线是**路径列表**时，值记为 `None`（未知指纹）⇒ 一律判为已改（保守）。
+    """
+    changed = git_changed_files(cwd)
+    if changed is None:
+        return None
+    base: dict = (dict.fromkeys(baseline) if isinstance(baseline, list)
+                  else dict(baseline or {}))
+    out: list[str] = []
+    for path in sorted(set(changed) | set(base)):
+        if fingerprint(cwd, path) != base.get(path):
+            out.append(path)
+    return out
 
 
 def _covered(path: str, touch_plan: list[str]) -> bool:

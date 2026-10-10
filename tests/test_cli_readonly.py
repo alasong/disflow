@@ -157,6 +157,22 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         self.assertNotEqual(code, 0, "悬空 requires 必须被 doctor 抓到")
         self.assertIn("✗", err)
 
+    def test_doctor_names_the_remedy_for_projection_drift(self):
+        """报故障必须带修法：漂移时要点名 `rebuild`，否则用户只知道“坏了”。"""
+        self._seed()
+        path = store.projection_path(spec.SPEC)
+        state = store.read_json(path)
+        state["trees"]["t"]["nodes"]["b"]["status"] = "done"      # 与事件不符 ⇒ 漂移
+        store.write_json_atomic(path, state)
+        code, out, err = self._run(["doctor"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("投影漂移", err)
+        self.assertIn("rebuild", err, "故障报文必须给出修法")
+        # 报的修法必须真能修：跑完 rebuild 后 doctor 应该转绿
+        self.assertEqual(self._run(["rebuild"])[0], 0)
+        self.assertEqual(self._run(["doctor"])[0], 0)
+        self.assertEqual(out, "")
+
 
 if __name__ == "__main__":
     unittest.main()

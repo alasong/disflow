@@ -180,7 +180,7 @@ class Engine:
                 raise EngineError(f"{node} 未就绪，被阻塞：{blockers}")
         return self._write("node.start", tree=tree, node=node, guard_state=guard,
                            prepare=lambda _: {"lease": lease,
-                                              "baseline": gates.git_changed_files(self.cwd) or []},
+                                              "baseline": gates.snapshot(self.cwd)},
                            dry_run=dry_run)
 
     def collect(self, tree: str, node: str, result: dict) -> dict:
@@ -197,15 +197,16 @@ class Engine:
         def prepare(t: dict) -> dict:
             item = self._need(t, node)
             ok, why, evidence = gates.evidence_meta(item.get("acceptance"), self.cwd)
-            baseline = set(item.get("baseline") or [])
-            changed = evidence.get("changed_files")
-            # 只归因「开工后被引入」的改动，忽略开工前就存在的脏文件（他人改动）
-            introduced = None if changed is None else [f for f in changed if f not in baseline]
+            baseline = item.get("baseline") or {}
+            # 只归因「开工后**内容真的变了**」的改动：既忽略开工前的脏文件，
+            # 也逮得住「同文件被前一节点弄脏、本节点又改」这种差集看不见的情况
+            introduced = gates.newly_changed(self.cwd, baseline)
             scope = gates.scope_check(item.get("touch_plan") or [], introduced)
             size = gates.diff_size(self.cwd, introduced)
             budget = gates.resolve_budget(item)
             evidence["baseline"] = sorted(baseline)
             evidence["introduced"] = introduced
+            evidence["baseline_method"] = "content-sha256"
             evidence["scope"] = scope
             evidence["size"] = size
             evidence["budget"] = budget
