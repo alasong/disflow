@@ -78,5 +78,64 @@ class PinNotFoundTest(unittest.TestCase):
         self.assertEqual(broken, [], f"这些针脚已与代码脱节：{broken}")
 
 
+class HarnessReportingTest(unittest.TestCase):
+    """harness 的两条失败通道各自钉一个用例：**漏抓**与**针脚未应用**。
+
+    为何单独测：harness 的输出是**结论**（exit 1「这个行为没被守住」/ exit 2「本轮不可信」），
+    而结论本身可能错——把一条「改了实现、测试照样绿」的针脚报成抓到（真空的绿被当成证据），
+    或把「针脚对不上」静默跳过，都会让报告失真。两条通道必须都可复现地报出来。
+    """
+
+    # **故意没牙齿**的针脚：把未知 slug 的报错文案改掉（真改了输出），但 `test_metrics.py`
+    # 只断言 reason 含 slug / 出现过的 slug、且不等于 `NO_START_REASON`——文案格式没被守住，
+    # 于是注入生效、对应测试仍全绿。这就是「测试通过是真空的」的活样本。
+    _TOOTHLESS = ("故意无牙的针脚", "disflow/metrics.py",
+                  '''        return (f"未知 slug：{slug!r}；该事件流里出现过的 slug："
+                f"{', '.join(sorted(seen))}")''',
+                  '''        return (f"zzz slug={slug!r} seen={', '.join(sorted(seen))}")''',
+                  "test_metrics.py")
+
+    def test_a_toothless_pin_is_reported_as_a_miss_not_as_caught(self):
+        """针脚改了实现、但对应测试照样绿 ⇒ 必须报「漏抓」（exit 1），不得算抓到。"""
+        original = mc.MUTATIONS
+        mc.MUTATIONS = [self._TOOTHLESS]
+        try:
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = mc.main([])
+        finally:
+            mc.MUTATIONS = original
+        text = buffer.getvalue()
+        self.assertEqual(code, 1, "注入生效但测试没红 ⇒ 漏抓（1），不是 harness 错（2）")
+        self.assertIn("漏抓", text)
+        self.assertIn("没有被测试守住", text)
+
+    def test_a_mismatched_pin_is_reported_never_silently_skipped(self):
+        """针脚 `old` 在文件里找不到：必须点名报出（exit 2），不得静默跳过当没事。
+
+        与 `PinNotFoundTest` 的区别：这里把对不上的针脚**混在一条有效针脚中间**，
+        验证 harness 既不跳过坏的、也不把好的误报成漏抓（`_check` 抛错前的输出不污染结论）。
+        """
+        good = ("有效针脚", "disflow/metrics.py",
+                "    return ts <= cutoff_ts and _day(ts) <= cutoff_day",
+                "    return ts > cutoff_ts and _day(ts) <= cutoff_day",
+                "test_metrics.py")
+        bogus = ("对不上的针脚", "disflow/metrics.py",
+                 "这段文本在 metrics.py 里根本不存在", "x", "test_metrics.py")
+        original = mc.MUTATIONS
+        mc.MUTATIONS = [good, bogus]
+        try:
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = mc.main([])
+        finally:
+            mc.MUTATIONS = original
+        text = buffer.getvalue()
+        self.assertEqual(code, 2, "针脚对不上 = harness 的错（2），且本轮结果不可信")
+        self.assertIn("对不上的针脚", text)
+        self.assertIn("未应用", text)
+        self.assertNotIn("没有被测试守住", text, "坏针脚不得被当成覆盖缺口")
+
+
 if __name__ == "__main__":
     unittest.main()
