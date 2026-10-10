@@ -18,9 +18,10 @@ import os
 import sys
 import time
 
-from . import config, graph, store, views
+from . import config, graph, metrics, store, views, worktree
 from .engine import Engine, EngineError, GateReject
 from .import_mgt import apply_import, build_import, load_mgt
+from .metrics import parse_deadline
 from .ready import lease_overdue_seconds
 from .state import project
 
@@ -414,17 +415,215 @@ def cmd_reap(engine: Engine, args) -> int:
     return 0
 
 
+def _pts(value) -> str:
+    """点数显示：整数不拖 `.0`，小数看得见（`0.5` 点与 `0` 点是两回事）。"""
+    return f"{value:g}" if isinstance(value, (int, float)) else str(value)
+
+
+def _days(text: str, *, remaining: int | None, overdue: int | None) -> str:
+    """把 `剩余/逾期` 读数说成人话；`remaining is None` 时返回 `text`（通常是「未声明」）。"""
+    if remaining is None:
+        return text
+    if overdue:
+        return f"{text} · **逾期 {overdue} 天**"
+    return f"{text} · 剩 {remaining} 天"
+
+
+# 量化里「尚未声明」这一类事实的措辞：与其它地方同源，避免两处文案漂
+_NO_DEADLINE = "未声明"
+
+
+def cmd_metrics(engine: Engine, args) -> int:
+    """量化：`points`（声明）+ `velocity`/`burndown`（派生）。只读，不改任何状态。"""
+    tree = engine.tree(args.tree)
+    events = store.load_events(engine.spec)
+    now_ts = time.time()
+    summary = metrics.summary(tree, events, slug=args.tree, now_ts=now_ts)
+    burn = metrics.burndown(tree, events, slug=args.tree, now_ts=now_ts)
+    if args.json:
+        _dump({"summary": summary, "burndown": burn})
+        return 0
+    print(f"树 {args.tree}：量化")
+    estimated = summary["points_total"] > 0
+    if not estimated:
+        print(f"  点数    未声明——{summary['points_unestimated']} 个 task 节点都没给 `points`")
+        print("          （估点是**人给的声明**，引擎不猜；所以这里不会自己编一个数出来）")
+    else:
+        print(f"  点数    {_pts(summary['points_total'])}"
+              f"（已完成 {_pts(summary['points_done'])}，剩 {_pts(summary['points_left'])}）"
+              f" · 未估 {summary['points_unestimated']} 个节点")
+        if summary["eta_days"] is None:
+            why = ("起点未知" if summary["start_reason"] else "不足一天（同日）·速度还是 0")
+            print(f"  进度    {summary['days_elapsed']} 天 · 速度 {_pts(summary['velocity'])} 点/天"
+                  f" → 预计完工：无法给出（{why}）")
+        else:
+            print(f"  进度    {summary['days_elapsed']} 天 · 速度 {_pts(summary['velocity'])} 点/天"
+                  f" → 预计还需 {_pts(summary['eta_days'])} 天")
+    if summary["start_reason"]:
+        print(f"  起点    ⚠ {summary['start_reason']}")
+    print(f"  截止    {_days(summary['deadline'] or _NO_DEADLINE,
+                             remaining=summary['deadline_remaining_days'],
+                             overdue=summary['deadline_overdue_days'])}")
+    if summary["deadline_reason"]:
+        print(f"          ⚠ {summary['deadline_reason']}")
+    if burn["series"]:
+        first, last = burn["series"][0], burn["series"][-1]
+        line = f"  燃尽    {first['day']} {_pts(first['remaining'])} → {last['day']} {_pts(last['remaining'])}"
+        if burn["ideal"]:
+            line += f"（理想线 → {burn['ideal'][-1]['day']} 归零）"
+        print(line)
+    if burn["ideal_reason"]:
+        print(f"  理想线  ⚠ {burn['ideal_reason']}")
+    return 0
+
+
+def cmd_deadline(engine: Engine, args) -> int:
+    """设/清树级 `deadline`（迭代边界）。非法日期在写时响亮拒收（不落事件）。"""
+    engine.deadline(args.tree, args.date)
+    value = parse_deadline(args.date)
+    if value is None:
+        print("✓ deadline 已清空")
+        return 0
+    tree = engine.tree(args.tree)
+    summary = metrics.summary(tree, store.load_events(engine.spec), slug=args.tree,
+                              now_ts=time.time())
+    print(f"✓ deadline 已设为 {value}"
+          + (f" · **逾期 {summary['deadline_overdue_days']} 天**"
+             if summary["deadline_overdue_days"]
+             else f" · 剩 {summary['deadline_remaining_days']} 天"))
+    return 0
+
+
+def _worktree_call(args, handler):
+    """组装层把底层异常归一到 `EngineError`：`worktree` 抛 `KeyError`（名字写错）
+    与 `WorktreeProbeError`（git 探针失败），两者若直接漏出去就是抛栈而不是一行人话。"""
+    try:
+        return handler()
+    except KeyError as exc:
+        raise EngineError(str(exc).strip("'") or "树/节点不存在") from exc
+    except worktree.WorktreeProbeError as exc:
+        raise EngineError(f"worktree 对账读数不可信：{exc}") from exc
+
+
+def cmd_worktree(engine: Engine, args) -> int:
+    """每节点 git worktree（**派生资源，不是状态**：路径是 (state_dir, tree, node) 的纯函数）。
+
+    默认**只推不跑**：`plan`/`list`/`reap` 零副作用；只有 `apply`（**创建**，可逆且幂等）真跑 git。
+    `reap` 是**纯计划**——删除交还宿主跑它打印出来的命令：删是唯一不可逆动作，引擎不替人删数据。
+    """
+    engine.tree(args.tree)                 # 名字写错在这里就用 EngineError 拦下
+    spec, tree, cwd = engine.spec, args.tree, engine.cwd
+    action = args.action
+    if action == "plan":
+        report = _worktree_call(args, lambda: worktree.plan(spec, tree, cwd))
+        if args.json:
+            _dump(report)
+            return 0
+        if not report["plan"]:
+            print("（无可建 worktree：没有非终态的 task 节点）")
+            return 0
+        print(f"worktree 计划（根：{report['root']}）")
+        for entry in report["plan"]:
+            mark = "存在" if entry["status"]["exists"] else "待建"
+            print(f"  {entry['node']}  [{mark}]  {entry['status']['path']}")
+            print(f"        {' '.join(entry['add_cmd'])}")
+        print("只推不跑：要真建请 `disflow worktree apply <tree>`")
+        return 0
+    if action == "list":
+        report = _worktree_call(args, lambda: worktree.reconcile(spec, tree, cwd))
+        if args.json:
+            _dump(report)
+            return 0
+        print(f"worktree 对账（树 {tree}）")
+        for leak in report["leaks"]:
+            dirty = "（**有未提交改动**）" if leak.get("dirty") else ""
+            ignored = f"（被忽略文件 {len(leak['ignored'])} 个）" if leak.get("ignored") else ""
+            print(f"  leak      {leak['node']}: 节点已 {leak['status']} 但 worktree 还在{dirty}{ignored}")
+        for nid in report["missing"]:
+            print(f"  missing   {nid}: 节点在跑却没有 worktree")
+        for path in report["orphans"]:
+            print(f"  orphan    {path}: 对不上任何已知节点")
+        for item in report["residual"]:
+            print(f"  residual  {item['node']}: 分支 {item['branch']} 还在（节点已 {item['status']}）")
+        if not any(report.get(k) for k in ("leaks", "missing", "orphans", "residual")):
+            print("  ✓ 干净")
+        return 0
+    if action == "apply":
+        report = _worktree_call(args, lambda: worktree.apply(spec, tree, cwd))
+        if args.json:
+            _dump(report)
+            return 0
+        if report.get("pruned"):
+            print(f"（顺带清了 {len(report['pruned'])} 条自家命名空间下的陈旧登记）")
+        print(f"✓ 建了 {len(report['created'])} 个：{' '.join(report['created']) or '（无）'}"
+              f" · 重新附着 {len(report['reattached'])}"
+              f" · 已存在跳过 {len(report['skipped'])}")
+        for nid in report["reattached"]:
+            print(f"  ↩ {nid}：接着上次的分支继续（未合并的提交还在）")
+        for nid in report.get("not_applicable") or []:
+            print(f"  · {nid}：非活节点，不建工作区")
+        if report.get("broken"):
+            for item in report["broken"]:
+                print(f"✗ 坏状态：{item}", file=sys.stderr)
+            return 1
+        return 0
+    if action == "reap":
+        report = _worktree_call(args, lambda: worktree.reap(spec, tree, cwd))
+        if args.json:
+            _dump(report)
+            return 0
+        if not report.get("reliable", True):
+            print("⚠ 有不可判定项（探针读不到）——已按拒绝侧处理，别把这些当可删",
+                  file=sys.stderr)
+        entries = ([("leak    ", item) for item in report["leaks"]]
+                   + [("residual", item) for item in report["residual"]])
+        if not entries:
+            print("✓ 无可回收的 worktree / 残留分支")
+            return 0
+        print(f"可回收 {len(entries)} 项（**只推不跑**：引擎不执行删除，下面命令由人跑）")
+        if any(entry["remove_cmd"] for _kind, entry in entries):
+            print("  顺序要紧：先删工作区、再删分支"
+                  "（工作区还在时 git 会拒删它占用的分支）")
+        for kind, entry in entries:
+            print(f"  {kind} {entry['node']}  "
+                  + ("✓ 判据为空，可安全回收" if entry["safe_to_drop"] else "⚠ 跑了会丢东西"))
+            for reason in entry["reasons"]:
+                print(f"           理由：{reason}")
+            for warn in entry.get("discard_warnings") or []:
+                print(f"           ⚠ {warn}")
+            if entry["remove_cmd"]:
+                print(f"           删工作区：{' '.join(entry['remove_cmd'])}")
+            print(f"           删分支：  {' '.join(entry['branch_cmd'])}")
+        return 0
+    raise EngineError(f"未知动作：{action}")
+
+
 def cmd_trees(engine: Engine, args) -> int:
     names = engine.trees()
     if not names:
         print("（无树）")
         return 0
+    events = store.load_events(engine.spec)      # 一次读，循环里复用（不每棵树重读）
+    now_ts = time.time()
     for name in names:
         status = engine.status(name)
         progress = status["progress"]
         mark = "●" if status["closed"] else "·"
+        # 迭代边界：有 deadline 才报余量；无则什么都不说（不编一个“无限期”出来）
+        tree = engine.tree(name)
+        deadline = tree.get("deadline")
+        tail = ""
+        if deadline:
+            try:
+                summary = metrics.summary(engine.tree(name), events,
+                                          slug=name, now_ts=now_ts)
+                overdue = summary["deadline_overdue_days"]
+                tail = (f" · 逾期 {overdue} 天" if overdue
+                        else f" · 剩 {summary['deadline_remaining_days']} 天")
+            except ValueError:
+                tail = " · deadline 非法"
         print(f"{mark} {name}: {progress['done']}/{progress['tasks']}（{progress['pct']}%）"
-              f" · 就绪 {len(status['ready'])} · {status['goal']}")
+              f" · 就绪 {len(status['ready'])}{tail} · {status['goal']}")
     return 0
 
 
@@ -567,6 +766,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     node = add("reap", cmd_reap)
     node.add_argument("tree")
+
+    node = add("metrics", cmd_metrics)
+    node.add_argument("tree")
+    node.add_argument("--json", action="store_true", help="机器可读输出")
+
+    node = add("deadline", cmd_deadline)
+    node.add_argument("tree")
+    node.add_argument("date", help="YYYY-MM-DD；'-' 表示清空（非法日期在写入时即拒）")
+
+    node = add("worktree", cmd_worktree)
+    node.add_argument("action", choices=["plan", "list", "apply", "reap"],
+                      help="只有 apply（创建，可逆）真跑 git；reap 是纯计划")
+    node.add_argument("tree")
+    node.add_argument("--json", action="store_true", help="机器可读输出")
 
     add("trees", cmd_trees)
     add("doctor", cmd_doctor)

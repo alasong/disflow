@@ -68,6 +68,7 @@ disflow rebuild [--check]                # 从事件重建；--check 比对一�
   "produces": ["parse_config"],   // 图边：产出物
   "consumes": ["config_schema"],  // 图边：消费物（须指向已登记产出）
   "touch_plan": ["src/parse.py"], // 写面声明（规模门 + 冲突检测）
+  "points": 3,                  // 估点（人给；见 §2.4 —— 它是**声明**侧，velocity/burndown 是派生侧）
   "awaits": ["boardA"],         // 跨树完成信号（等待别的树 closed），非图边
   "acceptance": {                 // 门
     "cmd": "pytest tests/test_parse.py",
@@ -87,7 +88,7 @@ disflow rebuild [--check]                # 从事件重建；--check 比对一�
 
 | 类 | 字段 | 怎么来 |
 | --- | --- | --- |
-| **可声明** | `id` `kind` `stage` `role` `goal` `context` `entry` `requires` `relates` `produces` `consumes` `touch_plan` `awaits` `acceptance` | 在 `expand` 的 children 里给，或用对应动词改 |
+| **可声明** | `id` `kind` `stage` `role` `goal` `context` `entry` `requires` `relates` `produces` `consumes` `touch_plan` `awaits` `points` `acceptance` | 在 `expand` 的 children 里给，或用对应动词改 |
 | **运行时/派生** | `parent` `status` `lease` `evidence` | 由事件流决定 |
 
 `expand` 里声明运行时字段会 **报错**（不是忽略）：`parent` 由 expand 的父子关系决定；
@@ -137,6 +138,31 @@ disflow rebuild [--check]                # 从事件重建；--check 比对一�
 | `task` | 是 | 过验收门（§7） |
 
 `ready()` 只对 `task` 返回真；容器不派发。
+
+### 2.4 树级字段（`deadline`）与量化的两侧（`points`）
+
+树字典（`state["trees"][name]`）在 `goal` / `root` / `nodes` / `assets` 之外，有一个**声明**字段：
+
+| 字段 | 怎么来 | 谁消费 |
+| --- | --- | --- |
+| `deadline` | 事件 `tree.deadline`（`Engine.deadline(tree, value)`；非法日期**响亮拒收**、`None` 清空） | `metrics` 的理想燃尽线；`trees` 的剩余/逾期读数 |
+
+> **它不是门**：逾期不拒任何动词。同类边界见 §3.1（`done` 不要求租约）——
+> **只声明事实，不替人做决定**；没有受害者要求「逾期即失败」，就不加门。
+
+**量化分两侧，这条分界是刻意的**：
+
+| 侧 | 是什么 | 在哪 | 谁产生 |
+| --- | --- | --- | --- |
+| **声明** | `points`（估点） | 节点字段，`expand` 时可给 | **人给**——引擎不猜、不推导 |
+| **派生** | `velocity` / `burndown` / `eta_days` | `metrics.py`（纯函数、**零时钟**） | **引擎算**——从事件流推，完工时刻取事件 `ts` |
+
+理由：估点是**非确定性判断**（人/模型的猜测）。让它进事实源会把非确定性带进引擎；
+但一旦人把它**声明**下来，它就是一条可审计的事实（「我估了 3 点」）。
+所以：**估计是声明，指标是派生**——与 `touch_plan`（人声明）vs 改动集（引擎自算）同一个形状。
+
+未估（`points is None`）的节点**不进任何分母**：把它当 0 会把「没估」读成「不用干」，
+凭空抬高 velocity、压低 eta——那正是量化最容易骗自己的地方。故单列 `points_unestimated`。
 
 ---
 
@@ -474,7 +500,8 @@ disflow goal <tree> <g>                            # 改目标
 disflow expand <tree> <node> --children '<json>'   # 建树
 disflow require <tree> <node> <dep>                # 建图（写时拒环）
 disflow unrequire <tree> <node> <dep>              # 删边（增/删**故意不对称**，§7.3）
-disflow relate <tree> <node> <node>
+disflow relate <tree> <node> <node>                  # 建关系（参考，不影响就绪）
+disflow unrelate <tree> <node> <node>                # 删关系（与 relate 故意不对称，§7.3）
 disflow produce/consume <tree> <node> <name>
 disflow context <tree> <node> --set '<json>'       # 合并 context（根用声明逃生口）
 disflow rescope <tree> <node> --touch '<json>' --reason <why> [--dry-run]  # 改写面声明（§7.2）
@@ -489,13 +516,34 @@ disflow brief <tree> <node>                        # 写全派发契约
 disflow plan <tree>
 disflow board/tree/graph <tree> [--dot] [--stage S]
 disflow status [<tree>] [--json]
+disflow metrics <tree> [--json]                    # 量化：点数/速度/燃尽/截止余量（只读，§2.4）
+disflow deadline <tree> <YYYY-MM-DD|->             # 迭代边界（声明；逾期不拒任何动词）
+disflow worktree plan|list|apply|reap <tree> [--json]
+                                                   # 每节点物理隔离；只有 apply 真跑 git，reap 是纯计划
 disflow trees                                      # 列出所有树（● = 已 closed）
 disflow rebuild [--check]
 disflow import mgt <path> --tree <T>               # 迁移（§10）
 disflow doctor                                     # 自检
 ```
 
-> 共 29 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
+> 共 33 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
+
+### 9.1 边界：`apply` 执行、`reap` 只计划
+
+`worktree` 是**派生资源**，不是状态：路径是 `(state_dir, tree, node)` 的纯函数，建删**不产生事件**、不新增存储字段。
+
+| 动作 | 是否执行 git | 为什么 |
+| --- | --- | --- |
+| `plan` / `list` | 否 | 纯读面 |
+| `apply` | **是**（创建 / re-attach） | **可逆且幂等**；建错删掉重来即可 |
+| `reap` | **否**（纯计划） | **删除是唯一不可逆动作** |
+
+`reap` 只给三样东西：**判据**（`reasons`，与守卫同一套词表）、**宿主该跑的命令**（`remove_cmd` / `branch_cmd`，分支一律 `-d` 安全删）、**跑了会丢什么**（`discard_warnings`，指名到提交 sha / ignored 路径）。
+删除交给宿主跑它打印出来的命令——与 `drive` / `brief` 同形（引擎算，宿主执行）。
+
+判决依据（不是审美）：本模块历史上 **9 条阻断级缺陷里 8 条落在「删」这条线上**（强删丢未提交工作 / `-D` 让提交不可达 / 不查返回码 / ignored 文件被静默销毁 / detached 提交被静默销毁 / 全局 `prune` 毁掉别人的登记 / 守卫短名歧义 fail-open / 残留分支路径绕过守卫），而纯读面连续多轮零阻断；且引擎替人删数据违反 disflow 自身的「只推不跑」契约。
+
+守卫极性是 **fail-closed by construction**：`safe_to_drop` 仅当 `reasons` 为空才为真；任何探针不可判定一律落到拒绝侧；leaks 与残留分支**共用同一个漏斗**（`_plan_entry`），不存在第二条绕过判据的路径。
 
 ### 9.1 模块分层与 NFR-2（核心语言中立）
 
