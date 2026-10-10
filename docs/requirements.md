@@ -194,7 +194,7 @@ disflow 是一个**任务分发流引擎**：用**树**提供上下文继承、�
 | FR-11/12 就绪 | ✅ | 唯一 `ready()`；`tests/test_core.py`、`test_multitree.py` |
 | FR-13 就绪快照 | ◐ | `drive --json` 已提供，但无独立 `--dry-run` 旗标 |
 | FR-14/15/16/17 分发 | ✅ | 只推不跑；brief/collect；无 spawn；无常驻；`tests/test_e2e.py` |
-| FR-18/19/20 门与证据 | ✅ | 验收门 + 证据自算 + 缺项契约；`tests/test_engine.py`、`test_gates.py` |
+| FR-18/19/20 门与证据 | ✅ | 验收门（含 `waiver` 显式豁免、`require_declarations` 审批声明）+ 证据自算 + 缺项契约；`tests/test_engine.py`、`test_gates.py`、`test_coverage.py` |
 | FR-21/22/23 看板 | ✅ | 三视图同源；多树隔离；`awaits` 信号；`tests/test_views.py`、`test_multitree.py` |
 | FR-24/25 上下文与写面 | ✅ | `brief` 祖先链注入；`pack_waves` 冲突排队；`tests/test_core.py` |
 | **FR-26 租约** | ✅ | 带 `expires_at`；`reap` 显式回收；`tests/test_lease.py`（**本轮补齐**） |
@@ -205,5 +205,7 @@ disflow 是一个**任务分发流引擎**：用**树**提供上下文继承、�
 | NFR-3/4/5 文件式·可测·可重建 | ✅ | — |
 | NFR-6 规模预算 | ✅ | `size_budget` 门；`tests/test_gates.py` |
 | NFR-7 不静默降级 | ✅ | 坏行/写失败报错；`tests/test_store.py`、`test_cli.py` |
+
+**新增门**：**`tree_coverage`**——每个叶子任务要「需求已登记」（`goal` 非空）且「有可跑判据」（`acceptance.cmd` 或 `waiver`），非根容器必须有子节点；与 `tree_closure` 在 `close` 串联。逃生口：树根 `context.coverage = "not_applicable: <理由>"`。
 
 **未覆盖（◐）**：FR-13 的 `--dry-run` 旗标、NFR-2 的业务常量下沉。均列入 v0.2。

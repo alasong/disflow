@@ -20,10 +20,11 @@
 | 看板视图 | `board` / `tree` / `graph` 三视图同源 |
 | 多块板 | 多树作用域隔离 + 跨树 `awaits` 显式完成信号（`tree.close`） |
 | 租约回收 | `start` 带 `expires_at`；`reap` 显式回收过期租约（`doctor` 会报） |
+| 覆盖门 | `tree_coverage`：叶子任务有 goal + 可跑判据；非根容器有子节点（`close` 串联 `tree_closure`） |
 | 需求覆盖 | `docs/requirements.md` §7 逐条审计 FR/NFR（2 项 ◐ 已登记） |
 | 偏离 | 本机无 pytest → 标准库 `unittest`（与 NFR-1 零依赖一致） |
 
-**门清单（设计 §7）**：`acceptance` ✅ · `design_first` ✅ · `size_budget` ✅ · `tree_closure` ✅。
+**门清单（设计 §7）**：`acceptance` ✅ · `design_first` ✅ · `size_budget` ✅ · `tree_closure` ✅ · `tree_coverage` ✅。
 
 **独立验证（2026-10-10，3 个 fresh-context 验证者，只读仓库 + 各自临时状态目录）**：
 
@@ -38,7 +39,7 @@ V3 的「篡改投影必须被抓」**确实被抓**（exit 1）—— 一致性
 **诚实标注的局限**：
 
 1. **V4 用合成 fixture**：本机 fat3 `.fat/mgt/` 无 `state.json`，无真实项目可导入。
-2. **`tree_coverage` 未做**（kaa 有：分解过的树必须需求已登记且都有可跑判据）——本设计未纳入 v0.1。
+2. ~~**`tree_coverage` 未做**~~ ✅ 已补（v0.2：叶子任务需求已登记 + 可跑判据；非根容器不空壳）。
 3. **§10 的三条偏离**（`global_status` 节点化 / `phase→stage` / `registry` 登记）只在文档登记，未实现。
 
 ---
@@ -120,7 +121,7 @@ V3 的「篡改投影必须被抓」**确实被抓**（exit 1）—— 一致性
 
 1. ~~独立复跑 V1–V4~~ ✅ 已完成（2026-10-10）。
 2. 修 V3 发现：`cli.main` 捕获 `ValueError`/`OSError`（已做，`tests/test_cli.py` 守）。
-3. 补 `tree_coverage` 门（v0.2）。
+3. ~~补 `tree_coverage` 门（v0.2）~~ ✅ 已完成（`tests/test_coverage.py` 守；`close` 串联两门）。
 4. 实现 §10 的三条偏离（v0.2，若迁移是主打场景）。
 5. ~~v0.2：多棵树（多块板）作用域隔离 + 跨树完成信号~~ ✅ 已完成（`awaits` + `tree.close`，`tests/test_multitree.py` 守）。
 6. v0.2 余项：每树物理隔离（`DISFLOW_STATE_DIR`）；`phase/layer` 标签；`registry` 资产登记。

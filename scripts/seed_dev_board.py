@@ -25,6 +25,8 @@ TEST_VIEWS = "python3 -m unittest discover -s tests -t tests -p test_views.py"
 TEST_IMPORT = "python3 -m unittest discover -s tests -t tests -p test_import_mgt.py"
 TEST_E2E = "python3 -m unittest discover -s tests -t tests -p test_e2e.py"
 TEST_GATES = "python3 -m unittest discover -s tests -t tests -p test_gates.py"
+TEST_COVERAGE = "python3 -m unittest discover -s tests -t tests -p test_coverage.py"
+TEST_ALL = "python3 -m unittest discover -s tests -t tests"
 REBUILD_CHECK = "python3 -m disflow.cli rebuild --check"
 
 
@@ -52,6 +54,11 @@ NODES: list[tuple[str, str, str, str, list[str], str | None]] = [
     ("S1", "经验沉淀：本轮回写的判据固化为门", "verify", "pm", ["D70"], TEST_GATES),
     ("PM1", "批准发布 v0.1", "verify", "pm", ["V1", "V2", "V3", "V4", "E1", "S1"], None),
 ]
+
+# 特例：PM1 是人工审批门 —— 发布判据是「全测试套件绿」，且必须留下审批人声明
+SPECIAL_ACCEPTANCE: dict[str, dict] = {
+    "PM1": {"cmd": TEST_ALL, "expect": "exit0", "require_declarations": ["approver"]},
+}
 
 # 开工模板（entry）—— tree_closure 门靠它识别 evaluate / reflect|standardize
 ENTRY: dict[str, str] = {"E1": "evaluate", "S1": "standardize"}
@@ -93,7 +100,8 @@ def main() -> int:
     engine.expand(tree, "root", [
         {"id": node_id, "goal": goal, "stage": stage, "role": role,
          "entry": ENTRY.get(node_id, ""),
-         "touch_plan": TARGETS.get(node_id, ["."]), "acceptance": acc(cmd)}
+         "touch_plan": TARGETS.get(node_id, ["."]),
+         "acceptance": SPECIAL_ACCEPTANCE.get(node_id) or acc(cmd)}
         for node_id, goal, stage, role, _deps, cmd in NODES
     ])
     for node_id, _goal, _stage, _role, deps, _cmd in NODES:
@@ -116,7 +124,7 @@ def main() -> int:
 
     try:
         engine.close(tree)
-        print(f"✓ {tree} 已关闭（tree_closure 门通过）")
+        print(f"✓ {tree} 已关闭（tree_closure + tree_coverage 门通过）")
     except (EngineError, GateReject) as exc:
         print(f"✗ 关闭未通过：{exc}", file=sys.stderr)
         return 1

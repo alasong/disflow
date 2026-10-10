@@ -72,7 +72,9 @@ disflow checkpoint <tree>                # 记录事件偏移
   "awaits": ["boardA"],         // 跨树完成信号（等待别的树 closed），非图边
   "acceptance": {                 // 门
     "cmd": "pytest tests/test_parse.py",
-    "expect": "exit0"
+    "expect": "exit0",             // exit0 | contains:… | regex:…
+    "require_declarations": ["approver"], // 可选：done 时必须给出的声明字段
+    "waiver": null                 // 可选：非空则显式豁免（理由记入证据）
   },
   "status": "pending",            // 存储态：pending|running|done|failed|skipped
   "lease": null,                  // {holder, expires_at}
@@ -198,7 +200,7 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 | `disflow fail/retry/skip <tree> <node>` | 状态操作 | 经同一状态表 |
 | `disflow reap <tree>` | 回收**过期**租约（running → pending） | 显式事件；不自动”看时钟“ |
 | `disflow trees` | 列出所有树 + 是否 closed | 投影，不是第二存储 |
-| `disflow close <tree>` | 终止树（跑 `tree_closure` 门） | 供跨树 `awaits` 信号 |
+| `disflow close <tree>` | 终止树（跑 `tree_closure` + `tree_coverage` 门） | 供跨树 `awaits` 信号 |
 
 ### 5.3 spawn 归宿主
 
@@ -250,10 +252,15 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
 
 | 门 | 判什么 | 挂在 |
 | --- | --- | --- |
-| `acceptance` | 验收命令跑过 + 期望匹配 | 所有 task |
+| `acceptance` | 验收命令跑过 + 期望匹配（或 `acceptance.waiver` 显式豁免，记入证据） | 所有 task |
 | `design_first` | 改动集落在 `touch_plan` 内 | implement/configure |
-| `size_budget` | 改动不超预算 | implement/configure/merge |
-| `tree_closure` | 树根有 done 的 evaluate（收益验证） | 树根 |
+| `size_budget` | 改动不超预算（`size_waiver` 破例） | implement/configure/merge |
+| `tree_closure` | 树根有 done 的 evaluate（收益验证）与 reflect/standardize（沉淀） | 树根 / `close` |
+| `tree_coverage` | 每个叶子任务有 `goal` 与可跑判据；非根容器有子节点 | 树根 / `close` |
+
+后两个门在 `close` 里**串联**，任一不过即拒收。两者的逃生口均为树根 `context.<门名> = "not_applicable: <具体理由>"`（理由不能为空）。
+
+审批完整性：`acceptance.require_declarations` 列出的字段（如 `["approver"]`）必须在 `done --decl` 里给出，否则拒收——人工审批门（如 PM1）靠它留下审批人。
 
 ---
 

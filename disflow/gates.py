@@ -31,7 +31,13 @@ def _check_expect(returncode: int, output: str, expect: str) -> tuple[bool, str]
 
 def run_acceptance(acceptance: dict | None, cwd: str,
                    timeout: int = DEFAULT_TIMEOUT) -> tuple[bool, str, dict]:
-    """跑验收命令。返回 (ok, why, meta)。命令按 argv 解析，不走 shell。"""
+    """跑验收命令。返回 (ok, why, meta)。命令按 argv 解析，不走 shell。
+
+    显式豁免：`acceptance.waiver` 非空时直接放行，并把理由记进证据（可审计的破例，不是静默放行）。
+    """
+    waiver = str((acceptance or {}).get("waiver") or "").strip()
+    if waiver:
+        return True, f"显式豁免（waiver）：{waiver}", {"waiver": waiver}
     if not acceptance or not acceptance.get("cmd"):
         return False, "缺少 acceptance.cmd（节点未声明验收命令）", {}
     cmd = acceptance["cmd"]
@@ -184,4 +190,40 @@ def tree_closure_check(tree: dict) -> tuple[bool, list[str]]:
         missing.append("缺 done 的收益验证节点（entry=evaluate）")
     if not (set(SEDIMENT_ENTRIES) & done_entries):
         missing.append("缺 done 的经验沉淀节点（entry=reflect|standardize）")
+    return (not missing), missing
+
+
+def _waivered(acceptance: dict | None) -> bool:
+    return bool(str((acceptance or {}).get("waiver") or "").strip())
+
+
+def tree_coverage_check(tree: dict) -> tuple[bool, list[str]]:
+    """树级覆盖门（kaa `tree_coverage` 的 disflow 版）：分解过的树必须
+    每个叶子任务「需求已登记」（goal 非空）且「有可跑判据」（acceptance.cmd 或 waiver），
+    且每个非根容器真有子节点（分解不得是空壳）。
+
+    逃生口：树根 `context.coverage = "not_applicable: <具体理由>"`（理由不能为空）。
+    """
+    nodes = tree.get("nodes", {})
+    root_id = tree.get("root")
+    root = nodes.get(root_id)
+    if isinstance(root, dict):
+        raw = str((root.get("context") or {}).get("coverage") or "")
+        if raw.startswith("not_applicable:") and raw.split(":", 1)[1].strip():
+            return True, []
+    missing: list[str] = []
+    for node_id, node in sorted(nodes.items()):
+        if node.get("status") == "skipped":
+            continue
+        if node.get("kind") == "container":
+            if node_id == root_id:
+                continue                       # 树根允许尚未分解
+            if not any(child.get("parent") == node_id for child in nodes.values()):
+                missing.append(f"{node_id}: 容器没有子节点（分解是空壳）")
+            continue
+        if not str(node.get("goal") or "").strip():
+            missing.append(f"{node_id}: 未登记目标（goal 为空）")
+        acceptance = node.get("acceptance")
+        if not (acceptance or {}).get("cmd") and not _waivered(acceptance):
+            missing.append(f"{node_id}: 无可跑判据（acceptance.cmd）也无 waiver")
     return (not missing), missing

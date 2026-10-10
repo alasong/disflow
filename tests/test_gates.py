@@ -63,7 +63,7 @@ class TreeClosureTest(DisflowTestCase):
         self.engine = Engine(cwd=self.tmp)
 
     def _add_done(self, node_id: str, entry: str) -> None:
-        self.engine.expand("t", "root", [{"id": node_id, "entry": entry,
+        self.engine.expand("t", "root", [{"id": node_id, "goal": "x", "entry": entry,
                                           "acceptance": acceptance()}])
         self.engine.start("t", node_id, "w")
         self.engine.done("t", node_id)

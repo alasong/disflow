@@ -264,7 +264,7 @@ def cmd_close(engine: Engine, args) -> int:
     try:
         engine.close(args.tree)
     except GateReject as reject:
-        print(f"✗ 树终止条件门拒收 {args.tree}：")
+        print(f"✗ 树级门拒收 {args.tree}：")
         for item in reject.missing:
             print(f"  - {item}")
         print("契约片段：")

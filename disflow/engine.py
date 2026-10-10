@@ -207,6 +207,11 @@ class Engine:
             missing: list[str] = []
             if not ok:
                 missing.append(f"验收未通过：{why}")
+            required = (item.get("acceptance") or {}).get("require_declarations") or []
+            absent = [name for name in required
+                      if not str((declarations or {}).get(name) or "").strip()]
+            if absent:
+                missing.append(f"缺必填声明：{absent}")
             if scope["checked"] and scope["violations"]:
                 missing.append(f"改动超出 touch_plan：{scope['violations']}")
             if (size is not None and size["total"] > budget
@@ -264,7 +269,7 @@ class Engine:
                            prepare=lambda _: {"context": context})
 
     def close(self, tree: str) -> dict:
-        """树级终止条件门：有 done 的收益验证与经验沉淀，或根声明 `not_applicable: <理由>`。"""
+        """树级门（两个）：`tree_closure`（终止条件）+ `tree_coverage`（需求已登记 + 可跑判据）。"""
         def prepare(t: dict) -> dict:
             ok, missing = gates.tree_closure_check(t)
             if not ok:
@@ -272,6 +277,12 @@ class Engine:
                     "tree": tree,
                     "expect": "有 done 的 evaluate 与 reflect/standardize，"
                               "或 root.context.closure='not_applicable: <理由>'"})
+            ok, missing = gates.tree_coverage_check(t)
+            if not ok:
+                raise GateReject(missing, {
+                    "tree": tree,
+                    "expect": "每个叶子任务有 goal 与可跑判据（acceptance.cmd 或 waiver）、"
+                              "每个非根容器有子节点，或 root.context.coverage='not_applicable: <理由>'"})
             return {}
         return self._write("tree.close", tree=tree, prepare=prepare)
 
