@@ -194,6 +194,7 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 | 命令 | 作用 | 关键约束 |
 | --- | --- | --- |
 | `disflow drive <tree> [--json]` | 算就绪波次 + 每节点建议 | **只推不跑**；两次同输入同输出 |
+| `--dry-run`（`start`/`done`/`close`/`drive`） | 预演：门照跑、`prepare` 照算，**不落任何事件** | 拒收行为与真跑一致（预演不消耗节点） |
 | `disflow brief <tree> <node>` | 写全派发契约 | 一次写全 |
 | `disflow collect <tree> <node> --result` | 校验结果契约后落盘 | **不写 done** |
 | `disflow done <tree> <node> --decl` | 跑门 → 通过/拒收 | 证据自算；拒收给缺项 |

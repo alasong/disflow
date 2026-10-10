@@ -72,6 +72,10 @@ def cmd_consume(engine: Engine, args) -> int:
 
 
 def cmd_start(engine: Engine, args) -> int:
+    if args.dry_run:
+        engine.start(args.tree, args.node, args.holder or "", ttl=args.ttl, dry_run=True)
+        print(f"✓ 预演通过：{args.node} 可就绪开工（**未落事件**）")
+        return 0
     engine.start(args.tree, args.node, args.holder or "", ttl=args.ttl)
     print(f"✓ {args.node} 开工（holder={args.holder or 'unknown'}）")
     return 0
@@ -85,15 +89,19 @@ def cmd_collect(engine: Engine, args) -> int:
 
 def cmd_done(engine: Engine, args) -> int:
     declarations = _loads(args.decl) if args.decl else None
+    dry = bool(getattr(args, "dry_run", False))
     try:
-        engine.done(args.tree, args.node, declarations)
+        engine.done(args.tree, args.node, declarations, dry_run=dry)
     except GateReject as reject:
-        print(f"✗ 门拒收 {args.node}：")
+        print(f"✗ {'预演会被拒' if dry else '门拒收'} {args.node}：")
         for item in reject.missing:
             print(f"  - {item}")
         print("契约片段：")
         _dump(reject.contract)
         return 2
+    if dry:
+        print(f"✓ 预演通过：{args.node} 的验收/作用域/规模门均会过（**未落事件**）")
+        return 0
     print(f"✓ {args.node} done（证据已自算落盘）")
     return 0
 
@@ -118,6 +126,8 @@ def cmd_skip(engine: Engine, args) -> int:
 
 def cmd_drive(engine: Engine, args) -> int:
     result = engine.drive(args.tree)
+    if getattr(args, "dry_run", False):
+        result["dry_run"] = True
     if args.json:
         _dump(result)
         return 0
@@ -344,6 +354,7 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("node")
     node.add_argument("--holder", default="")
     node.add_argument("--ttl", type=int, default=None, help="租约秒数（默认 900）")
+    node.add_argument("--dry-run", action="store_true", help="预演：跑门但不落事件")
 
     node = add("collect", cmd_collect)
     node.add_argument("tree")
@@ -354,6 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("tree")
     node.add_argument("node")
     node.add_argument("--decl", default="")
+    node.add_argument("--dry-run", action="store_true", help="预演：跑全部门但不落事件")
 
     node = add("fail", cmd_fail)
     node.add_argument("tree")
@@ -372,6 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
     node = add("drive", cmd_drive)
     node.add_argument("tree")
     node.add_argument("--json", action="store_true")
+    node.add_argument("--dry-run", action="store_true", help="显式只读：确认不落事件（FR-13）")
 
     node = add("brief", cmd_brief)
     node.add_argument("tree")
@@ -410,6 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     node = add("close", cmd_close)
     node.add_argument("tree")
+    node.add_argument("--dry-run", action="store_true", help="预演：跑两门但不落事件")
 
     node = add("reap", cmd_reap)
     node.add_argument("tree")

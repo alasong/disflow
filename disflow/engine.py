@@ -87,10 +87,13 @@ class Engine:
     # ── 写 ────────────────────────────────────────────────────────────────
 
     def _write(self, kind: str, *, tree: str, node: str = "", prepare=None,
-               guard=None, guard_state=None, existing: bool = True) -> dict:
+               guard=None, guard_state=None, existing: bool = True,
+               dry_run: bool = False) -> dict:
         """唯一写点：锁内 读 → 校验 → append。`prepare(tree)` 返回事件的 extra 字段。
 
         `guard(tree)` 只看本树；`guard_state(tree, state)` 还能看到全局（跨树信号）。
+        `dry_run=True`：**跑完全部门与 prepare，但不追加事件**（预演，FR-13）；
+        门不过依旧抛 `GateReject` —— 预演的意义就是把拒收提前暴露。
         """
         with store.lock(self.spec):
             state = self.load()
@@ -105,6 +108,9 @@ class Engine:
                 if guard_state is not None:
                     guard_state(current, state)
             extra = prepare(current) if prepare is not None else {}
+            if dry_run:
+                return {"dry_run": True, "kind": kind, "tree": tree, "node": node,
+                        "extra": extra or {}, "state": state}
             store.append_event(self.spec, kind, project=project, slug=tree,
                                node=node, extra=extra or {})
         return self.load()
@@ -160,7 +166,7 @@ class Engine:
     # ── 生命周期 ──────────────────────────────────────────────────────────
 
     def start(self, tree: str, node: str, holder: str = "",
-              ttl: int | None = None) -> dict:
+              ttl: int | None = None, dry_run: bool = False) -> dict:
         lease = _make_lease(holder, LEASE_TTL_SECONDS if ttl is None else ttl)
 
         def guard(t: dict, state: dict) -> None:
@@ -174,7 +180,8 @@ class Engine:
                 raise EngineError(f"{node} 未就绪，被阻塞：{blockers}")
         return self._write("node.start", tree=tree, node=node, guard_state=guard,
                            prepare=lambda _: {"lease": lease,
-                                              "baseline": gates.git_changed_files(self.cwd) or []})
+                                              "baseline": gates.git_changed_files(self.cwd) or []},
+                           dry_run=dry_run)
 
     def collect(self, tree: str, node: str, result: dict) -> dict:
         def guard(t: dict) -> None:
@@ -185,7 +192,8 @@ class Engine:
         return self._write("node.collect", tree=tree, node=node, guard=guard,
                            prepare=lambda _: {"result": result})
 
-    def done(self, tree: str, node: str, declarations: dict | None = None) -> dict:
+    def done(self, tree: str, node: str, declarations: dict | None = None,
+             dry_run: bool = False) -> dict:
         def prepare(t: dict) -> dict:
             item = self._need(t, node)
             ok, why, evidence = gates.evidence_meta(item.get("acceptance"), self.cwd)
@@ -221,7 +229,8 @@ class Engine:
             if missing:
                 raise GateReject(missing, contract)
             return {"evidence": evidence, "declarations": declarations or {}}
-        return self._write("node.done", tree=tree, node=node, prepare=prepare)
+        return self._write("node.done", tree=tree, node=node, prepare=prepare,
+                           dry_run=dry_run)
 
     def fail(self, tree: str, node: str, reason: str) -> dict:
         return self._write("node.fail", tree=tree, node=node,
@@ -268,7 +277,7 @@ class Engine:
                            guard=lambda t: self._need(t, node),
                            prepare=lambda _: {"context": context})
 
-    def close(self, tree: str) -> dict:
+    def close(self, tree: str, dry_run: bool = False) -> dict:
         """树级门（两个）：`tree_closure`（终止条件）+ `tree_coverage`（需求已登记 + 可跑判据）。"""
         def prepare(t: dict) -> dict:
             ok, missing = gates.tree_closure_check(t)
@@ -284,7 +293,7 @@ class Engine:
                     "expect": "每个叶子任务有 goal 与可跑判据（acceptance.cmd 或 waiver）、"
                               "每个非根容器有子节点，或 root.context.coverage='not_applicable: <理由>'"})
             return {}
-        return self._write("tree.close", tree=tree, prepare=prepare)
+        return self._write("tree.close", tree=tree, prepare=prepare, dry_run=dry_run)
 
     # ── 推进面（只读）──────────────────────────────────────────────────────
 

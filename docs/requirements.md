@@ -192,7 +192,7 @@ disflow 是一个**任务分发流引擎**：用**树**提供上下文继承、�
 | FR-4/5/6/7 树 | ✅ | `parent` 唯一、无 `contains`；`tests/test_core.py`、`test_import_mgt.py` |
 | FR-8/9/10 图 | ✅ | 写时拒环；`consumes` 未登记即拒；`tests/test_engine.py` |
 | FR-11/12 就绪 | ✅ | 唯一 `ready()`；`tests/test_core.py`、`test_multitree.py` |
-| FR-13 就绪快照 | ◐ | `drive --json` 已提供，但无独立 `--dry-run` 旗标 |
+| FR-13 就绪快照 | ✅ | `drive --json`（只读构造）；`drive/start/done/close --dry-run` 预演（门照跑、**零事件**）；`tests/test_dryrun.py` |
 | FR-14/15/16/17 分发 | ✅ | 只推不跑；brief/collect；无 spawn；无常驻；`tests/test_e2e.py` |
 | FR-18/19/20 门与证据 | ✅ | 验收门（含 `waiver` 显式豁免、`require_declarations` 审批声明）+ 证据自算 + 缺项契约；`tests/test_engine.py`、`test_gates.py`、`test_coverage.py` |
 | FR-21/22/23 看板 | ✅ | 三视图同源；多树隔离；`awaits` 信号；`tests/test_views.py`、`test_multitree.py` |
@@ -208,4 +208,4 @@ disflow 是一个**任务分发流引擎**：用**树**提供上下文继承、�
 
 **新增门**：**`tree_coverage`**——每个叶子任务要「需求已登记」（`goal` 非空）且「有可跑判据」（`acceptance.cmd` 或 `waiver`），非根容器必须有子节点；与 `tree_closure` 在 `close` 串联。逃生口：树根 `context.coverage = "not_applicable: <理由>"`。
 
-**未覆盖（◐）**：FR-13 的 `--dry-run` 旗标。列入 v0.2。
+**未覆盖（◐）**：无 —— FR-1..29 与 NFR-1..7 全覆盖。

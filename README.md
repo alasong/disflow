@@ -54,12 +54,13 @@ python3 -m disflow.cli doctor
 python3 scripts/seed_dev_board.py      # 把 docs/dev-board.md 种进 .disflow/（每步真跑验收）
 python3 -m disflow.cli board disflow-v0.1
 python3 -m disflow.cli drive disflow-v0.1
+python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件（先看会不会被拒）
 ```
 
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 91 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 98 passed（零第三方依赖）
 ```
 
 ## 结构
@@ -88,5 +89,5 @@ scripts/          # seed_dev_board.py
 
 ## 状态
 
-v0.1 完成（16/17，仅 PM1 审批未做）：91 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、五道门（acceptance/design_first/size_budget/tree_closure/**tree_coverage**）、**多块板**（多树作用域隔离 + 跨树 `awaits` 信号）、**租约超时回收 `reap`**、**核心层零业务词**（NFR-2，逆向自检）、`doctor` 全绿。需求覆盖见 `docs/requirements.md` §7。
+v0.1 完成（16/17，仅 PM1 审批未做）：98 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、五道门（acceptance/design_first/size_budget/tree_closure/**tree_coverage**）、**多块板**（多树作用域隔离 + 跨树 `awaits` 信号）、**租约超时回收 `reap`**、**核心层零业务词**（NFR-2，逆向自检）、**`--dry-run` 预演**（FR-13）、`doctor` 全绿。需求覆盖见 `docs/requirements.md` §7（FR/NFR **全覆盖**）。
 已知局限见 `docs/dev-board.md` §0（V1–V4 未独立复跑、V4 用合成 fixture）。
