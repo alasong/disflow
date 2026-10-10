@@ -57,18 +57,39 @@ QUESTION_PROTOCOL = (
 )
 
 
-def _dispatch_state(result: dict) -> tuple[str, str]:
-    """无就绪节点时的**显式**说明（不许静默返回空）：全部完成 / 卡住 / 在跑 / 有失败。
+def _deferred_text(deferred: list[dict]) -> str:
+    """把 `drive` 的 `deferred` 条目渲染成一行可读的**点名**（节点 ← 在跑的谁 + 重叠路径）。
 
-    就绪波次非空 → `ready`。返回 `(state, message)`，`state ∈ {ready, complete, stuck, running,
-    failed}`，`message` 是人能读的一句话。判据取自 `drive` 的同一份读数（`waves` / `stuck` /
-    `running` / `progress`），两面不分叉。
+    数据**与 `drive` 同源**（同一份 `deferred`、同一个 `why` 字符串，见 `dispatch.drive`），此处
+    只负责拼成人读的话——**绝不**在 `host_next` 里重算写面冲突（两面各算一遍正是漂移的温床）。
+    """
+    return "；".join(f"{entry['node']}（{entry['why']}）" for entry in deferred)
+
+
+def _dispatch_state(result: dict) -> tuple[str, str]:
+    """无就绪节点时的**显式**说明（不许静默返回空）：全部完成 / 卡住 / 等写面 / 在跑 / 有失败。
+
+    就绪波次非空 → `ready`。返回 `(state, message)`，`state ∈ {ready, waiting, complete, stuck,
+    running, failed}`，`message` 是人能读的一句话。判据取自 `drive` 的同一份读数（`waves` /
+    `deferred` / `stuck` / `running` / `progress`），两面不分叉。
+
+    `waiting`：`ready_wave` 为空**是因为**所有就绪候选都被在跑节点的写面挡下（`deferred` 非空），
+    ——**是在跑**，不是 `stuck`（`stuck` 的语义是「没就绪、没在跑、但还有 pending」；把「被在跑
+    节点挡住」混进 `stuck` 会把两种完全不同的病因说成同一件事）。故单列一个取值，且**绝不**在
+    这一格报 `ready`——`ready` + 空 `plan` 自相矛盾，读者会以为没活干。
     """
     waves = result["waves"]
+    deferred = result.get("deferred") or []
     if waves:
         total = sum(len(wave) for wave in waves)
-        return "ready", (f"就绪 {total} 个（{len(waves)} 波，首波 {len(waves[0])} 个）："
-                         "下面每个节点的 brief 即 worker 的 task")
+        message = (f"就绪 {total} 个（{len(waves)} 波，首波 {len(waves[0])} 个）："
+                   "下面每个节点的 brief 即 worker 的 task")
+        if deferred:
+            message += f"；另有被在跑节点挡下（本轮不派）：{_deferred_text(deferred)}"
+        return "ready", message
+    if deferred:
+        return "waiting", ("就绪节点全被在跑节点的写面挡下（本轮不派，等它们收尾）："
+                           + _deferred_text(deferred))
     progress = result["progress"]
     if progress["done"] == progress["tasks"]:
         if progress["tasks"] == 0:
@@ -707,7 +728,13 @@ class Engine:
 
         **纯读**：只读投影 + 只读的 worktree 对账，**不落任何事件、不改状态、不起常驻进程**
         （宿主只是拿它去派活）。无就绪节点时以 `state` / `state_message` **显式**报
-        `complete`（全部完成）或 `stuck`（卡住），不静默返回空（见 `_dispatch_state`）。
+        `complete`（全部完成）/ `stuck`（卡住）/ `waiting`（就绪候选全被在跑节点的写面挡下），
+        不静默返回空（见 `_dispatch_state`）。
+
+        **绝不静默丢**：与在跑节点写面重叠的就绪候选**不**进 `plan`（宿主不会派它与在跑者抢
+        同一文件），但会**原样透传** `drive` 的 `deferred`（同源，不在此重算），并把它写进
+        `state_message`——两条路都点名「被谁占用 + 重叠哪些路径」。`deferred` 仅在非空时出现，
+        与 `drive` 同款 ⇒ 无在跑节点时输出与改动前**逐字节一致**。
         """
         state = self.load()
         target = self.tree(tree, state)
@@ -717,7 +744,7 @@ class Engine:
             for node_id in wave:
                 plan.append(self._host_entry(tree, target, node_id, wave_index))
         wave_state, wave_message = _dispatch_state(result)
-        return {
+        payload = {
             "tree": tree,
             "goal": target.get("goal", ""),
             "root": target.get("root"),
@@ -731,6 +758,11 @@ class Engine:
             "stuck": result["stuck"],
             "plan": plan,
         }
+        # `deferred` **与 drive 同源**：直接透传 `drive` 的条目，绝不在此重算写面冲突。
+        # 与 `drive` 同款「仅在非空时出现」⇒ 无在跑节点时输出与改动前**逐字节一致**。
+        if result.get("deferred"):
+            payload["deferred"] = result["deferred"]
+        return payload
 
     def _host_entry(self, tree: str, target: dict, node_id: str, wave: int) -> dict:
         """一个就绪节点的派活条目：完整 brief（= worker 的 task）+ start/collect/done 命令。

@@ -7,8 +7,11 @@
 3. **纯读**：跑完前后 `events.jsonl` / `state.json` **逐字节不变**（并有**反向对照**证明这把尺子
    真的有效——写动词必须改变事件字节）；
 4. **不新增常驻进程**：用「状态目录文件集合不变」做代理判据（本动词不建锁、不起子进程常驻）；
-5. **无就绪节点时不静默**：显式报 `complete`（全部完成）或 `stuck`（卡住），另附 `running` /
-   `failed` 两种诚实读数。
+5. **无就绪节点时不静默**：显式报 `complete`（全部完成）/ `stuck`（卡住）/ `waiting`（就绪
+   候选全被在跑节点的写面挡下），另附 `running` / `failed` 两种诚实读数；
+6. **写面被在跑节点占用 ⇒ 绝不静默丢**：被挡下的候选不进 `plan`，但**与 `drive` 同源**地出现在
+   `deferred` 里（点名在跑者 + 重叠路径），人读态（`state_message`）也点名；无在跑 ⇒ 输出与
+   改动前**逐字节一致**（有基线钉住）。
 """
 from __future__ import annotations
 
@@ -29,6 +32,102 @@ _TOP_KEYS = ("tree", "goal", "root", "state", "state_message", "progress",
 # 每个派活条目必须带的键
 _ENTRY_KEYS = ("node", "wave", "stage", "role", "goal", "brief",
                "start_cmd", "collect_cmd", "done_cmd")
+
+# ── 回归基线：改动前（本节点起点 HEAD）在「无任何节点在跑」时抓取的 `host-next --json` 输出 ──
+#   与 `tests/test_cli_readonly.py` 的 `_BASELINE_DRIVE_NO_RUNNING` 同法：逐字节固化，判据是
+#   「无在跑 ⇒ 输出与基线一致」（无新闻 = 不加键）。此处用可移植的验收命令 `true`（不含解释器
+#   绝对路径）⇒ 基线本身机器无关。`deferred` **仅非空时出现**，故不列进 `_TOP_KEYS`。
+_BASELINE_HOST_NEXT_NO_RUNNING = r"""{
+  "tree": "t",
+  "goal": "宿主下一步",
+  "root": "root",
+  "state": "ready",
+  "state_message": "就绪 1 个（1 波，首波 1 个）：下面每个节点的 brief 即 worker 的 task",
+  "progress": {
+    "tasks": 1,
+    "done": 0,
+    "pct": 0
+  },
+  "running": [],
+  "waves": [
+    [
+      "a"
+    ]
+  ],
+  "ready_wave": [
+    "a"
+  ],
+  "blocked": {},
+  "stuck": false,
+  "plan": [
+    {
+      "node": "a",
+      "wave": 1,
+      "stage": "dev",
+      "role": "dev",
+      "goal": "A",
+      "brief": {
+        "id": "a",
+        "goal": "A",
+        "kind": "task",
+        "stage": "dev",
+        "role": "dev",
+        "entry": "",
+        "context": {},
+        "from_requires": [],
+        "relates": [],
+        "consumes": [],
+        "acceptance": {
+          "cmd": "true",
+          "expect": "exit0"
+        },
+        "touch_plan": [
+          "src/a.py"
+        ],
+        "tree": "t",
+        "question_policy": {
+          "ask_host": [
+            "改 touch_plan / 验收标准 / goal",
+            "跨节点的接口约定",
+            "与 goal 相冲的取舍"
+          ],
+          "decide_alone": [
+            "实现细节",
+            "命名",
+            "内部结构"
+          ],
+          "how": "要问就问：把问题写进 `collect --result` 的 summary 并把 status 置为 'blocked'，然后停。不要自己拍板改范围——宿主读到 blocked 后会决定（rescope / unrequire / 改 goal），再由你继续。status 里没有「我猜了一下」这个选项。"
+        },
+        "result_contract": {
+          "node": "a",
+          "required": [
+            "status",
+            "summary",
+            "changed_files"
+          ],
+          "status_in": [
+            "ok",
+            "failed",
+            "blocked"
+          ],
+          "question_channel": "有问题就把问题写进 summary 且 status 置为 \"blocked\"（然后停）；不要自己拍板改范围——宿主会读 blocked 并决定",
+          "acceptance": {
+            "cmd": "true",
+            "expect": "exit0"
+          }
+        },
+        "brief_cmd": "disflow brief t a",
+        "done_cmd": "disflow done t a --decl '{\"evidence\": …}'",
+        "worktree": null,
+        "question_protocol": "worker 有疑问时**两条都要做**：① 走宿主通道提问（pi 里即 contact_supervisor，reason=\"need_decision\"）——问题才会到宿主手里；② **同时**在 `collect --result` 里把问题写进 summary 且 `status` 置 \"blocked\"——disflow 事件流才留得下痕（缺②则树上查不到这次提问）。两条都不做 = 自己拍板改范围，禁止。"
+      },
+      "start_cmd": "disflow start t a --holder <HOST>",
+      "collect_cmd": "disflow collect t a --result '{\"status\": \"ok\", \"summary\": \"<一句话>\", \"changed_files\": [\"<路径>\"]}'",
+      "done_cmd": "disflow done t a --decl '{\"evidence\": …}'"
+    }
+  ]
+}
+"""
 
 
 class HostNextTest(DisflowTestCase):
@@ -77,6 +176,29 @@ class HostNextTest(DisflowTestCase):
 
     def _host_next(self, *extra: str) -> tuple[int, str, str]:
         return self._run(["host-next", "t", *extra])
+
+    def _seed_runner_and_overlapping_candidate(self, with_bystander: bool = False) -> None:
+        """在跑节点 `runner`（写面 `src/x.py`）+ 写面重叠的就绪候选 `clash`。
+
+        `runner` 先 `start` ⇒ 租约在手 = 写面已占用；`clash` 与它重叠 ⇒ 该被 `deferred` 挡下。
+        `with_bystander=True` 再加一个**不重叠**的就绪候选 `ok`（混合场景：`ok` 该被派，
+        `clash` 该进 `deferred`——这就是「被挡节点从 plan/waves 里消失且无人点名」那一格）。
+        """
+        self._run(["init", "t", "--goal", "写面占用"])
+        children = [
+            {"id": "runner", "goal": "在跑", "stage": "dev",
+             "touch_plan": ["src/x.py"], "acceptance": acceptance()},
+            {"id": "clash", "goal": "候选", "stage": "dev",
+             "touch_plan": ["src/x.py"], "acceptance": acceptance()},
+        ]
+        if with_bystander:
+            children.append({"id": "ok", "goal": "无关", "stage": "dev",
+                             "touch_plan": ["src/ok.py"], "acceptance": acceptance()})
+        self._run(["expand", "t", "root", "--children",
+                   json.dumps(children, ensure_ascii=False)])
+        code, _out, err = self._run(["start", "t", "runner",
+                                     "--holder", "host", "--ttl", "3600"])
+        self.assertEqual(code, 0, err)
 
     # ── ① 机器可读 + 人类可读 ────────────────────────────────────────────
 
@@ -218,6 +340,64 @@ class HostNextTest(DisflowTestCase):
         self.assertEqual(payload["plan"], [])
         self.assertEqual(payload["state"], "failed")
         self.assertFalse(payload["stuck"], "failed 不算 stuck")
+
+    # ── ⑥ 写面被在跑节点占用：deferred 绝不静默丢 + state 诚实 ──────────
+
+    def test_mixed_reports_deferred_with_culprit_and_paths(self):
+        """混合场景：`ok` 该派、`clash` 被 `runner` 挡下 —— `clash` 不许从输出里消失。"""
+        self._seed_runner_and_overlapping_candidate(with_bystander=True)
+        _code, out, _err = self._host_next("--json")
+        payload = json.loads(out)
+        # 就绪的 `ok` 照派；被挡的 `clash` 不进 plan/waves，但带因进 `deferred`
+        self.assertEqual(payload["state"], "ready")
+        self.assertEqual(payload["waves"], [["ok"]])
+        self.assertEqual([entry["node"] for entry in payload["plan"]], ["ok"])
+        self.assertEqual([entry["node"] for entry in payload["deferred"]], ["clash"])
+        why = payload["deferred"][0]["why"]
+        self.assertIn("runner", why, "理由必须点名在跑的谁")
+        self.assertIn("src/x.py", why, "理由必须点名重叠哪条路径")
+        # **与 drive 同源**：两个动词的 `deferred` 是同一份（不得各算一遍）
+        _code, drive_out, _err = self._run(["drive", "t", "--json"])
+        self.assertEqual(payload["deferred"], json.loads(drive_out)["deferred"])
+        # 人读态（`state_message`）也点名在跑者与重叠路径
+        for token in ("clash", "runner", "src/x.py"):
+            self.assertIn(token, payload["state_message"])
+
+    def test_all_ready_candidates_deferred_state_is_waiting_not_ready(self):
+        """就绪候选**全**被在跑者挡下 ⇒ `state` 不许报 `ready`（ready + 空 plan 自相矛盾）。"""
+        self._seed_runner_and_overlapping_candidate()
+        _code, out, _err = self._host_next("--json")
+        payload = json.loads(out)
+        self.assertEqual(payload["plan"], [])
+        self.assertNotEqual(payload["state"], "ready",
+                            "ready_wave 因 defer 为空时不许报 ready")
+        self.assertEqual(payload["state"], "waiting")
+        self.assertNotEqual(payload["state"], "stuck",
+                            "waiting 与 stuck 是两种病因，不许合并")
+        self.assertFalse(payload["stuck"])
+        self.assertEqual([entry["node"] for entry in payload["deferred"]], ["clash"])
+        for token in ("clash", "runner", "src/x.py"):
+            self.assertIn(token, payload["state_message"])
+        # 人读态（无 plan 时 CLI 打印 `state_message`）也逐条点名
+        _code, human, _err = self._host_next()
+        for token in ("clash", "runner", "src/x.py"):
+            self.assertIn(token, human)
+
+    def test_no_running_payload_is_byte_identical_to_baseline(self):
+        """回归判据：无任何节点在跑时，`host-next --json` 与改动前基线**逐字节一致**。
+
+        验收命令用可移植的 `true`（基线不依赖解释器绝对路径）；种子与基线抓取时完全一致。
+        """
+        self._run(["init", "t", "--goal", "宿主下一步"])
+        self._run(["expand", "t", "root", "--children",
+                   '[{"id":"a","goal":"A","stage":"dev","touch_plan":["src/a.py"],'
+                   '"acceptance":{"cmd":"true","expect":"exit0"}}]'])
+        code, out, err = self._host_next("--json")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, _BASELINE_HOST_NEXT_NO_RUNNING,
+                         "无在跑节点时输出必须与基线逐字节一致（无新闻 = 不加键）")
+        self.assertNotIn("deferred", json.loads(out),
+                         "无在跑节点时 `deferred` 不许出现（否则破坏逐字节回归）")
 
 
 if __name__ == "__main__":

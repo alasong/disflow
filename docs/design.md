@@ -367,6 +367,9 @@ disflow host-next <tree> [--json]
 
 - **就绪波次**：`waves`（每波内写面 `touch_plan` 互不重叠；且**已扣除**与正在运行节点写面
   重叠的候选 —— 见 §3.1）+ `ready_wave`（首波）+ `blocked` + `stuck`；
+- **被挡下的候选不消失**：与在跑节点写面重叠的就绪候选**不进** `plan`（宿主不会派它与在跑者抢
+  同一文件），但**原样出现**在 `deferred`（与 `drive` **同源**：同一份条目、同一个 `why`，不在
+  这里重算——两面各算一遍是漂移的温床）。`deferred` **仅非空时出现**。见 §3.1 的「绝不静默丢」；
 - **每个就绪节点的完整 brief**（`plan[].brief`）：与 `disflow brief` **同一份** `handoff_brief`
   （必填声明 + `question_policy` + `result_contract` + 工作目录），宿主可直接把它当 worker 的 task；
 - **收尾要跑的完整命令行**：每个节点给 `start_cmd` / `collect_cmd` / `done_cmd`，照抄即可。
@@ -375,8 +378,14 @@ disflow host-next <tree> [--json]
 
 1. **纯读**：只读投影 + 只读的 worktree 对账，**不落任何事件、不改状态、不起常驻进程**
    （宿主只是拿它去派活）。
-2. **无就绪节点时不静默**：`state` / `state_message` 显式报 `complete`（全部完成）
-   或 `stuck`（卡住）；另有 `running` / `failed` 两种诚实读数（在跑／有失败待 retry）。
+2. **无就绪节点时不静默**：`state` / `state_message` 显式报一种病因，**绝不**静默返回空、也
+   **绝不**报 `ready` 配空 `plan`（自相矛盾，读者会以为没活干）。取值为
+   `complete`（全部完成）/ `stuck`（卡住）/ `waiting`（就绪候选**全**被在跑节点的写面挡下，
+   等它们收尾）/ `running`（无候选但有节点在跑）/ `failed`（有失败待 retry）。
+   **`waiting` 与 `stuck` 是两种病因，不许合并**：`stuck` = 「没就绪、没在跑、但还有 pending」；
+   `waiting` = 「就绪候选被**在跑**节点的写面挡下」——后者恰恰**是在跑**。`deferred`（与 `drive`
+   同源）也逐条进了 `state_message`，点名「被谁占用 + 重叠哪些路径」，**双路可读**（JSON 结构 +
+   人读态）——被挡节点不得从输出里消失；
 3. **提问纪律要写全**（`plan[].brief.question_protocol`）：worker 的提问天然走**宿主通道**
    （pi 里即 `contact_supervisor`），而该通道**不进 disflow 事件流**——追溯会缺一块。故约定：
    **① 走宿主通道提问；② 同时在 `collect --result` 里把 `status` 置 `blocked`**。两条都做，
