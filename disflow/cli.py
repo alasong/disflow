@@ -496,13 +496,18 @@ def cmd_deadline(engine: Engine, args) -> int:
 
 def _worktree_call(args, handler):
     """组装层把底层异常归一到 `EngineError`：`worktree` 抛 `KeyError`（名字写错）
-    与 `WorktreeProbeError`（git 探针失败），两者若直接漏出去就是抛栈而不是一行人话。"""
+    与 `WorktreeError`（探针失败 / 真跑 git 失败），两者若直接漏出去就是抛栈而不是一行人话。
+
+    `WorktreeProbeError` 是 `WorktreeError` 的子类、单独先捕，以便保留「读数不可信」的
+    具体措辞；其余 `WorktreeError`（如 `apply` 的 `git worktree add` 失败）归为操作失败。"""
     try:
         return handler()
     except KeyError as exc:
         raise EngineError(str(exc).strip("'") or "树/节点不存在") from exc
     except worktree.WorktreeProbeError as exc:
         raise EngineError(f"worktree 对账读数不可信：{exc}") from exc
+    except worktree.WorktreeError as exc:
+        raise EngineError(f"worktree 操作失败：{exc}") from exc
 
 
 def cmd_worktree(engine: Engine, args) -> int:

@@ -15,6 +15,7 @@ from .core import RUNNING
 from .dispatch import dispatch_plan, handoff_brief, result_contract, validate_result
 from .dispatch import drive as run_drive
 from .metrics import parse_deadline
+from .model import validate_path_name
 from .ready import (
     blocked_by,
     is_stuck,
@@ -124,6 +125,8 @@ class Engine:
     # ── 树 ────────────────────────────────────────────────────────────────
 
     def init_tree(self, tree: str, goal: str) -> dict:
+        # 写时闸门：树名会构成 worktree 路径段，路径形名字一律拒收（不落事件）。
+        validate_path_name(tree, what="树名")
         return self._write("tree.init", tree=tree, existing=False,
                            prepare=lambda _: {"goal": goal})
 

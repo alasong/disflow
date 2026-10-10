@@ -29,6 +29,46 @@ DECLARABLE_FIELDS: frozenset[str] = NODE_FIELDS - RUNTIME_FIELDS
 
 _LIST_FIELDS = ("requires", "relates", "produces", "consumes", "touch_plan", "awaits")
 
+# 具备路径分隔语义的字符：ASCII 的 `/`/`\`/NUL，以及同形的 Unicode 同类。全角斜杠 `／`
+# 在多数文件系统上仍是普通字符，但一旦被下游按分隔符处理就会拆出第二段路径——故与 ASCII
+# 分隔符一视同仁**拒收**，而不是默默规范化（规范化会把危险名悄悄改成另一个名字）。
+_PATH_SEPARATOR_LIKE: frozenset[str] = frozenset({
+    "/", "\\", "\x00",
+    "\uff0f",  # ／ 全角 SOLIDUS
+    "\uff3c",  # ＼ 全角 REVERSE SOLIDUS
+    "\u2044",  # ⁄ FRACTION SLASH
+    "\u2215",  # ∕ DIVISION SLASH
+    "\u29f8",  # ⧸ BIG SOLIDUS
+    "\u29f9",  # ⧹ BIG REVERSE SOLIDUS
+    "\ufe68",  # ﹨ SMALL REVERSE SOLIDUS
+})
+
+
+def validate_path_name(name: object, *, what: str) -> str:
+    """校验一个**会进路径**的名字（树名 / 节点 id）：不许是路径形。
+
+    树名与节点 id 共同构成 worktree 路径 `<state>/worktrees/<tree>/<node>`，两者都是路径段。
+    放行含分隔符或 `.`/`..` 的名字，等于允许把 worktree 建到根目录**之外**（`_reject_if_inside`
+    只挡「落在 repo 内」的路径，逃到 `/tmp` 这种仓外路径正好绕过它）。这是**写时**的唯一闸门
+    ——坏名字进不了事实源；`worktree.path_for` 另有结构性兜底，见其 docstring。
+
+    只拒这几种明确的路径形；**不**做字符集白名单（现有 id 形态多样：`n0`/`root`/`a`/十六进制），
+    也**不**规范化（trim/替换）——危险名要拒收，不是悄悄改掉。
+    """
+    if not isinstance(name, str):
+        raise ValueError(f"{what} 必须是字符串，得到 {type(name).__name__}：{name!r}")
+    if not name.strip():
+        raise ValueError(f"{what} 不得为空或纯空白：{name!r}（无法构成路径段）")
+    if name in (".", ".."):
+        raise ValueError(
+            f"{what} 不得为 {name!r}（会指回上一级，把 worktree 建到根目录之外）")
+    bad = sorted(set(name) & _PATH_SEPARATOR_LIKE)
+    if bad:
+        raise ValueError(
+            f"{what} 不得含路径分隔符或 NUL：{name!r}（含 {''.join(bad)!r}，"
+            "会把 worktree 建到根目录之外）")
+    return name
+
 
 def new_node(node_id: str, *, parent: str | None = None, kind: str = "task",
              stage: str = "dev", role: str = "dev", goal: str = "",
@@ -97,6 +137,9 @@ def validate_node_spec(spec: dict) -> None:
             f"这些字段由运行时事件决定，不能在 expand 里声明：{sorted(runtime)}"
             "（声明了也不会生效——`parent` 由 expand 的父子关系决定；"
             "`status`/`lease` 走 start/fail/retry/skip/reap 动词；`evidence` 由 done 自算）")
+    if "id" in spec:
+        # 键在即校验：空串 `/`/`..` 一律拒（`id` 缺省时由 `next_id` 生成安全 id，不校验）。
+        validate_path_name(spec["id"], what="节点 id")
     if spec.get("kind", "task") not in KINDS:
         raise ValueError(f"kind 非法：{spec.get('kind')!r}（应为 {KINDS}）")
     validate_points(spec.get("points"))
