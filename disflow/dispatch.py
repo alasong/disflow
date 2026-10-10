@@ -34,6 +34,37 @@ def _touches_overlap(a: list[str], b: list[str]) -> bool:
     return any(_touch_pair_overlap(left, right) for left in a for right in b)
 
 
+def _occupied_touches(nodes: dict) -> dict[str, list[str]]:
+    """占用写面的节点：**非终态**且**租约在手** ⇒ `{node_id: touch_plan}`（id 升序）。
+
+    这就是「正在运行」的判据。刻意**不看时钟**：租约是否过期归 `reap` 判，而 `drive`
+    必须保持纯函数（design.md 对 drive 的承诺：两次同输入同输出，不引入时钟 / 计数依赖）。
+    也**不看**该节点是不是候选 —— 只要在跑，它的写面就视为已占用（单写者收口）。
+    """
+    return {nid: nodes[nid].get("touch_plan") or []
+            for nid in live_tasks(nodes) if nodes[nid].get("lease")}
+
+
+def _overlap_with_running(nodes: dict, node_id: str,
+                          occupied: dict[str, list[str]]) -> list[str]:
+    """候选被**在跑**节点挡下的原因清单（空 = 写面不与任何在跑节点冲突）。
+
+    每条都点名在跑节点与重叠路径 —— 这是「绝不静默丢」的载体：被挡下的节点不是被删掉，
+    而是带着可读的理由出现在 `drive` 的 `deferred` 里（决定权留给宿主，引擎只提示）。
+    """
+    touches = nodes[node_id].get("touch_plan") or []
+    reasons: list[str] = []
+    for other, other_touches in occupied.items():
+        shared: list[str] = []
+        for path in touches:
+            if path not in shared and any(
+                    _touch_pair_overlap(path, right) for right in other_touches):
+                shared.append(path)
+        if shared:
+            reasons.append(f"与正在运行的 {other} 写面重叠：{', '.join(shared)}")
+    return reasons
+
+
 def pack_waves(nodes: dict, node_ids: list[str]) -> list[list[str]]:
     """贪心把就绪节点装进波次：同波写面（`touch_plan`）不重叠。
 
@@ -57,13 +88,28 @@ def drive(tree_name: str, tree: dict,
     """一次只读推进：列出活节点、就绪波次、阻塞、卡死。同输入必同输出。
 
     `closed`：已关闭的树集合（跨树完成信号 `awaits` 的判据）。
+
+    就绪波次里**不含**与「正在运行（非终态 + 租约在手）」节点写面重叠的候选 —— 它们被
+    移进 `deferred` 并附原因（只在非空时出现）。如此宿主循环（⑥ 回到 ①）不会派出一个
+    正和在跑节点抢同一文件的节点；引擎仍**只推不跑**：不改状态、不结束别人的租约。
     """
     nodes = tree["nodes"]
     ready = ready_tasks(nodes, closed)
-    waves = pack_waves(nodes, ready)
+    occupied = _occupied_touches(nodes)
+    # 与在跑节点写面重叠的候选**不进** ready_wave/waves（否则宿主会派它与在跑者抢同一文件），
+    # 但**不静默**：逐个记进 `deferred`，点名冲突的在跑节点与重叠路径（绝不悄悄丢）。
+    deferred: list[dict] = []
+    packable: list[str] = []
+    for nid in ready:
+        reasons = _overlap_with_running(nodes, nid, occupied)
+        if reasons:
+            deferred.append({"node": nid, "why": "；".join(reasons)})
+        else:
+            packable.append(nid)
+    waves = pack_waves(nodes, packable)
     blocked = {nid: blocked_by(nodes, nid, closed) for nid in live_tasks(nodes)
                if blocked_by(nodes, nid, closed)}
-    return {
+    result = {
         "tree": tree_name,
         "goal": tree.get("goal", ""),
         "root": tree.get("root"),
@@ -75,6 +121,11 @@ def drive(tree_name: str, tree: dict,
         "stuck": is_stuck(nodes, closed),
         "progress": progress(nodes),
     }
+    # `deferred` **仅在非空时出现**：无节点被挡下时输出与改动前**逐字节一致**
+    # （design.md 的「两次同输入同输出」承诺 + 本节点的回归判据）。无新闻 = 不报。
+    if deferred:
+        result["deferred"] = deferred
+    return result
 
 
 def resolve_question_policy(node: dict, cfg: Config = DEFAULTS) -> dict:

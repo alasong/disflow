@@ -208,14 +208,22 @@ def cmd_drive(engine: Engine, args) -> int:
     print(f"进度 {progress['done']}/{progress['tasks']}（{progress['pct']}%）"
           f" · 运行中 {len(result['running'])} · 卡死 {'是' if result['stuck'] else '否'}")
     plan = engine.plan(args.tree)
+    deferred = result.get("deferred") or []
     if not plan:
-        print("无就绪节点。")
+        # 有就绪节点却无可派者：别谎报「无就绪」，点名是写面被在跑节点挡下。
+        print("无就绪节点可派：以下节点就绪但被在跑节点的写面挡下。" if deferred
+              else "无就绪节点。")
     else:
         print(f"就绪首波 {len(result['ready_wave'])} 个 / 共 {len(result['waves'])} 波"
               f"（**只推不跑**，spawn 归宿主）：")
         for item in plan:
             print(f"  {item['node']}  {item['stage']}/{item['role']}  {item['goal']}")
             print(f"    → {item['brief_cmd']}")
+    if deferred:
+        # **绝不静默丢**：被挡下的节点连同原因（在跑的谁 + 重叠哪些路径）逐条报出。
+        print("写面被在跑节点占用（本波不派，防并写冲突；等它们收尾或改 touch_plan）：")
+        for item in deferred:
+            print(f"  {item['node']}  {item['why']}")
     if result["blocked"]:
         print("被阻塞：")
         for node_id, deps in sorted(result["blocked"].items()):
