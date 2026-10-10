@@ -367,6 +367,34 @@ MUTATIONS: list[Mutation] = [
      '                           prepare=lambda _: {"children": children, "holder": holder})',
      '                           prepare=lambda _: {"children": children})',
      "test_reopen.py"),
+
+    # ── FR-15 提问纪律：brief 三样之一 + 让「我要问」报得出来 ───────────────
+    #   ⚠️ 提醒：光加 `question_policy` 字段是**不可执行的装饰**——若 `status_in` 里
+    #      没有 `blocked`，worker 被要求提问却报不出来，出路还是自己拍板。
+    ("question_policy 用整体替换而非合并（纪律静默变窄）", "disflow/dispatch.py",
+     '    base = dict(cfg.question_policy)\n'
+     '    raw = (node.get("context") or {}).get("question_policy")\n'
+     '    if isinstance(raw, dict):\n'
+     '        for key in ("ask_host", "decide_alone", "how"):\n'
+     '            if key in raw:\n'
+     '                base[key] = raw[key]\n'
+     '    return base',
+     '    raw = (node.get("context") or {}).get("question_policy")\n'
+     '    return dict(raw) if isinstance(raw, dict) else dict(cfg.question_policy)',
+     "test_question_policy.py"),
+    ("结果契约里去掉 blocked（则提问通道不存在）", "disflow/dispatch.py",
+     '"status_in": ["ok", "failed", "blocked"],',
+     '"status_in": ["ok", "failed"],',
+     "test_question_policy.py"),
+    ("brief 不写 question_policy（FR-15 三样缺一）", "disflow/dispatch.py",
+     '    payload["question_policy"] = resolve_question_policy(nodes[node_id], cfg)\n',
+     '',
+     "test_question_policy.py"),
+    ("配置里 question_policy 拼错了不报（静默丢掉，纪律没生效而不自知）",
+     "disflow/config.py",
+     '    unknown = sorted(set(value) - allowed)\n    if unknown:',
+     '    unknown = []\n    if unknown:',
+     "test_question_policy.py"),
 ]
 
 

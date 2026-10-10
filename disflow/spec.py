@@ -27,6 +27,23 @@ SIZE_BUDGET_DEFAULT: int = 400
 # 租约有效期：`start` 加锁；超时后由 `reap` **显式**回收（reap 是事件，就绪判定保持纯函数）
 LEASE_TTL_SECONDS: int = 900
 
+# 提问纪律（FR-15）：brief 必须一次写全「必填声明 / 提问纪律 / 结果契约」。
+# 为何要它：worker 自己拍板的代价是**默默改范围**——而范围是宿主定的。给一条合法通道
+# （`collect --result` 的 `status: blocked`）比要求「别乱来」更能执行。
+QUESTION_POLICY_DEFAULT: dict = {
+    "ask_host": [
+        "改 touch_plan / 验收标准 / goal",
+        "跨节点的接口约定",
+        "与 goal 相冲的取舍",
+    ],
+    "decide_alone": ["实现细节", "命名", "内部结构"],
+    "how": (
+        "要问就问：把问题写进 `collect --result` 的 summary 并把 status 置为 'blocked'，"
+        "然后停。不要自己拍板改范围——宿主读到 blocked 后会决定（rescope / unrequire / 改 goal），"
+        "再由你继续。status 里没有「我猜了一下」这个选项。"
+    ),
+}
+
 # 树级终止条件门（`tree_closure`）：树里必须有 done 的收益验证 + 经验沉淀
 CLOSURE_ENTRIES: tuple[str, ...] = ("evaluate",)
 SEDIMENT_ENTRIES: tuple[str, ...] = ("reflect", "standardize")

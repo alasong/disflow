@@ -462,7 +462,7 @@ class Engine:
         return dispatch_plan(tree, self.tree(tree, state), self._closed(state))
 
     def brief(self, tree: str, node: str) -> dict:
-        return handoff_brief(tree, self.tree(tree), node)
+        return handoff_brief(tree, self.tree(tree), node, self.cfg)
 
     def status(self, tree: str) -> dict:
         state = self.load()

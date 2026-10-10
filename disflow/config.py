@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
-from .spec import ROLES, SIZE_BUDGET_DEFAULT, STAGES, LEASE_TTL_SECONDS
+from .spec import (LEASE_TTL_SECONDS, QUESTION_POLICY_DEFAULT, ROLES,
+                   SIZE_BUDGET_DEFAULT, STAGES)
 
 CONFIG_BASENAME = "disflow.json"
 ENV_CONFIG_PATH = "DISFLOW_CONFIG"
@@ -71,6 +72,9 @@ class Config:
     roles: tuple[str, ...] = ROLES
     """允许的 `role` 取值。同上，只写时校验。"""
 
+    question_policy: dict = field(default_factory=lambda: dict(QUESTION_POLICY_DEFAULT))
+    """提问纪律（FR-15）：brief 写进 worker 契约。节点可用 `context.question_policy` 覆盖。"""
+
 
 DEFAULTS = Config()
 
@@ -85,6 +89,31 @@ def _as_str_tuple(value: object, key: str) -> tuple[str, ...]:
     if isinstance(value, list) and all(isinstance(v, str) for v in value):
         return tuple(value)
     raise ConfigError(f"disflow.json 的 {key!r} 应为字符串数组（或逗号分隔字符串），实际是 {value!r}")
+
+
+def _as_policy(value: object, key: str) -> dict:
+    """提问纪律：固定形状的对象。未知子键**响亮拒绝**（拼错了却静默丢掉 = 纪律没生效）。"""
+    if not isinstance(value, dict):
+        raise ConfigError(f"disflow.json 的 {key!r} 应为对象，实际是 {value!r}")
+    allowed = {"ask_host", "decide_alone", "how"}
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ConfigError(f"disflow.json 的 {key!r} 含未知子键：{unknown}（允许：{sorted(allowed)}）")
+    out: dict = {}
+    for sub in ("ask_host", "decide_alone"):
+        if sub in value:
+            raw = value[sub]
+            if isinstance(raw, str):
+                out[sub] = [p.strip() for p in raw.split(",") if p.strip()]
+            elif isinstance(raw, list) and all(isinstance(v, str) for v in raw):
+                out[sub] = list(raw)
+            else:
+                raise ConfigError(f"disflow.json 的 {key}.{sub!r} 应为字符串数组，实际是 {raw!r}")
+    if "how" in value:
+        if not isinstance(value["how"], str):
+            raise ConfigError(f"disflow.json 的 {key}.how 应为字符串，实际是 {value['how']!r}")
+        out["how"] = value["how"]
+    return out
 
 
 def _as_number(value: object, key: str, *, allow_float: bool) -> float:
@@ -110,6 +139,7 @@ _VALIDATORS = {
     "lease_ttl": (lambda v: _as_int(v, "lease_ttl"), "lease_ttl"),
     "stages": (lambda v: _as_str_tuple(v, "stages"), "stages"),
     "roles": (lambda v: _as_str_tuple(v, "roles"), "roles"),
+    "question_policy": (lambda v: _as_policy(v, "question_policy"), "question_policy"),
 }
 
 CONFIG_KEYS: tuple[str, ...] = tuple(sorted(_VALIDATORS))

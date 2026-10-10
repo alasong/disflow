@@ -5,6 +5,7 @@ spawn 归宿主 —— 本模块不启动任何进程。
 """
 from __future__ import annotations
 
+from .config import DEFAULTS, Config
 from .context import brief as build_brief
 from .ready import (
     blocked_by,
@@ -72,11 +73,32 @@ def drive(tree_name: str, tree: dict,
     }
 
 
-def handoff_brief(tree_name: str, tree: dict, node_id: str) -> dict:
-    """写全派发契约：worker 的完整输入。"""
+def resolve_question_policy(node: dict, cfg: Config = DEFAULTS) -> dict:
+    """提问纪律：`context.question_policy` 优先，否则项目配置默认（再否则出厂默认）。
+
+    与 `gates.resolve_budget` 同一形状（三层：节点声明 > 项目配置 > 内建默认），
+    因为两者是同一类东西：**项目级默认 + 节点级覆盖的声明**。
+
+    返回值总是完整的三个子键 —— 合并而不是整体替换：节点只声明 `how` 时不该把
+    `ask_host` 弄丢（丢掉 = 纪律静默变窄，而 brief 看上去还是「有纪律」）。
+    """
+    base = dict(cfg.question_policy)
+    raw = (node.get("context") or {}).get("question_policy")
+    if isinstance(raw, dict):
+        for key in ("ask_host", "decide_alone", "how"):
+            if key in raw:
+                base[key] = raw[key]
+    return base
+
+
+def handoff_brief(tree_name: str, tree: dict, node_id: str,
+                  cfg: Config = DEFAULTS) -> dict:
+    """写全派发契约：worker 的完整输入（FR-15：必填声明 + **提问纪律** + 结果契约）。"""
     nodes = tree["nodes"]
     payload = build_brief(nodes, node_id)
     payload["tree"] = tree_name
+    payload["question_policy"] = resolve_question_policy(nodes[node_id], cfg)
+    payload["result_contract"] = result_contract(tree_name, tree, node_id)
     payload["brief_cmd"] = f"disflow brief {tree_name} {node_id}"
     payload["done_cmd"] = f"disflow done {tree_name} {node_id} --decl '{{\"evidence\": …}}'"
     return payload
@@ -108,7 +130,11 @@ def result_contract(tree_name: str, tree: dict, node_id: str) -> dict:
     return {
         "node": node_id,
         "required": ["status", "summary", "changed_files"],
-        "status_in": ["ok", "failed"],
+        "status_in": ["ok", "failed", "blocked"],
+        "question_channel": (
+            '有问题就把问题写进 summary 且 status 置为 "blocked"（然后停）；'
+            '不要自己拍板改范围——宿主会读 blocked 并决定'
+        ),
         "acceptance": node.get("acceptance"),
     }
 

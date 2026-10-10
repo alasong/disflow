@@ -269,8 +269,8 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 | --- | --- | --- |
 | `disflow drive <tree> [--json]` | 算就绪波次 + 每节点建议 | **只推不跑**；两次同输入同输出 |
 | `--dry-run`（`start`/`done`/`close`/`drive`） | 预演：门照跑、`prepare` 照算，**不落任何事件** | 拒收行为与真跑一致（预演不消耗节点） |
-| `disflow brief <tree> <node>` | 写全派发契约 | 一次写全 |
-| `disflow collect <tree> <node> --result` | 校验结果契约后落盘 | **不写 done** |
+| `disflow brief <tree> <node>` | 写全派发契约 | **一次写全**：必填声明 + `question_policy` + `result_contract`（FR-15） |
+| `disflow collect <tree> <node> --result` | 校验结果契约后落盘 | **不写 done**；`status ∈ {ok, failed, blocked}` |
 | `disflow done <tree> <node> --decl` | 跑门 → 通过/拒收 | 证据自算；拒收给缺项 |
 | `disflow fail/retry/skip <tree> <node>` | 状态操作 | 经同一状态表 |
 | `disflow reap <tree>` | 回收**过期**租约（running → pending） | 显式事件；不自动”看时钟“ |
@@ -292,6 +292,32 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 | 显式 | 人主动跑 |
 
 **引擎不常驻**——这是对 mgt「每 org 一个 daemon」P4 的直接修正。
+
+### 5.5 提问纪律：给 worker 一条报得出来的通道（FR-15）
+
+`brief` 一次写全三样东西：**必填声明**、**提问纪律**（`question_policy`）、**结果契约**（`result_contract`）。
+
+关键在于三者缺一不可，尤其是结果契约里的那个值：
+
+```jsonc
+"result_contract": {
+  "required": ["status", "summary", "changed_files"],
+  "status_in": ["ok", "failed", "blocked"],   // ← blocked 就是「我要问」的合法出口
+  "question_channel": "有问题就把问题写进 summary 且 status 置为 'blocked'（然后停）"
+}
+```
+
+**为什么必须同时加 `blocked`**：只加 `question_policy` 字段是**不可执行的装饰**——
+它要求 worker 提问，而结果契约里没有这个状态，worker 报不出来，唯一的出路还是自己拍板。
+**「要求别乱来」不如「给一条合法的报法」。**
+
+`blocked` 只是一个**结果**，不是完成：`collect` 照旧**不写 `node-done`**（FR-15 原文）。
+所以走这条路口并不会把门绕过去——宿主读到 `blocked` 后决定（`rescope` / `unrequire` / 改 goal），
+再由 worker 继续。`status` 里没有「我猜了一下」这个选项。
+
+`question_policy` 三层解析（与 `size_budget` 同一形状）：**节点 `context.question_policy`
+> 项目 `disflow.json` > 内建默认**，且是**合并**不是整体替换——节点只声明 `how` 时
+不把 `ask_host` 弄丢（丢掉 = 纪律静默变窄，而 brief 看上去还是「有纪律」）。
 
 ---
 
