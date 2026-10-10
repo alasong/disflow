@@ -68,6 +68,8 @@ class CliTest(DisflowTestCase):
             main(["expand", "t", "root", "--children",
                   '[{"id":"a","goal":"干活","acceptance":{"cmd":"true","expect":"exit0"}}]'])
             main(["start", "t", "a"])
+            main(["collect", "t", "a", "--result",
+                  '{"status":"ok","summary":"s","changed_files":[]}'])
             before = self._rows()
             code = main(["done", "t", "a", "--dry-run"])
         self.assertEqual(code, 0, out.getvalue())

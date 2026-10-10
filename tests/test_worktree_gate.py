@@ -27,21 +27,30 @@
   - **路径归一**：state_dir 与进程侧符号链接前缀不同形（`/private/var/…` 与 `/var/…`）
     ⇒ 同一目录，**不得**误拒（假红）；
   - **brief / collect 的 worktree 面**：brief 给绝对路径 + 分支 + 「不是仓根」说明；
-    collect 拒收越出 worktree 的自报 changed_files。
+    collect 拒收越出 worktree 的自报 changed_files；
+  - **B（规模读数）**：`size_budget` 对**已提交**改动不再恒真空（复用 `start` 记的
+    `head_sha`）；未提交场景行数逐字节不变；
+  - **E（宿主循环契约）**：无已落盘 collect 的 `done` 在 **CLI 层**拒收（exit 1，报文
+    给出 `collect` 命令），`--no-result "<理由>"` 显式破例且理由落进事件；**引擎层**不拒收
+    （直干型组合合法），但每次 `node.done` 都记 `evidence.result_collected`。
 
 每条断言都配过负向对照（改坏实现必须变红），见交付说明。
 """
 from __future__ import annotations
 
+import io
+import json
 import os
 import shutil
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 
 from base import DisflowTestCase, acceptance, git_repo, touch
 
 from disflow import worktree
+from disflow.cli import main
 from disflow.engine import EngineError
 from disflow.spec import SPEC
 
@@ -269,6 +278,152 @@ class WorktreeGateTest(DisflowTestCase):
         with self.assertRaises(EngineError):
             self.engine.collect("t", "a", {
                 "status": "ok", "summary": "s", "changed_files": ["/etc/hosts"]})
+
+    # ── B：size_budget 对「已提交改动」不再恒真空 ─────────────────────────
+
+    def test_b_committed_change_size_is_not_vacuous(self):
+        """worktree 里改文件并提交 ⇒ size.total 必须非 0，size_budget 不得空洞。
+
+        修前：`diff_size` 用 `git diff HEAD`，提交后它就是 0 ⇒ size.total=0、
+        vacuous=[size_budget]（宿主实测 4/4 节点如此）。
+        """
+        self._node("a", acceptance=acceptance("ok"), touch_plan=["README.md"])
+        wpath = self._worktree("a")
+        self.engine.start("t", "a", "w")
+
+        touch(os.path.join(wpath, "README.md"), "readme\n" + "added\n" * 5)
+        commit(wpath, "grow README")
+
+        self.engine.done("t", "a")
+        evidence = self.engine.tree("t")["nodes"]["a"]["evidence"]
+        self.assertEqual(evidence["introduced"], ["README.md"])
+        self.assertGreater(evidence["size"]["total"], 0)
+        self.assertNotIn("size_budget", evidence["vacuous"])
+
+    def test_b_inplace_committed_change_size_is_not_vacuous(self):
+        """原地派发（无 worktree）+ 提交 ⇒ 同样非 0：判据不区分 worktree 与原位。"""
+        self._node("a", acceptance=acceptance("ok"), touch_plan=["README.md"])
+        self.engine.start("t", "a", "w")
+        touch(os.path.join(self.repo, "README.md"), "readme\n" + "added\n" * 3)
+        commit(self.repo, "grow README in place")
+
+        self.engine.done("t", "a")
+        evidence = self.engine.tree("t")["nodes"]["a"]["evidence"]
+        self.assertGreater(evidence["size"]["total"], 0)
+        self.assertNotIn("size_budget", evidence["vacuous"])
+
+    def test_b_uncommitted_size_is_unchanged(self):
+        """回归：未提交场景的行数读数与旧行为一致（README 加 4 行 ⇒ total=4）。"""
+        self._node("a", acceptance=acceptance("ok"), touch_plan=["README.md"])
+        wpath = self._worktree("a")
+        self.engine.start("t", "a", "w")
+
+        touch(os.path.join(wpath, "README.md"), "readme\n" + "new\n" * 4)
+        self.engine.done("t", "a")
+        evidence = self.engine.tree("t")["nodes"]["a"]["evidence"]
+        self.assertEqual(evidence["size"]["total"], 4)
+        self.assertNotIn("size_budget", evidence["vacuous"])
+
+
+class DoneCollectContractTest(DisflowTestCase):
+    """E：宿主循环契约在 CLI 层强制、引擎层显式记账（`result_collected`）。
+
+    为何分层：无 collect 的 `done` 是引擎 API 的**合法组合**（直干型节点不该被逼伪造自报）；
+    而事故发生在走 CLI 的宿主——它的 collect 失败时 done 静默落盘，于是 collect（worker
+    上报 blocked 的唯一通道）形同虚设。故：CLI 硬拒、引擎记账。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.engine, self.repo = git_repo(self, {"README.md": "readme\n"}, commit=True)
+        self._orig_cwd = os.getcwd()
+        # `main()` 用 `Engine(cwd=os.getcwd())`——chdir 进仓，使门与引擎同目录。
+        os.chdir(self.repo)
+        self.addCleanup(os.chdir, self._orig_cwd)
+
+    def _cli(self, *argv: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def _seed(self, node: str = "a", **decl) -> None:
+        code, _out, err = self._cli("init", "t", "--goal", "g")
+        self.assertEqual(code, 0, err)
+        child = {"id": node, "goal": "干活", "acceptance": acceptance("ok"), **decl}
+        code, _out, err = self._cli("expand", "t", "root", "--children",
+                                    json.dumps([child]))
+        self.assertEqual(code, 0, err)
+
+    def _node(self, node: str = "a") -> dict:
+        return self.engine.tree("t")["nodes"][node]
+
+    # ── 无 collect：CLI 拒收 ──────────────────────────────────────────
+
+    def test_e_cli_done_without_collect_is_rejected(self):
+        self._seed()
+        self._cli("start", "t", "a", "--holder", "me")
+        code, out, err = self._cli("done", "t", "a")
+        self.assertEqual(code, 1, f"应 exit 1（数据问题），实得 {code}：{out}{err}")
+        self.assertIn("collect", err)
+        self.assertIn("disflow collect t a", err, "报文必须给可照抄的 collect 命令")
+        self.assertEqual(self._node()["status"], "running", "拒收不许落 done")
+
+    def test_e_cli_done_dry_run_also_rejects_without_collect(self):
+        """预演与真跑同判：`--dry-run` 也不能绕过宿主循环契约。"""
+        self._seed()
+        self._cli("start", "t", "a", "--holder", "me")
+        code, _out, err = self._cli("done", "t", "a", "--dry-run")
+        self.assertEqual(code, 1, f"预演应与真跑同判：{err}")
+
+    # ── --no-result 破例：放行 + 留痕 ────────────────────────────────
+
+    def test_e_cli_no_result_escape_allows_and_records_reason(self):
+        self._seed()
+        self._cli("start", "t", "a", "--holder", "me")
+        code, out, err = self._cli("done", "t", "a", "--no-result",
+                                   "宿主直干，没有 worker 结果")
+        self.assertEqual(code, 0, f"{out}{err}")
+        evidence = self._node()["evidence"]
+        self.assertIs(evidence["result_collected"], False)
+        self.assertEqual(evidence["no_result"], "宿主直干，没有 worker 结果")
+        self.assertIn("无 worker 结果", out, "破例也要在 stdout 警告一句")
+        self.assertEqual(self._node()["status"], "done")
+
+    # ── 有 collect：正常 + 记账 true ─────────────────────────────────
+
+    def test_e_cli_with_collect_succeeds_and_records_true(self):
+        self._seed()
+        self._cli("start", "t", "a", "--holder", "me")
+        code, _out, err = self._cli("collect", "t", "a", "--result",
+                                    '{"status":"ok","summary":"s","changed_files":[]}')
+        self.assertEqual(code, 0, err)
+        code, out, err = self._cli("done", "t", "a")
+        self.assertEqual(code, 0, f"{out}{err}")
+        self.assertIs(self._node()["evidence"]["result_collected"], True)
+        self.assertNotIn("无 worker 结果", out)
+
+    # ── 引擎层是机制：无 collect 的 done 合法，但必须记账 ──────────────
+
+    def test_e_engine_done_without_collect_is_allowed_and_accounted(self):
+        self.engine.init_tree("t", "g")
+        self.engine.expand("t", "root", [
+            {"id": "a", "goal": "g", "acceptance": acceptance("ok")}])
+        self.engine.start("t", "a", "me")
+        self.engine.done("t", "a")          # 引擎不拒收：直干型组合仍合法
+        self.assertIs(self._node()["evidence"]["result_collected"], False)
+        self.assertEqual(self._node()["status"], "done")
+
+    def test_e_engine_no_result_contradicts_existing_collect(self):
+        """已有 collect 结果还传 `--no-result` = 自相矛盾，响亮拒收（不静默忽略）。"""
+        self.engine.init_tree("t", "g")
+        self.engine.expand("t", "root", [
+            {"id": "a", "goal": "g", "acceptance": acceptance("ok")}])
+        self.engine.start("t", "a", "me")
+        self.engine.collect("t", "a",
+                            {"status": "ok", "summary": "s", "changed_files": []})
+        with self.assertRaises(EngineError):
+            self.engine.done("t", "a", no_result="没有结果")
 
 
 if __name__ == "__main__":

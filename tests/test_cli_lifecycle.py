@@ -98,10 +98,17 @@ class CliLifecycleVerbTest(DisflowTestCase):
 
     # ── done ──────────────────────────────────────────────────────────────
 
+    def _collect(self, node: str) -> None:
+        """过一遍宿主循环契约（CLI `done` 无已落盘 collect 会拒收）。"""
+        code, _out, err = self._run(["collect", "t", node, "--result",
+                                     '{"status":"ok","summary":"s","changed_files":[]}'])
+        self.assertEqual(code, 0, err)
+
     def test_done_without_acceptance_is_rejected(self):
         self._run(["init", "t", "--goal", "g"])
         self._run(["expand", "t", "root", "--children", '[{"id":"a","goal":"无判据"}]'])
         self._run(["start", "t", "a"])
+        self._collect("a")               # 先过宿主循环契约，才测得到门
         code, _out, err = self._run(["done", "t", "a"])
         self.assertNotEqual(code, 0, "无验收命令不许 done（FR-18）")
         self.assertIn("验收", err)
@@ -119,6 +126,7 @@ class CliLifecycleVerbTest(DisflowTestCase):
         self._run(["expand", "t", "root", "--children",
                    '[{"id":"a","goal":"批准","acceptance":' + payload + '}]'])
         self._run(["start", "t", "a"])
+        self._collect("a")               # 先过宿主循环契约，才测得到缺必填声明
         self.assertNotEqual(self._run(["done", "t", "a"])[0], 0, "缺必填声明必须被拒")
         code, _out, _err = self._run(["done", "t", "a", "--decl", '{"approver":"song"}'])
         self.assertEqual(code, 0)

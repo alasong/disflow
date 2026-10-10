@@ -232,6 +232,10 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         os.makedirs(os.path.join(self.tmp, "src"), exist_ok=True)
         with open(os.path.join(self.tmp, "src", "a.py"), "w", encoding="utf-8") as handle:
             handle.write("x = 1\n")
+        # 宿主循环契约：done 前先 collect 落盘（collect 同样不要求未过期租约）
+        code, out, err = self._run(["collect", "t", "a", "--result",
+                                    '{"status":"ok","summary":"s","changed_files":[]}'])
+        self.assertEqual(code, 0, f"collect 也不该被租约拦住：{out}{err}")
         code, out, err = self._run(["done", "t", "a", "--decl", '{"approver":"me"}'])
         self.assertEqual(code, 0, f"租约过期不该拦住 done：{out}{err}")
         self.assertIn("done", out)

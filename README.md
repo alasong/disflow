@@ -60,11 +60,14 @@ d drive demo
 d brief demo A
 
 # ④ 先交一次**假的**完成：什么都没改就 done
+#    （宿主循环契约：done 前先 collect 落盘 worker 结果；无它 CLI 直接拒收）
 d start demo A --holder me
+d collect demo A --result '{"status":"ok","summary":"假装做完了","changed_files":[]}'
 d done demo A
 
-# ⑤ 真把活干了，再 done
+# ⑤ 真把活干了，再 collect + done
 printf 'Hi\n' > greeting.txt
+d collect demo A --result '{"status":"ok","summary":"greeting 改成 Hi","changed_files":["greeting.txt"]}'
 d done demo A
 
 # ⑥ 依赖自动解除
@@ -194,7 +197,7 @@ python3 -m disflow.cli drive demo                # 只推不跑：就绪波次 +
 python3 -m disflow.cli brief demo a              # worker 的完整输入契约
 python3 -m disflow.cli start demo a --holder w1
 python3 -m disflow.cli collect demo a --result '{"status":"ok","summary":"…","changed_files":[]}'
-python3 -m disflow.cli done demo a --decl '{"note":"…"}'   # 跑门；无证据拒收
+python3 -m disflow.cli done demo a --decl '{"note":"…"}'   # 跑门；无已落盘 collect ⇒ 拒收（--no-result 显式破例）
 
 # 三种视图（同一投影）
 python3 -m disflow.cli board demo          # 按 stage
