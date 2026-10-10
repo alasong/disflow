@@ -286,9 +286,18 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 615 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 627 passed（零第三方依赖）——收尾全量，保留可用
+python3 scripts/test_changed.py                   # 迭代期：只跑改动相关的子集（带「这不是全量」横幅）
 python3 scripts/mutation_check.py                 # 变异测试：64/64（验证测试真的有牙）
 ```
+
+> 迭代期不必每次跑全量：`scripts/test_changed.py` 读改动文件（与门同源：`git status` ∪
+> `git diff --name-only <base>`）→ 按**显式判据**映射到相关测试子集 —— ① 命名约定
+> `tests/test_<模块>.py`；② grep 全库测试文件里对该模块的文本引用；③ 一组固定元测试
+> （`test_docs` / `test_layering` / `test_declarations` / `test_typecheck`）。
+> 它**默认不是全量**：打印「覆盖 N / 全库 M / 未覆盖 K（列名）」并提示「收尾必须跑全量」；
+> 拿不准或收尾时用 `python3 scripts/test_changed.py --all`（**逐字等价**于上面那条 discover）。
+> 映射的守卫在 `tests/test_test_changed.py`：若映射退化成「只跑同名文件」，守卫当场变红。
 
 > 上面那段「5 分钟上手」本身也被测试盯着：`tests/test_readme_walkthrough.py` 会
 > **抽取 README 里标记的代码块并真的执行**，再断言本文声明的结果。
