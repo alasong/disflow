@@ -1,0 +1,338 @@
+# disflow 设计 v0.1
+
+> 状态：**设计（待评审）** · 2026-10-10
+> 配套：`docs/requirements.md`（需求）· `docs/dev-board.md`（开发看板种子）
+> 判据来源：本线关于「分发器 / 树 / 图 / 看板」的讨论 + fat3 `skills/mgt` 复盘 + `scripts/flowcore` 先例
+
+---
+
+## 0. 一句话 + 分层
+
+**一棵树管上下文，一张图管调度与引用，一个只推不跑的分发器按看板视图派发短命 worker。**
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ 视图层   board(stage)   tree   graph        ← 同一投影的渲染  │
+├─────────────────────────────────────────────────────────────┤
+│ 决策层   ready(n)  →  wave  →  drive(只推不跑) → brief        │
+├─────────────────────────────────────────────────────────────┤
+│ 数据层   Node(树) + Edge(图) ;  单一状态机 ;  门/证据          │
+├─────────────────────────────────────────────────────────────┤
+│ 存储层   events.jsonl(唯一真相) → state.json(投影, 可重建)     │
+├─────────────────────────────────────────────────────────────┤
+│ 宿主层   人 / 父 agent / 编排器  → spawn worker(短命)          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+分层继承 `flowcore`：`store`(L0) · `fsm`(L1) · `gates`(L2) · `forms`(L2b)，disflow 只在其上补 **图层 + 视图层**。
+
+---
+
+## 1. 单一事实源（修 mgt 的 P1/P2）
+
+```text
+events.jsonl  ──project()──▶  state.json（原子替换，可从事件重建）
+   唯一真相                        只读缓存 / 查询用
+```
+
+- **只有一个状态机**：节点 `status`（见 §2.1）。mgt 的 `global_status` **不再存在**——审批/验证是图里的**节点**，不是第二条生命周期。
+- **只有一个 registry 语义**：产出物登记（`produces`/`consumes`）住**投影**里，不再单独一份文件。
+- 写路径：任何写操作 = **先 append 事件 → 再重算投影**（沿用 kaa/flowcore 约定）。
+
+命令：
+
+```text
+disflow state rebuild <tree> [--check]   # 从事件重建；--check 比对一致性
+disflow checkpoint <tree>                # 记录事件偏移
+```
+
+---
+
+## 2. 数据模型
+
+### 2.1 节点 Node
+
+```jsonc
+{
+  "id": "n7",
+  "parent": "n2",                 // 树边：唯一父（root 为 null）
+  "kind": "task",                 // container | task  （HTN 的 compound/primitive）
+  "stage": "dev",                 // 看板列：req | design | dev | verify | done
+  "role": "dev",                  // 负责方：dev | qa | pm（与 stage 独立）
+  "goal": "实现 parse_config",
+  "context": {                    // 供后代继承（沿树向下）
+    "background": "…",
+    "constraints": ["…"],
+    "references": ["docs/x.md"]
+  },
+  "entry": "implement",           // 开工模板（决定门与证据要求）
+  "produces": ["parse_config"],   // 图边：产出物
+  "consumes": ["config_schema"],  // 图边：消费物（须指向已登记产出）
+  "touch_plan": ["src/parse.py"], // 写面声明（规模门 + 冲突检测）
+  "acceptance": {                 // 门
+    "cmd": "pytest tests/test_parse.py",
+    "expect": "exit0"
+  },
+  "status": "pending",            // 存储态：pending|running|done|failed|skipped
+  "lease": null,                  // {holder, expires_at}
+  "evidence": null                // done 时引擎自填
+}
+```
+
+**关键区分（修 mgt 的 P2/P3）：**
+
+| 概念 | 住哪 | 谁写 |
+| --- | --- | --- |
+| 层级（part-of） | `parent`（树，唯一） | `expand` |
+| 调度依赖（顺序） | `requires`（图，DAG） | `require` |
+| 软引用 | `relates`（图，任意） | `relate` |
+| 供给-消费 | `produces`/`consumes`（图） | `produce`/`consume` |
+| 派生就绪 | `ready`（**不存储**，现算） | — |
+| 审批/验证 | **节点**（kind=task, stage=verify/approve） | `expand` |
+
+> `status` **没有** "ready" 值——就绪是派生量。这消灭了 mgt「本地 status × 全局 status」的双状态机。
+> mgt 的 `contains` 依赖**删除**（= `parent`）；`informs` → `relates`；`blocks` → `requires`。
+
+### 2.2 树 vs 图：为什么必须分开
+
+| | 树（`parent`） | 图（`requires`/`relates`/…） |
+| --- | --- | --- |
+| 管什么 | **上下文继承** | **调度与引用** |
+| 约束 | 单父 → 祖先链**唯一、有限、无环** | `requires` 必须 DAG；`relates` 任意 |
+| 读法 | root→…→parent | 入边 / 邻接 |
+
+- 上下文**只走树**：走图会成环、多路径、指数膨胀。
+- 调度**必须进图**：跨子树依赖、横向产出物依赖，树表达不了。
+
+### 2.3 节点分型（修「容器/任务」混用）
+
+| kind | 是否执行 | done 判据 |
+| --- | --- | --- |
+| `container` | 否，只分解 | 全部子节点 done（**派生**） |
+| `task` | 是 | 过验收门（§7） |
+
+`ready()` 只对 `task` 返回真；容器不派发。
+
+---
+
+## 3. 就绪判据 `ready(n)`（唯一函数）
+
+```text
+ready(n) := kind(n) == task
+          ∧ status(n) == pending
+          ∧ ∀ d ∈ requires(n): status(d) == done        # 图入边
+          ∧ lease(n) == null                            # 未被告占用
+          ∧ 无环（写入时已保证）
+
+blocked_by(n) := [ d ∈ requires(n) : status(d) != done ]
+```
+
+**唯一性**（FR-11）：分发器和 worker 调**同一份** `ready`；两面不分叉。
+
+**波次 `wave`**：
+
+```text
+wave := greedy_pack({ n : ready(n) }, 冲突判据 = touch_plan 有交集)
+```
+
+同波内 `touch_plan` 不重叠；重叠者排到下一波（沿用 flowcore `drive` 的 `--touches` 提示）。
+
+**卡死检测**（FR-27）：
+
+```text
+stuck := ready() == ∅ ∧ running() == ∅ ∧ ∃ status != done
+```
+
+出现即报错（通常是环或全被阻塞）。
+
+---
+
+## 4. 上下文投影 `brief(n)`
+
+```text
+brief(n) := 树：祖先链 root→…→parent 各自的 context（浅合并，近祖先覆盖远祖先）
+          ⊕ 图：每个 status==done 的 requires 前置节点的产出摘要（produces）
+          ⊕ 图：consumes 指向的登记项要点
+          ⊕ relates：只给引用句柄，**不递归展开**
+```
+
+- 前两段**沿树唯一、有限**；第三段只给指针，避免图膨胀。
+- 每段受**规模预算**约束（NFR-6）：超预算即报错并要求拆节点，不静默截断。
+
+命令：
+
+```text
+disflow brief <tree> <node>            # 输出该节点的完整 brief（worker 的输入）
+disflow brief <tree> <node> --json
+```
+
+---
+
+## 5. 分发器（只推不跑）
+
+### 5.1 生命周期
+
+```text
+drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ──▶ 执行
+                                                          │
+     done ◀── gate(验收) ◀── collect(校验结果) ◀──────────┘
+      │
+      └──▶ 事件入流 ──▶ 投影更新 ──▶ 下次 drive
+```
+
+### 5.2 命令
+
+| 命令 | 作用 | 关键约束 |
+| --- | --- | --- |
+| `disflow drive <tree> [--json]` | 算就绪波次 + 每节点建议 | **只推不跑**；两次同输入同输出 |
+| `disflow brief <tree> <node>` | 写全派发契约 | 一次写全 |
+| `disflow collect <tree> <node> --result` | 校验结果契约后落盘 | **不写 done** |
+| `disflow done <tree> <node> --decl` | 跑门 → 通过/拒收 | 证据自算；拒收给缺项 |
+| `disflow fail/retry/skip <tree> <node>` | 状态操作 | 经同一状态表 |
+
+### 5.3 spawn 归宿主
+
+引擎**不内置常驻进程**（FR-16）。宿主可以是：人、父 agent、编排器、`run` 命令。
+`drive` 输出里直接给**可照抄的 brief 命令**，宿主拿到就能派。
+
+### 5.4 触发（FR-17）
+
+| 方式 | 适用 |
+| --- | --- |
+| 外部 cron | `drive` + 派发 |
+| 事件驱动 | 上游 `done` 后触发 |
+| 显式 | 人主动跑 |
+
+**引擎不常驻**——这是对 mgt「每 org 一个 daemon」P4 的直接修正。
+
+---
+
+## 6. 看板 = 视图（FR-21）
+
+同一投影的三种渲染，**不各存一份**：
+
+```text
+disflow board <tree> [--stage dev]   # 看板：按 stage 分列
+disflow tree  <tree>                 # 树：按 parent 缩进
+disflow graph <tree> [--dot]         # 图：requires/relates
+```
+
+**「多块板」= 多棵树**（FR-22）：每棵树一个 namespace，作用域隔离，各有权威分发者。
+跨树依赖**降级为显式完成信号**（FR-23），不假装是一张图（理由见讨论：跨边界依赖会引入分布式共识）。
+
+```text
+disflow trees                        # 列出所有树
+disflow board --all                  # 多板总览
+```
+
+---
+
+## 7. 门与证据契约（FR-18/19/20）
+
+- 每个 `entry`（开工模板）声明：**产出**、**证明**、**反模式**、**验收命令**。
+- `done` 时引擎自算证据元数据：`git` 改动集、顶层符号、`touch_plan` 覆盖检查。
+- 拒收输出：**缺项清单 + 契约片段**。
+
+门的类别（对齐 mgt `G2 Gate` 与 kaa 的教训）：
+
+| 门 | 判什么 | 挂在 |
+| --- | --- | --- |
+| `acceptance` | 验收命令跑过 + 期望匹配 | 所有 task |
+| `design_first` | 改动集落在 `touch_plan` 内 | implement/configure |
+| `size_budget` | 改动不超预算 | implement/configure/merge |
+| `tree_closure` | 树根有 done 的 evaluate（收益验证） | 树根 |
+
+---
+
+## 8. 角色与阶段（修 mgt 的 P7）
+
+- **stage** = 看板列（流程位置）：req → design → dev → verify → done。
+- **role** = 负责方（dev/qa/pm）：**与 stage 独立**。
+- **审批/验证是节点**：例如 `stage=verify, role=qa` 的节点消费 `dev` 节点的产出。
+
+这样：
+
+- 消灭了 mgt 的 `global_status` 第二状态机（P2）。
+- 消灭了 mgt「org 既当列又当负责人」的混同（P7）。
+- 跨角色协作 = 图上的 `produces→consumes` + `requires`，不需要六种目录协议（P6）。
+
+---
+
+## 9. 目录 / 触发 / 分层
+
+```text
+<project>/.disflow/
+  events.jsonl            # 唯一真相（append-only）
+  state.json              # 投影（可从事件重建）
+  trees/<tree>/           # 多棵树（多块板）各自隔离
+  designs/<node>.md       # 设计文档（可选）
+```
+
+命令分层：
+
+```text
+disflow init <tree> --goal <g>
+disflow expand <tree> <node> --children '<json>'   # 建树
+disflow require <tree> <node> <dep>                # 建图（写时拒环）
+disflow relate <tree> <node> <node>
+disflow produce/consume …
+disflow start/check/done/fail/retry/skip …
+disflow drive/brief/collect …
+disflow board/tree/graph/status/trees …
+disflow import mgt <path>                          # 迁移（§10）
+disflow doctor                                     # 自检
+```
+
+---
+
+## 10. mgt 迁移映射（FR-28/29）
+
+| mgt | disflow | 说明 |
+| --- | --- | --- |
+| `state.json.todos[]` | Node 集合 | 展平列表 → 按 `parent` 建树 |
+| `type R/O/T/S` + `depth` | `kind` + 层级 | R/O = `container`；T/S = `task` |
+| `parent` | `parent` | 直接映射 |
+| `deps{type:blocks}` | `requires` | DAG |
+| `deps{type:informs}` | `relates` | 软引用 |
+| `deps{type:contains}` | **丢弃** | 与 `parent` 重复 |
+| `status`(pending/ready/iterating/done) | `status`(pending/running/done) | `ready` 改为派生 |
+| `global_status`(new/dev_done/…) | **转为节点** | 生成 verify/approve 节点 |
+| `layer/domain/phase` | `stage` / `relates` | phase→stage；layer/domain→标签 |
+| `mode`(ulww/pdf/…) | `entry` | 开工模板 |
+| `files` | `touch_plan` | 写面 |
+| `registry.json` | 投影中的登记 | 不再单独文件 |
+| `org=dev/qa/pm` | `role` | 与 `stage` 解耦 |
+| `iteration` | 一棵父树 | iteration = 有 deadline 的树 |
+
+---
+
+## 11. 与 flowcore 的关系
+
+**优先复用** `fat3/scripts/flowcore`，disflow 作为它的一个**实例**（spec + reducer + gates + verbs）：
+
+| 层 | 现状 | disflow 要做 |
+| --- | --- | --- |
+| `store` | 已有（append + 原子投影 + reducer 注入） | 直接用 |
+| `fsm` | 已有（status_gate 表） | 直接用 |
+| `gates` | 已有（门引擎，谓词注入） | 直接用 |
+| `forms` | 已有（模板/流程串） | 直接用 |
+| `tree` | 已有 `TreeRuntime.drive` + `ready_siblings` | 直接用 |
+| **图** | **缺**（`ready_siblings` 只有 `(parent, phase)`，无依赖字段） | **补 `requires`/`relates` + `ready()` 图入边 + 写时环检测** |
+| 视图 | 无统一视图层 | **补 `board`/`graph`** |
+
+若要与 fat3 解耦 → fork `scripts/flowcore` 到本仓，保持公开 API 与语言中立判据。
+
+---
+
+## 12. 风险与未决
+
+| # | 项 | 倾向 |
+| --- | --- | --- |
+| R1 | 复用 flowcore vs fork | 先复用，接口对齐后再定 |
+| R2 | `relates` 传递深度 | 默认 1 跳，可配置，超预算即报错 |
+| R3 | 环检测时机 | 写入即拒（fail-fast） |
+| R4 | 跨 tree 完成信号协议 | 显式事件，不共享图 |
+| R5 | 多写者跨仓/跨 worktree | 单写者收口 + 租约，跨仓暂不做 |
+| R6 | POC 范围 | 树 + `requires` + `ready` + `drive` 最小闭环 |
+| R7 | 是否 `git init` | 本仓非 git 仓，一致性门依赖 git，落地前确认 |
+| R8 | 规模预算阈值 | 先观察，跑真实任务后调 |
