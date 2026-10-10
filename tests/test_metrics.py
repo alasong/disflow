@@ -3,18 +3,26 @@
 指标层是**纯函数**：时间只来自 `now_ts`，完工时刻只来自 `node.done` / `node.skip` 事件。
 所以这里能用手搓事件序列把数值钉死——不依赖“跑一下今天的钟”。
 
-统一语义 **as-of `now_ts`**：`summary.points_left` 必须等于 `burndown.series[-1].remaining`，
+统一语义 **as-of `now_ts`**：`summary.points_left` 必须等于 `burndown.series[-1].remaining`
+（节点维度同理：`summary.nodes_left` == `series[-1].remaining_nodes`），
 不论 `now_ts` 落在完工事件之前还是之后（对抗性用例见 AsOfConsistencyTest）。
+
+**两个维度并列**：`nodes_*`（节点数）永远有读数、与 `points` 是否声明无关；`points_*`
+（点数）未声明时如实说「未声明」而不编数。CLI 侧（`disflow metrics <tree>`）两维各带标签。
 """
 from __future__ import annotations
 
+import io
 import json
+import re
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 
 from base import DisflowTestCase, acceptance
 
 from disflow import spec, state, store
+from disflow.cli import main
 from disflow.engine import Engine
 from disflow.metrics import NO_START_REASON, burndown, summary, tree_start_ts
 from disflow.model import DECLARABLE_FIELDS, new_node, validate_points
@@ -391,6 +399,198 @@ class BurndownTest(DisflowTestCase):
         series = burndown(tree, events, slug="t", now_ts=now)["series"]
         self.assertEqual(series[-1]["remaining"],
                          summary(tree, events, slug="t", now_ts=now)["points_left"])
+
+
+class NodeCountsSummaryTest(DisflowTestCase):
+    """节点数维度：**永远**有读数，与 `points` 是否声明无关（与点数维度并列、不合并）。
+
+    为何要有这一维：只声明 points 时，一棵 N 个 task、0 个 points 声明的树只剩
+    「0 → 0」可读——读的人会以为「没什么可干」，而实际有 N 个节点在。
+    """
+
+    def test_counts_exist_even_when_nobody_declared_points(self):
+        tree = _tree(_node("A", status="done"), _node("B"), _node("C"))
+        events = [_event("tree.init", _iso(2025, 1, 1)),
+                  _event("node.done", _iso(2025, 1, 2), node="A")]
+        result = summary(tree, events, slug="t", now_ts=_epoch(2025, 1, 4))
+        self.assertEqual(result["nodes_total"], 3, "没给 points 也有节点数分母")
+        self.assertEqual(result["nodes_done"], 1)
+        self.assertEqual(result["nodes_left"], 2)
+        self.assertEqual(result["points_total"], 0.0, "点数维度仍如实为 0（未声明）")
+        self.assertEqual(result["points_unestimated"], 3)
+
+    def test_counts_ignore_containers(self):
+        tree = _tree(_node("A", status="done"), _node("C", kind="container"))
+        events = [_event("tree.init", _iso(2025, 1, 1)),
+                  _event("node.done", _iso(2025, 1, 1), node="A")]
+        result = summary(tree, events, slug="t", now_ts=_epoch(2025, 1, 4))
+        self.assertEqual(result["nodes_total"], 1, "container 不是工作量（与点数维度同口径）")
+
+    def test_two_dimensions_are_distinct_numbers(self):
+        """节点数 3 与点数 8 是两个数：谁也不得顶替谁。"""
+        tree = _tree(_node("A", status="done", points=3), _node("B", points=5),
+                     _node("C"))
+        events = [_event("tree.init", _iso(2025, 1, 1)),
+                  _event("node.done", _iso(2025, 1, 2), node="A")]
+        result = summary(tree, events, slug="t", now_ts=_epoch(2025, 1, 4))
+        self.assertEqual((result["nodes_total"], result["nodes_done"],
+                          result["nodes_left"]), (3, 1, 2))
+        self.assertEqual((result["points_total"], result["points_done"],
+                          result["points_left"]), (8.0, 3.0, 5.0))
+
+    def test_node_done_is_truncated_as_of_now_ts(self):
+        """完工事件在 `now_ts` 之后：节点维度也不得提前把节点数成完工（与点数同截点）。"""
+        tree = _tree(_node("A", status="done"), _node("B"))
+        events = [_event("tree.init", _iso(2025, 1, 1)),
+                  _event("node.done", _iso(2025, 1, 5), node="A")]
+        result = summary(tree, events, slug="t", now_ts=_epoch(2025, 1, 3))
+        self.assertEqual(result["nodes_done"], 0, "完工在 now_ts 之后，节点维度同样不算")
+        self.assertEqual(result["nodes_left"], 2)
+
+
+class NodeCountsBurndownTest(DisflowTestCase):
+    """燃尽的两个维度各一列：`remaining`（点数）/ `remaining_nodes`（节点数）。"""
+
+    def _fixture(self) -> tuple[dict, list[dict]]:
+        tree = _tree(_node("A", status="done", points=2),
+                     _node("B", points=3),
+                     _node("C", points=None))
+        events = [
+            _event("tree.init", _iso(2025, 1, 1)),
+            _event("node.start", _iso(2025, 1, 2), node="A"),
+            _event("node.done", _iso(2025, 1, 2), node="A"),
+        ]
+        return tree, events
+
+    def test_rows_carry_both_dimensions(self):
+        tree, events = self._fixture()
+        series = burndown(tree, events, slug="t", now_ts=_epoch(2025, 1, 4))["series"]
+        # 点数列只算已估的 A/B（A 在 01-02 完成）；节点数列 A/B/C 全算。
+        self.assertEqual([row["remaining"] for row in series], [5.0, 3.0, 3.0, 3.0])
+        self.assertEqual([row["remaining_nodes"] for row in series], [3, 2, 2, 2])
+
+    def test_node_column_is_informative_without_declared_points(self):
+        """未声明 points 时点数那列恒 0，但节点那列照样逐日下降（不再是「0 → 0」）。"""
+        tree = _tree(_node("A", status="done"), _node("B"))
+        events = [_event("tree.init", _iso(2025, 1, 1)),
+                  _event("node.done", _iso(2025, 1, 2), node="A")]
+        series = burndown(tree, events, slug="t", now_ts=_epoch(2025, 1, 4))["series"]
+        self.assertEqual([row["remaining"] for row in series], [0.0, 0.0, 0.0, 0.0])
+        self.assertEqual([row["remaining_nodes"] for row in series], [2, 1, 1, 1])
+
+    def test_last_remaining_nodes_matches_summary_nodes_left(self):
+        tree, events = self._fixture()
+        now = _epoch(2025, 1, 4)
+        series = burndown(tree, events, slug="t", now_ts=now)["series"]
+        self.assertEqual(series[-1]["remaining_nodes"],
+                         summary(tree, events, slug="t", now_ts=now)["nodes_left"],
+                         "节点维度也要有 as-of 一致这条不变量")
+
+    def test_node_ideal_descends_linearly_to_zero_at_deadline(self):
+        tree, events = self._fixture()
+        tree["deadline"] = "2025-01-06"
+        result = burndown(tree, events, slug="t", now_ts=_epoch(2025, 1, 4))
+        ideal_nodes = result["ideal_nodes"]
+        self.assertIsNotNone(ideal_nodes)
+        assert ideal_nodes is not None
+        self.assertEqual([row["day"] for row in ideal_nodes],
+                         ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04"])
+        for row, expected in zip(ideal_nodes, [3.0, 2.4, 1.8, 1.2], strict=True):
+            self.assertAlmostEqual(row["ideal_nodes"], expected)
+
+    def test_node_ideal_still_exists_when_points_are_undeclared(self):
+        """未声明点数时，有 deadline 就有节点数理想线（点数那一条退化为全 0，故不展示）。"""
+        tree = _tree(_node("A"), _node("B"))
+        tree["deadline"] = "2025-01-06"
+        result = burndown(tree, [_event("tree.init", _iso(2025, 1, 1))], slug="t",
+                          now_ts=_epoch(2025, 1, 4))
+        ideal_nodes = result["ideal_nodes"]
+        assert ideal_nodes is not None
+        self.assertEqual([row["ideal_nodes"] for row in ideal_nodes],
+                         [2.0, 1.6, 1.2, 0.8])
+
+    def test_without_deadline_neither_dimension_gets_an_ideal(self):
+        """无 deadline 不构造理想线——两维同一条规矩（保持原行为）。"""
+        tree, events = self._fixture()
+        result = burndown(tree, events, slug="t", now_ts=_epoch(2025, 1, 4))
+        self.assertIsNone(result["ideal"], "无 deadline 不得伪造点数理想线")
+        self.assertIsNone(result["ideal_nodes"], "无 deadline 不得伪造节点数理想线")
+        self.assertTrue(result["ideal_reason"])
+
+    def test_deadline_not_after_start_yields_no_node_ideal(self):
+        tree, events = self._fixture()
+        tree["deadline"] = "2025-01-01"
+        result = burndown(tree, events, slug="t", now_ts=_epoch(2025, 1, 4))
+        self.assertIsNone(result["ideal"])
+        self.assertIsNone(result["ideal_nodes"])
+        self.assertTrue(result["ideal_reason"])
+
+
+class CliMetricsDimensionsTest(DisflowTestCase):
+    """CLI 侧（`disflow metrics <tree>`）两个维度都必须带标签出现。"""
+
+    def _run(self, argv: list[str]) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def _seed(self, children: list[dict]) -> None:
+        code, _out, err = self._run(["init", "t", "--goal", "metrics-dims"])
+        self.assertEqual(code, 0, err)
+        code, _out, err = self._run(["expand", "t", "root", "--children",
+                                     json.dumps(children, ensure_ascii=False)])
+        self.assertEqual(code, 0, err)
+
+    def _burn_values(self, out: str) -> dict[str, list[str]]:
+        """从燃尽行里抠出每一维的两个数值（跳过年月日）——`{"节点": [首日值, 末日值], ...}`。
+
+        为何不只看标签：标签对了但取错列的错法一模一样能过——必须钉住**数值**。
+        """
+        values: dict[str, list[str]] = {}
+        for line in out.splitlines():
+            match = re.match(r"\s*(?:燃尽\s+)?(\S+)\s+\d{4}-\d{2}-\d{2} (\S+)"
+                             r" → \d{4}-\d{2}-\d{2} (\S+)", line)
+            if match:
+                values[match.group(1)] = [match.group(2), match.group(3)]
+        return values
+
+    def test_node_counts_printed_even_without_declared_points(self):
+        """没给 points 时：节点数照样可读，点数那维仍是「未声明」，燃尽不打印点数那一行。"""
+        self._seed([{"id": "a", "goal": "A", "acceptance": acceptance()},
+                    {"id": "b", "goal": "B", "acceptance": acceptance()}])
+        code, out, err = self._run(["metrics", "t"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("节点    2（已完成 0，剩 2）", out, "节点数维度必须永远有读数")
+        self.assertIn("未声明", out, "点数维度仍如实说未声明")
+        self.assertNotIn("点数    0", out, "未声明不许被读成一个 0")
+        self.assertEqual(self._burn_values(out), {"节点": ["2", "2"]},
+                         "节点燃尽行必须报节点数（错取点数列就会是 0 → 0）")
+        self.assertNotIn("\n          点数  ", out,
+                         "点数未声明时不得打印点数燃尽行（那只会是「0 → 0」）")
+
+    def test_both_dimensions_labelled_when_points_declared(self):
+        self._seed([{"id": "a", "goal": "A", "points": 3, "acceptance": acceptance()},
+                    {"id": "b", "goal": "B", "acceptance": acceptance()}])
+        self._run(["skip", "t", "a", "--reason", "演示已完成"])
+        code, out, err = self._run(["metrics", "t"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("节点    2（已完成 1，剩 1）", out)
+        self.assertIn("点数    3（已完成 3，剩 0）", out)
+        # 两行各自的数量必须对得上自己那一维（节点 1、点数 0；取错列就会两边对调/变 0）。
+        # 本用例的树建与 skip 同日 ⇒ series 只有一行，故首末日数值相同。
+        self.assertEqual(self._burn_values(out), {"节点": ["1", "1"], "点数": ["0", "0"]})
+
+    def test_json_carries_the_node_dimension_in_both_keys(self):
+        self._seed([{"id": "a", "goal": "A", "acceptance": acceptance()}])
+        code, out, err = self._run(["metrics", "t", "--json"])
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+        summary_payload = payload["summary"]
+        self.assertEqual((summary_payload["nodes_total"], summary_payload["nodes_done"],
+                          summary_payload["nodes_left"]), (1, 0, 1))
+        self.assertEqual(payload["burndown"]["series"][-1]["remaining_nodes"], 1)
+        self.assertIn("ideal_nodes", payload["burndown"])
 
 
 class SlugNotInProjectionTest(DisflowTestCase):
