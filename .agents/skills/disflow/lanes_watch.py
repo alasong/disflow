@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""执行视图 v6 —— 「这是什么活」+「跑到哪了」，一屏看完。
+"""运行视图 v6 —— 「这是什么活」+「跑到哪了」，一屏看完。
 
 v6 的正源（新增，接上 disflow 的树）：
   · goal/stage/status  ← `$DISFLOW_STATE_DIR/state.json` 的投影（键 = 节点 id）
@@ -8,17 +8,21 @@ v6 的正源（新增，接上 disflow 的树）：
   两个存储各答一半，人在两个窗口之间对不上——这才是「看不出做什么的」的病根。
 
 命名（重要，三个词不许再撞）：
-  · **看板** = disflow 的**一棵树**（一个目标、一个权威分发者）。它的**列**是 `stage`。
-    设计原文（docs/design-dispatch-tree-graph.md:20）：
-      「相当于**看板**，多个看板串成工作流：有的看板完成需求、有的完成设计、有的完成开发」
-      §4：看板 = 按 `stage` 分组/过滤**同一棵树**的投影；“工作流模板 = 阶段图”，
-      实例化后**只是节点上的 `stage` 字段** + `requires` 边——不新建实体。
-  · **列** = `stage`（默认 req|design|dev|verify|done，可配）。看板里 `[dev] 10/10` 这种就是列。
-  · **派发批次** = **宿主一次 subagent 调用**（pi 的 workflow run；1 个批次可含 1..N 路 lane）。
-    ⚠ 以前这里把这个叫了“工作流”，与设计里的“工作流（阶段图）”撞名——所以看不懂。
-  · 本文件是**执行视图**（宿主侧，读 pi 的 run 目录）；`disflow board <tree>` 是**看板**。
+  · **看板** = `disflow board <tree>`：**一棵树的 `stage` 列投影**（阶段列，不是第二份存储）。
+    它的**列**是 `stage`，默认 `req|design|dev|verify`（可配）。
+    设计原文（docs/design-dispatch-tree-graph.md:123）：「工作流模板 = 阶段图（需求 → 设计 → 开发 → 验证）」；
+    §4：看板 = 按 `stage` 分组/过滤**同一棵树**的投影。
+    ⚠ `done` **不是列**：它是节点**状态**（`status`）——「流程走到哪」与「收尾没有」是两个轴，
+    混成一个会造出一个永远为空、且与状态同名的列。
+  · **运行视图** = 本文件（宿主侧，读 pi 的 run 目录）：并行 lane 的**实时进度**。
+    一个 pi workflow run（= 宿主一次 subagent 调用，可含 1..N 路 lane）就是运行视图里的一个块。
+    ⚠ **不许**把它叫「看板」/「工作流」/「派发批次」——它与看板（阶段列）不是一回事。
+  · 本文件的 lane 名 = disflow 节点 id；后面的「看板 <树> · 列 <stage>」是**读投影**得来的，不是猜的。
 
 ── 历史（v1..v5 的错，留着防止改回去）──
+
+v6 修（2026-10-11）：把 pi workflow run 叫「派发批次」——与看板（阶段列）撞名，改叫**运行视图**；
+  看板列取值去掉了 `done`（`done` 是节点**状态**，列 = 需求/设计/开发/验证）。
 
 v5（定稿）。
 
@@ -83,7 +87,7 @@ def _loads(line):
 def trees_index():
     """读 disflow 投影，把 lane 名（= 节点 id）映回它的 goal/stage/status。
 
-    只读 state.json（不 spawn 子进程、不碰事件流）——执行视图不许改状态。
+    只读 state.json（不 spawn 子进程、不碰事件流）——运行视图不许改状态。
     找不到就返回 None，由调用方**明说找不到**，绝不猜一个 goal 顶上。
     """
     path = os.path.join(DISFLOW_STATE_DIR, "state.json")
@@ -244,7 +248,7 @@ def render(all_, verbose=False):
     kept = {r["runId"] for r in keep}
 
     # 分组；父 run 只要**任一子可见**就保留（父常缺 lastActivityAt），
-    # 且保留后该看板下的**全部** lane 都显示（不再被 10 分钟窗口逐个筛掉）
+    # 且保留后该运行视图下的**全部** lane 都显示（不再被 10 分钟窗口逐个筛掉）
     groups = []
     for p in [r for r in runs if r["mode"] == "workflow"]:
         cids = {c.get("runId") for c in p["children"]}
@@ -258,17 +262,17 @@ def render(all_, verbose=False):
     nrunning = sum(1 for r in keep if r["state"] == "running")
     trees = sorted({v["tree"] for v in idx.values()})
     boards = len(trees)
-    out = [f"══ 执行视图 @ {time.strftime('%H:%M:%S')} ══",
-           f"看板（= disflow 树）{boards} 棵："
+    out = [f"══ 运行视图 @ {time.strftime('%H:%M:%S')} ══",
+           f"看板（= disflow 树，列 stage）{boards} 棵："
            f"{', '.join(trees) if trees else '（读不到 state.json）'}",
-           f"派发批次（= pi workflow run）{nboards} 个"
+           f"运行视图（= pi workflow run）{nboards} 个"
            f"（workflow {len(groups)} · 散跑 {1 if rest else 0}）"
            f" · lane {len(keep)} 路 · 在跑 {nrunning} · 静默阈值 10 分钟",
            f"state dir {DISFLOW_STATE_DIR}"]
     for i, (p, kids) in enumerate(groups, 1):
         nrun = sum(1 for k in kids if k["state"] == "running")
         out.append("")
-        out.append(f"▌派发批次 {i}/{nboards} · {p['short']}"
+        out.append(f"▌运行视图 {i}/{nboards} · {p['short']}"
                    f"（{nrun} 在跑 / {len(kids)} 路 · 父 {p['state']}）")
         if p["root"]:
             out.append(f"  root {p['root']}")
@@ -279,7 +283,7 @@ def render(all_, verbose=False):
                        else [f"  · {cid:<22}{c.get('state')}（已过窗口）"])
     if rest:
         out.append("")
-        out.append(f"▌散跑批次 {nboards}/{nboards}（不属于任何 pi workflow）")
+        out.append(f"▌散跑 {nboards}/{nboards}（不属于任何 pi workflow）")
         for r in rest:
             out.extend(block(r, "", verbose, None, False))
     if not keep:

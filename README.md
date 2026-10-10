@@ -29,7 +29,7 @@ printf 'Hello\n' > greeting.txt
 cat > disflow.json <<'JSON'
 {
   "acceptance_timeout": 300,
-  "stages": ["req", "design", "dev", "verify", "done"]
+  "stages": ["req", "design", "dev", "verify"]
 }
 JSON
 ```
@@ -235,7 +235,7 @@ python3 -m disflow.cli doctor
   "git_timeout": 20,                  // git 探测超时（大仓调大）
   "output_tail": 2000,                // 证据里保留的输出尾部字符数
   "walk_ignore": ["node_modules"],    // 指纹递归目录时跳过的名字
-  "stages": ["req", "design", "dev", "verify", "done"],  // 看板列（写时校验）
+  "stages": ["req", "design", "dev", "verify"],    // 看板列（写时校验）；`done` 是节点状态，不是列
   "roles": ["dev", "qa", "pm"]                            // 负责方（写时校验）
 }
 ```
@@ -270,7 +270,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 573 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 582 passed（零第三方依赖）
 python3 scripts/mutation_check.py                 # 变异测试：64/64（验证测试真的有牙）
 ```
 

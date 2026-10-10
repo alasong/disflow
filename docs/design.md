@@ -56,7 +56,7 @@ disflow rebuild [--check]                # 从事件重建；--check 比对一�
   "id": "n7",
   "parent": "n2",                 // 树边：唯一父（root 为 null）
   "kind": "task",                 // container | task  （HTN 的 compound/primitive）
-  "stage": "dev",                 // 看板列：req | design | dev | verify | done
+  "stage": "dev",                 // 看板列：req | design | dev | verify（`done` 是节点状态，不是列）
   "role": "dev",                  // 负责方：dev | qa | pm（与 stage 独立）
   "goal": "实现 parse_config",
   "context": {                    // 供后代继承（沿树向下）
@@ -612,7 +612,8 @@ children 声明里直接给，与 `require`/`relate`/`produce`/`consume` 动词�
 
 ## 8. 角色与阶段（修 mgt 的 P7）
 
-- **stage** = 看板列（流程位置）：req → design → dev → verify → done。
+- **stage** = 看板列（流程位置）：req → design → dev → verify（四个阶段，与设计原文的阶段图同形）。
+  `done` **不是列**：它是节点**状态**（`core.TERMINAL`，另一个轴），写进 `stage` 会被**响亮拒收**。
 - **role** = 负责方（dev/qa/pm）：**与 stage 独立**。
 - **审批/验证是节点**：例如 `stage=verify, role=qa` 的节点消费 `dev` 节点的产出。
 - **改列**：`disflow stage <tree> <node> <stage> --reason <why>`（建树后能改列；写时闭集校验 + 留痕，见 §7.6）。
@@ -717,7 +718,8 @@ disflow doctor                                     # 自检
 
 1. 针脚表 + 单词边界，**不是业务词闭集推导**——未登记的业务词会漏判。故 `MatcherSelfTest`
    用合成样本证明尺子本身有效（而非靠「仓库恰好干净」）。
-2. **`done` 不可判定**：它既是视图列取值、又是机制终态（`core.TERMINAL`），故不入针脚。
+2. **`done` 不可判定**：它是**机制终态**（`core.TERMINAL`），核心层合法出现（2026-10-11 起它
+   **不再是**视图列取值——看板列只有 req/design/dev/verify），故不入针脚。
 3. 本节只守「核心不认业务词 + 依赖单向」；它**不**证明业务层设计正确。
 
 ### 9.2 配置层（`config.py`）—— **独立配置文件**
@@ -755,7 +757,7 @@ disflow doctor                                     # 自检
 | `walk_ignore` | `.git`/`node_modules`/`__pycache__` 等 | — |
 | `size_budget` | 400 | `context.size_budget` |
 | `lease_ttl` | 900 | `start --ttl` |
-| `stages` | `req/design/dev/verify/done` | — |
+| `stages` | `req/design/dev/verify` | — |
 | `roles` | `dev/qa/pm` | — |
 
 **边界一：机制词汇不进配置**。`EVENT_KINDS`←→`_HANDLERS`、`KINDS`、`STORED_STATUS` 留在

@@ -454,7 +454,14 @@ def cmd_doctor(engine: Engine, args) -> int:
 
 
 def cmd_board(engine: Engine, args) -> int:
-    for line in views.board_lines(engine.tree(args.tree), args.stage):
+    # 列定义单一来源：列 = 解析后的配置（`disflow.json` 的 "stages"），不在视图里另存抄本
+    stages = engine.cfg.stages
+    if args.stage is not None and args.stage not in stages:
+        # 非法列名**响亮拒收**（退出码 2 = 用法错误，与 argparse 同款）：放行会打出
+        # `[bogus] 0/0` —— 读者会当成「这一列是空的」，实际是**拼错了**（宽错）。
+        print(f"✗ --stage 取值非法：{args.stage!r}（允许：{list(stages)}）", file=sys.stderr)
+        return 2
+    for line in views.board_lines(engine.tree(args.tree), args.stage, stages=stages):
         print(line)
     return 0
 
@@ -996,7 +1003,8 @@ def build_parser() -> argparse.ArgumentParser:
     node = add("board", cmd_board)
     node.add_argument("tree")
     node.add_argument("--stage", default=None,
-                      help="只显示该阶段列（如 dev）；省略=全部阶段")
+                      help="只显示该阶段列（如 dev；必须在配置的 stages 内，非法列名退出码 2）；"
+                           "省略=全部阶段列（含空列）")
 
     node = add("tree", cmd_tree)
     node.add_argument("tree")

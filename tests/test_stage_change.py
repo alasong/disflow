@@ -167,7 +167,7 @@ class StageChangeTest(DisflowTestCase):
         status_before = self.engine.status("t")
 
         self.engine.set_stage("t", "a", "verify", reason="看板列迁移")
-        self.engine.set_stage("t", "b", "done", reason="看板列迁移")
+        self.engine.set_stage("t", "b", "design", reason="看板列迁移")
 
         nodes_after = self.engine.tree("t")["nodes"]
         drive_after = self.engine.drive("t")

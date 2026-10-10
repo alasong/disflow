@@ -15,8 +15,11 @@ SPEC: dict = {
     }
 }
 
-# 看板列（stage）—— 仅用于视图分组，不参与就绪判定
-STAGES: tuple[str, ...] = ("req", "design", "dev", "verify", "done")
+# 看板列（stage）—— 仅用于视图分组，不参与就绪判定。
+# **四个阶段**（需求 → 设计 → 开发 → 验证），与设计原文的阶段图同形。
+# `done` **不是列**：它是节点**状态**（`core.TERMINAL`），与阶段是两个轴——留着它会造出一个
+# 永远为空、且与状态同名的列（大半节点状态是 done，列里却是 0）。凡是「干完了」用 status 表达。
+STAGES: tuple[str, ...] = ("req", "design", "dev", "verify")
 
 # 负责方（role）—— 与 stage 独立
 ROLES: tuple[str, ...] = ("dev", "qa", "pm")

@@ -199,6 +199,47 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         _code, only, _err = self._run(["board", "t", "--stage", "verify"])
         self.assertIn("B", only)
         self.assertNotIn("A [", only)   # dev 列的 A 不该出现
+        self.assertNotIn("[dev]", only, "--stage 过滤不许泄漏别的列")
+
+    def test_board_shows_all_four_flow_columns_even_when_empty(self):
+        """人读态固定列：需求/设计/开发/验证**四列都在**（空列显式 0）；`done` 不是列。"""
+        self._seed()
+        code, out, _err = self._run(["board", "t"])
+        self.assertEqual(code, 0)
+        headers = [line for line in out.splitlines() if line.startswith("[")]
+        self.assertEqual(headers, ["[req] 0/0", "[design] 0/0", "[dev] 0/1", "[verify] 0/1"])
+
+    def test_board_columns_come_from_the_project_config(self):
+        """列定义**单一来源**：CLI 的列 = 解析后的配置（`disflow.json` 的 `stages`）。"""
+        self._seed()
+        path = os.path.join(self.tmp, "board-config.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"stages": ["todo", "doing"]}, handle)
+        os.environ["DISFLOW_CONFIG"] = path
+        self.addCleanup(os.environ.pop, "DISFLOW_CONFIG", None)
+        code, out, _err = self._run(["board", "t"])
+        self.assertEqual(code, 0)
+        headers = [line for line in out.splitlines() if line.startswith("[")]
+        self.assertEqual(headers[:2], ["[todo] 0/0", "[doing] 0/0"],
+                         "列必须跟着配置走（视图层不另抄一份字面量）")
+
+    def test_board_empty_legal_column_prints_zero_and_exits_zero(self):
+        """合法但**为空**的列：打 `0/0`、退出码 0（空列是事实，不是错误）。"""
+        self._seed()
+        code, out, _err = self._run(["board", "t", "--stage", "design"])
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), ["[design] 0/0"])
+
+    def test_board_rejects_an_illegal_stage_column(self):
+        """非法列名**响亮拒收**（2 = 用法错误，与 argparse 同款）：放行会打出 `[bogus] 0/0`，
+        读者会当成「这一列是空的」，实际是**拼错了**。"""
+        self._seed()
+        code, out, err = self._run(["board", "t", "--stage", "bogus"])
+        self.assertEqual(code, 2, "非法列名 = 用法错误")
+        self.assertNotIn("[bogus]", out, "拒收不许打出假列")
+        self.assertIn("bogus", err)
+        for allowed in ("req", "design", "dev", "verify"):
+            self.assertIn(allowed, err, "拒收报文必须报出允许的列")
 
     def test_tree_renders_hierarchy(self):
         self._seed()

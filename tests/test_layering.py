@@ -43,10 +43,11 @@ SUBSTRING_NEEDLES = (
 )
 
 # 单词边界匹配：短词，防止误命中 `requires`/`request` 之类。
-# 视图列取值 req|design|dev|verify(+done) 与负责方取值 dev|qa|pm。
+# 视图列取值 req|design|dev|verify 与负责方取值 dev|qa|pm。
 #
-# **故意排除 `done`**：它既是视图列取值、又是机制终态（`core.TERMINAL`），
-# 核心层合法出现，无法作为业务词针脚。此为已知不可判定项，已登记在 docs/design.md §9.1。
+# **故意排除 `done`**：它是机制终态（`core.TERMINAL`），核心层合法出现，无法作为业务词针脚。
+# （2026-10-11 起它**不再是视图列取值**——看板列只有四阶段——但这条排除的理由不变。）
+# 此为已知不可判定项，已登记在 docs/design.md §9.1。
 WORD_NEEDLES = ("req", "design", "dev", "verify", "qa", "pm", "stage", "role", "board")
 
 _WORD_RE = re.compile(r"\b(" + "|".join(WORD_NEEDLES) + r")\b")
@@ -78,7 +79,7 @@ class MatcherSelfTest(DisflowTestCase):
             self.assertEqual(matcher_hits(sample), [], f"误判：{sample!r}")
 
     def test_done_is_an_acknowledged_non_determinable(self):
-        """`done` 是机制终态，也是视图列取值 —— 明确记录为不可判定，而非默默漏掉。"""
+        """`done` 是机制终态（`core.TERMINAL`）—— 明确记录为不可判定，而非默默漏掉。"""
         self.assertEqual(matcher_hits("done"), [])
         self.assertIn("done", core.TERMINAL, "done 是机制终态，故核心合法出现")
         self.assertNotIn("done", WORD_NEEDLES, "正因如此它不能当业务词针脚")

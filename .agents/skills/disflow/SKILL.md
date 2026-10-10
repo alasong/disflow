@@ -250,8 +250,12 @@ disflow 是**语言中立**的（NFR-2：核心层零业务词），而「给哪
 
 | 视图 | 命令 | 数据源 | 它答的问题 |
 | --- | --- | --- | --- |
-| **树看板** | `$D board <tree>` | disflow 自己的事件流 | 谁完成 / 谁在跑 / 谁就绪 / 依赖关系 |
-| **执行视图** | `.agents/skills/disflow/lanes_watch.sh` | **宿主（pi）的 run 目录** | 某个 worker **现在在干什么**、最后一条命令、最后一句进展 |
+| **看板（阶段列）** | `$D board <tree>` | disflow 自己的事件流 | 谁完成 / 谁在跑 / 谁就绪 / 依赖关系；**列** = 需求→设计→开发→验证（四列全出现，空列显式 `0/0`） |
+| **运行视图** | `.agents/skills/disflow/lanes_watch.sh` | **宿主（pi）的 run 目录** | 某个 worker **现在在干什么**、最后一条命令、最后一句进展 |
+
+⚠ **命名只认上面两个**：`done` **不是看板的列**——它是节点**状态**（「收尾没有」），
+与阶段（「流程走到哪」）是两个轴；一个 pi workflow run（= 宿主一次 subagent 调用，
+并行 lane 的实时进度）就是**运行视图**里的一个块，**不许**把它叫「看板」/「工作流」/「派发批次」。
 
 ```bash
 sh .agents/skills/disflow/lanes_watch.sh once   # 快照（默认是常驻刷新，会一直占着终端）
@@ -262,7 +266,7 @@ sh .agents/skills/disflow/lanes_watch.sh all    # 含已过窗口的历史 lane
 **为什么是两个而不是一个**：disflow **不 spawn**，所以它无从知道「worker 在跑哪条命令」；
 反过来 pi 不知道树的结构。两边各答一半。
 
-执行视图**已经把两半接起来**了（v6）：它额外只读 `$DISFLOW_STATE_DIR/state.json`，
+运行视图**已经把两半接起来**了（v6）：它额外只读 `$DISFLOW_STATE_DIR/state.json`，
 把 lane 名（= 派活时给的 `key`，即节点 id）映回 `goal`/`stage`/`status`/`points`，
 所以一行里能同时看到「这是什么活」与「跑到哪了」。**读不到就明说读不到，不猜一个 goal 顶上。**
 
