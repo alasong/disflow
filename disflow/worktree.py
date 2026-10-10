@@ -31,7 +31,9 @@
    `registered`）连续多轮零阻断。故**把「删」从引擎手里拿掉**：`reap` 对 leaks 与 residual
    走**同一套判据**（`_inspect` + 守卫），逐条给出 `reasons`、`safe_to_drop`、宿主该跑的
    `remove_cmd` / `branch_cmd`（分支一律用 `-d` 安全删），危险条目另给 `discard_warnings`
-   说清会丢什么。**没有任何一条路径能绕过这套判据**。
+   说清会丢什么。**没有任何一条路径能绕过这套判据**。宿主确要强删时走 **`reap --force`**：
+   `remove_cmd` 改带 `--force`，并将将被丢弃的项逐条记进 `discarded`——破例可以，但必须
+   **显式、留痕**，且仍由宿主跑命令（引擎仍不执行删除）。
 
    **判据 fail-closed by construction**：`safe_to_drop` 仅当 `reasons` **为空**才为 True；放行
    需要「无任何未决理由」，探针的任何**不可判定**（ref 名歧义、`for-each-ref` 失败、读不出
@@ -288,9 +290,9 @@ def reconcile(spec: dict, tree: str, repo: str) -> dict:
             "residual": residual}
 
 
-def reap(spec: dict, tree: str, repo: str) -> dict:
+def reap(spec: dict, tree: str, repo: str, *, force: bool = False) -> dict:
     """**纯计划**：给 leaks 与 residual 的判据、理由、证据，以及**宿主该跑的命令**。
-    **永不执行任何 git 变更**——没有 `apply`、没有 `force`。
+    **永不执行任何 git 变更**——没有 `apply`；`force` 只改**打印出来的命令**与记账，仍不执行。
 
     为什么删不在这里做（本模块的收尾判决）：**删除是唯一不可逆动作**，而本模块历史上每一个
     阻断级缺陷都落在执行删除这条线上（强删丢未提交工作 / `branch -D` 让提交不可达 / 不查
@@ -314,6 +316,10 @@ def reap(spec: dict, tree: str, repo: str) -> dict:
     - `safe_to_drop` 为 False 的条目**额外**给 `discard_warnings`：逐条说清强删后会丢什么
       （未提交改动 / ignored 路径 / 具体提交 sha / 不可判定项）。
     - 树不存在 / 探针失败（`reconcile` 抛 `WorktreeProbeError`）即抛，不返回假 all-clear。
+    `force=True`（CLI 的 `worktree reap --force`）是**显式破例**：`remove_cmd` 改带 `--force`，
+    并额外给 `force: True` 与 `discarded`（逐条记下将被丢弃的项）。`force=False`（默认）时
+    不新增任何字段——输出与不加 `--force` **逐字节一致**。无论传不传，引擎都**不执行**删除。
+
     返回 `{tree, leaks, residual, reliable, executed: False}`；`reliable` 表示所有条目的现场
     探针**均可判定**（无任何 `unreadable-…` 理由）。
     """
@@ -326,7 +332,8 @@ def reap(spec: dict, tree: str, repo: str) -> dict:
         leaks_plan.append(_plan_entry(
             spec, tree, nid, repo,
             path=path_for(spec, tree, nid), branch=branch_for(tree, nid),
-            status=leak["status"], remove_cmd=commands(spec, tree, nid, repo)["remove"]))
+            status=leak["status"],
+            remove_cmd=commands(spec, tree, nid, repo, force=force)["remove"]))
 
     # 残留分支：分支存在但目录与登记都没。只对**可回收**节点给计划（在跑的节点不能扔掉它的
     # 基线）；同一节点的 leak 已连带处理其分支，不重复。
@@ -343,8 +350,30 @@ def reap(spec: dict, tree: str, repo: str) -> dict:
     entries = leaks_plan + residual_plan
     reliable = not any(r.startswith("unreadable")
                        for entry in entries for r in entry["reasons"])
-    return {"tree": tree, "leaks": leaks_plan, "residual": residual_plan,
-            "reliable": reliable, "executed": False}
+    report_out = {"tree": tree, "leaks": leaks_plan, "residual": residual_plan,
+                  "reliable": reliable, "executed": False}
+    if force:
+        # 显式 `--force` 是**破例**：`remove_cmd` 已带 `--force`，故必须把「会丢什么」逐条记账。
+        # 破例可以，但必须显式、留痕，绝不静默通过（本仓破例纪律）。不传 `force` 时**不加**
+        # 任何字段——计划与命令与加 `--force` 之前**逐字节一致**。
+        report_out["force"] = True
+        report_out["discarded"] = _discarded_ledger(entries)
+    return report_out
+
+
+def _discarded_ledger(entries: list[dict]) -> list[dict]:
+    """显式 `--force` 下的**记账**：逐条列出强删会丢弃什么（`{node, losses}`）。
+
+    干净条目（`reasons` 为空）没有可丢的东西，不入账；危险条目的 `discard_warnings` 就是丢什么
+    （已由 `_inspect` 的同一套判据给出）。放在计划里而非执行结果里——删除仍由宿主跑命令，
+    引擎**不执行**。
+    """
+    ledger: list[dict] = []
+    for entry in entries:
+        losses = entry.get("discard_warnings") or []
+        if losses:
+            ledger.append({"node": entry["node"], "losses": list(losses)})
+    return ledger
 
 
 def apply(spec: dict, tree: str, repo: str, *, nodes: list[str] | None = None) -> dict:
@@ -442,7 +471,7 @@ def _inspect(spec: dict, tree: str, node: str, repo: str) -> dict:
         if dirty is None:
             reasons.append("unreadable-status:无法读取工作区状态")
     if dirty:
-        reasons.append("dirty:未提交的已跟踪改动")
+        reasons.append("dirty:未提交的改动（已修改或未跟踪）")
     for lost in ignored:
         reasons.append(f"ignored:{lost}")
     head, head_readable = _worktree_head(spec, tree, node, repo)
@@ -605,9 +634,16 @@ def _discard_warnings(live: dict) -> list[str]:
     for reason in live["reasons"]:
         kind, _, detail = reason.partition(":")
         if kind == "dirty":
-            warnings.append("未提交的已跟踪改动会丢失（git 会拒绝，需 `--force` 才能删）")
+            # 已修改/未跟踪会让 `git worktree remove` 拒绝（实测 rc=128）——这一半成立。
+            warnings.append("未提交的改动（已修改或未跟踪的文件）会丢失"
+                            "（git 会拒绝，需 `--force` 才能删）")
         elif kind == "ignored":
-            warnings.append(f"被忽略的文件 {detail} 会丢失（git 会拒绝，需 `--force` 才能删）")
+            # **只说真成立的那一半**：ignored 文件确实会丢，但 git **不**因它拒绝删除
+            # （实测：只含 ignored 文件的 worktree，不带 `--force` 的 remove 也 exit 0）。
+            # 把它们说成「git 会拒绝、需 --force」是假警报，会让 --force 变成日常操作、
+            # 真需要它时没人当回事。
+            warnings.append(f"被忽略的文件 {detail} 会丢失"
+                            "（git 不因 ignored 文件拒绝删除：这一条无需 `--force`）")
         elif kind == "unmerged-commit":
             warnings.append(f"提交 {detail} 将不可达、永久丢失（分支需 `-D` 才能删）")
         elif kind.startswith("unreadable"):
