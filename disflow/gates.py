@@ -72,8 +72,43 @@ def run_acceptance(acceptance: dict | None, cwd: str,
     return ok, why, meta
 
 
-def git_changed_files(cwd: str, cfg: Config = DEFAULTS) -> list[str] | None:
-    """工作区改动文件（含未跟踪）。非 git 仓返回 None（不假装有证据）。"""
+def head_sha(cwd: str, cfg: Config = DEFAULTS) -> str | None:
+    """当前 HEAD 的 sha；非 git 仓 / 尚无提交 / 命令失败 → None（不抛、不假装）。
+
+    `start` 时记下它，`done` 时据此取「已提交」的改动——worktree 里的 worker 可能已
+    `git commit`，此时只读 `git status` 是空的。"""
+    try:
+        proc = subprocess.run(["git", "-C", cwd, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=cfg.git_timeout)
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def _committed_files(cwd: str, base_sha: str, cfg: Config = DEFAULTS) -> list[str]:
+    """相对 `base_sha` **已提交**的改动路径（`git diff --name-only <sha>`）。
+
+    失败（sha 非法 / 非 git 仓）返回空表——不假装有读数，也不让已取到的工作区改动集消失。"""
+    try:
+        proc = subprocess.run(["git", "-C", cwd, "diff", "--name-only", base_sha],
+                              capture_output=True, text=True, timeout=cfg.git_timeout)
+    except OSError:
+        return []
+    if proc.returncode != 0:
+        return []
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def git_changed_files(cwd: str, cfg: Config = DEFAULTS, *,
+                      base_sha: str | None = None) -> list[str] | None:
+    """工作区改动文件（含未跟踪）。非 git 仓返回 None（不假装有证据）。
+
+    `base_sha` 给定时并上 `git diff --name-only <sha>`（**已提交**的改动）：worktree 里的
+    worker 可能把活干完就 `git commit`，此时 `git status --porcelain` 是空的——不并这一项
+    ⇒ 提交型 worker 的改动集永远为空 ⇒ 门空洞通过（fail-open）。`base_sha` 是 `start` 记的 HEAD。
+    """
     try:
         probe = subprocess.run(["git", "-C", cwd, "rev-parse", "--is-inside-work-tree"],
                                capture_output=True, text=True, timeout=cfg.git_timeout)
@@ -96,6 +131,8 @@ def git_changed_files(cwd: str, cfg: Config = DEFAULTS) -> list[str] | None:
         if " -> " in path:                      # 重命名：取新路径
             path = path.split(" -> ", 1)[1]
         files.append(path.strip())
+    if base_sha:
+        return sorted(set(files) | set(_committed_files(cwd, base_sha, cfg)))
     return sorted(files)
 
 
@@ -139,16 +176,18 @@ def snapshot(cwd: str, cfg: Config = DEFAULTS) -> dict[str, str] | None:
 
 
 def newly_changed(cwd: str, baseline: dict | list | None,
-                  cfg: Config = DEFAULTS) -> list[str] | None:
+                  cfg: Config = DEFAULTS, *, base_sha: str | None = None) -> list[str] | None:
     """`done` 时归因：**相对基线内容真的变了**的路径（新出现 / 内容变 / 被删）。
 
     为何不用「按路径做差集」：同一文件被前一个节点弄脏后，本节点再改它时，
     差集看不见（两边的集合都有它）⇒ `introduced=[]` ⇒ **scope 门静默失效**。
     指纹能看见。
 
+    `base_sha` 透传给 `git_changed_files`：worktree 里已提交的改动否则看不见（见该函数）。
+
     兼容旧事件：基线是**路径列表**时，值记为 `None`（未知指纹）⇒ 一律判为已改（保守）。
     """
-    changed = git_changed_files(cwd, cfg)
+    changed = git_changed_files(cwd, cfg, base_sha=base_sha)
     if changed is None:
         return None
     base: dict = (dict.fromkeys(baseline) if isinstance(baseline, list)
@@ -182,10 +221,10 @@ def scope_check(touch_plan: list[str], changed: list[str] | None) -> dict:
 
 
 def evidence_meta(acceptance: dict | None, cwd: str,
-                  cfg: Config = DEFAULTS) -> tuple[bool, str, dict]:
+                  cfg: Config = DEFAULTS, *, base_sha: str | None = None) -> tuple[bool, str, dict]:
     """采集证据：验收结果 + git 改动集 + 作用域检查。"""
     ok, why, meta = run_acceptance(acceptance, cwd, cfg)
-    changed = git_changed_files(cwd, cfg)
+    changed = git_changed_files(cwd, cfg, base_sha=base_sha)
     evidence = {
         "acceptance": meta,
         "changed_files": changed,

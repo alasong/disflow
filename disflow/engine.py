@@ -9,7 +9,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import config, gates, graph, store
+from . import config, gates, graph, store, worktree
 from .config import Config
 from .core import RUNNING
 from .dispatch import dispatch_plan, handoff_brief, result_contract, validate_result
@@ -255,6 +255,51 @@ class Engine:
 
     # ── 生命周期 ──────────────────────────────────────────────────────────
 
+    def _gate_cwd(self, tree: str, node: str) -> str:
+        """门的**唯一目录源**：该节点有**真** worktree → 其绝对路径；否则 `self.cwd`。
+
+        为何需要它：`disflow worktree apply <tree>` 把节点工作区建在
+        `<state_dir>/worktrees/<tree>/<node>`（见 `worktree.root` / `path_for`），而门的所有 IO
+        （验收命令、`git status`、内容指纹）原本都吃 `self.cwd`（进程 cwd）。用 worktree 干活时
+        两者不相交 ⇒ 门在错的目录上跑、改动看不见 ⇒ **空洞通过（fail-open）**：worker 删了
+        要求存在的文件并提交，门仍报 `introduced=[]`、`changed_files=[]`、退出码 0。
+
+        worktree 是**派生资源**（不落状态），故此处只做现实对账：`worktree.status` 的 `real`
+        为真才算数。树/节点不存在、探针失败、路径落在 repo 内（脆弱配置）一律退回 `self.cwd`
+        —— 与「没有 worktree」同路，**不抛**（门的目录解析不能比门本身更容易炸）。
+        """
+        try:
+            present = worktree.status(self.spec, tree, node, self.cwd)
+        except (KeyError, worktree.WorktreeError, ValueError):
+            return self.cwd
+        if not present.get("real"):
+            return self.cwd
+        path = str(present["path"])
+        return path if os.path.isabs(path) else os.path.join(self.cwd, path)
+
+    def _check_reported_paths(self, tree: str, node: str, result: dict) -> None:
+        """`collect` 的低优先防串味：自报 `changed_files` 必须落在本节点 worktree 下。
+
+        真相由门自算（`introduced`），这条只拦明显的写错目录：绝对路径要落在本节点
+        worktree 下，相对路径**按 worktree 解析**。无 worktree 时跳过。
+        """
+        cwd = self._gate_cwd(tree, node)
+        if cwd == self.cwd:
+            return
+        root = os.path.realpath(cwd)
+        files = result.get("changed_files")
+        if not isinstance(files, list):
+            return
+        for entry in files:
+            if not isinstance(entry, str) or not entry.strip():
+                continue
+            target = entry if os.path.isabs(entry) else os.path.join(root, entry)
+            resolved = os.path.realpath(target)
+            if resolved != root and not resolved.startswith(root + os.sep):
+                raise EngineError(
+                    f"{node} 自报的 changed_files 越出本节点 worktree：{entry!r}"
+                    f"（worktree={root}）——只报该目录下的路径；门的读数以 worktree 为准")
+
     def start(self, tree: str, node: str, holder: str = "",
               ttl: int | None = None, dry_run: bool = False) -> dict:
         lease = _make_lease(holder, self.cfg.lease_ttl if ttl is None else ttl)
@@ -268,10 +313,18 @@ class Engine:
             blockers = blocked_by(t["nodes"], node, self._closed(state))
             if blockers:
                 raise EngineError(f"{node} 未就绪，被阻塞：{blockers}")
+
+        def prepare(_: dict) -> dict:
+            cwd = self._gate_cwd(tree, node)
+            # `workspace` 记下开工现场：`done` 据此把门跑在同一目录上，并在「起点与终点不是
+            # 同一个目录」时 fail-closed 拒收。`head_sha` 让已提交的改动也能被 `done` 看见。
+            return {"lease": lease,
+                    "baseline": gates.snapshot(cwd, self.cfg),
+                    "workspace": {"cwd": cwd,
+                                  "head_sha": gates.head_sha(cwd, self.cfg),
+                                  "worktree": cwd != self.cwd}}
         return self._write("node.start", tree=tree, node=node, guard_state=guard,
-                           prepare=lambda _: {"lease": lease,
-                                              "baseline": gates.snapshot(self.cwd, self.cfg)},
-                           dry_run=dry_run)
+                           prepare=prepare, dry_run=dry_run)
 
     def collect(self, tree: str, node: str, result: dict) -> dict:
         def guard(t: dict) -> None:
@@ -279,6 +332,7 @@ class Engine:
             missing = validate_result(result_contract(tree, t, node), result)
             if missing:
                 raise EngineError("结果契约不符：" + "；".join(missing))
+            self._check_reported_paths(tree, node, result)
         return self._write("node.collect", tree=tree, node=node, guard=guard,
                            prepare=lambda _: {"result": result})
 
@@ -286,13 +340,28 @@ class Engine:
              dry_run: bool = False) -> dict:
         def prepare(t: dict) -> dict:
             item = self._need(t, node)
-            ok, why, evidence = gates.evidence_meta(item.get("acceptance"), self.cwd, self.cfg)
+            # 门的**所有** IO 统一走同一个目录（有真 worktree 就在 worktree 里，否则 self.cwd）。
+            cwd = self._gate_cwd(tree, node)
+            workspace = item.get("workspace") or {}
+            in_worktree = cwd != self.cwd
+            # fail-closed（第一判据）：本节点有 worktree，但开工基线不是在它里面取的
+            # （`start` 时还没 apply / 取了别的目录）⇒ 门会空洞通过，响亮拒收而不放行。
+            if workspace and in_worktree and workspace.get("cwd") != cwd:
+                raise EngineError(
+                    f"{node} 的开工基线取自 {workspace.get('cwd')!r}，而本节点现有 worktree "
+                    f"{cwd!r}——基线不在门的目录里，门会空洞通过。\n"
+                    f"  补救：disflow reopen {tree} --reason '<为何重开>' 后重新 start"
+                    f"（先 disflow retry {tree} {node} 把该节点放回 pending）。")
+            # 只有 worktree 场景才用 head_sha 并已提交改动：无 worktree 的节点行为逐字节不变（回归）。
+            base_sha = workspace.get("head_sha") if in_worktree else None
+            ok, why, evidence = gates.evidence_meta(item.get("acceptance"), cwd,
+                                                   self.cfg, base_sha=base_sha)
             baseline = item.get("baseline") or {}
             # 只归因「开工后**内容真的变了**」的改动：既忽略开工前的脏文件，
             # 也逮得住「同文件被前一节点弄脏、本节点又改」这种差集看不见的情况
-            introduced = gates.newly_changed(self.cwd, baseline, self.cfg)
+            introduced = gates.newly_changed(cwd, baseline, self.cfg, base_sha=base_sha)
             scope = gates.scope_check(item.get("touch_plan") or [], introduced)
-            size = gates.diff_size(self.cwd, introduced, self.cfg)
+            size = gates.diff_size(cwd, introduced, self.cfg)
             budget = gates.resolve_budget(item, self.cfg)
             evidence["baseline"] = sorted(baseline)
             evidence["introduced"] = introduced
@@ -462,7 +531,10 @@ class Engine:
         return dispatch_plan(tree, self.tree(tree, state), self._closed(state))
 
     def brief(self, tree: str, node: str) -> dict:
-        return handoff_brief(tree, self.tree(tree), node, self.cfg)
+        payload = handoff_brief(tree, self.tree(tree), node, self.cfg, repo=self.cwd)
+        # worktree 路径是**绝对**的宿主现场（派生资源）——`brief` 是 worker 的契约，
+        # 必须在那里告诉它「你的工作目录是 path，不是仓根」（见 dispatch.handoff_brief）。
+        return payload
 
     def status(self, tree: str) -> dict:
         state = self.load()

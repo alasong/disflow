@@ -5,6 +5,9 @@ spawn 归宿主 —— 本模块不启动任何进程。
 """
 from __future__ import annotations
 
+import os
+
+from . import worktree
 from .config import DEFAULTS, Config
 from .context import brief as build_brief
 from .ready import (
@@ -15,6 +18,7 @@ from .ready import (
     ready_tasks,
     running_tasks,
 )
+from .spec import SPEC
 
 
 def _touch_pair_overlap(left: str, right: str) -> bool:
@@ -91,9 +95,34 @@ def resolve_question_policy(node: dict, cfg: Config = DEFAULTS) -> dict:
     return base
 
 
+def _worktree_brief(tree_name: str, node_id: str, repo: str) -> dict | None:
+    """已 apply（真 worktree）→ `{"path": <abs>, "branch": "disflow/<tree>/<node>"}`；否则 None。
+
+    worktree 是派生资源，存在性只靠只读的现实对账（`status.real`）；repo 为空 / 探针失败 /
+    该节点没有 worktree 一律返回 None——brief 多一行 null 无妨，报错则会把派发卡住。
+    """
+    if not repo:
+        return None
+    try:
+        present = worktree.status(SPEC, tree_name, node_id, repo)
+    except (KeyError, worktree.WorktreeError, ValueError):
+        return None
+    if not present.get("real"):
+        return None
+    path = str(present["path"])
+    if not os.path.isabs(path):
+        path = os.path.join(repo, path)
+    return {"path": path, "branch": worktree.branch_for(tree_name, node_id)}
+
+
 def handoff_brief(tree_name: str, tree: dict, node_id: str,
-                  cfg: Config = DEFAULTS) -> dict:
-    """写全派发契约：worker 的完整输入（FR-15：必填声明 + **提问纪律** + 结果契约）。"""
+                  cfg: Config = DEFAULTS, *, repo: str = "") -> dict:
+    """写全派发契约：worker 的完整输入（FR-15：必填声明 + **提问纪律** + 结果契约）。
+
+    `repo` 给定时额外给出 `worktree` 字段（已 apply 则为绝对路径 + 分支，否则 None），
+    并在 `context` 里写明「你的工作目录是 path，不是仓根」——worker 拿到的第一个可执行事实
+    必须包括「到哪干活」，而不是默认仓根（门在 worktree 上跑，写错目录 = 白干）。
+    """
     nodes = tree["nodes"]
     payload = build_brief(nodes, node_id)
     payload["tree"] = tree_name
@@ -101,6 +130,12 @@ def handoff_brief(tree_name: str, tree: dict, node_id: str,
     payload["result_contract"] = result_contract(tree_name, tree, node_id)
     payload["brief_cmd"] = f"disflow brief {tree_name} {node_id}"
     payload["done_cmd"] = f"disflow done {tree_name} {node_id} --decl '{{\"evidence\": …}}'"
+    workspace = _worktree_brief(tree_name, node_id, repo)
+    payload["worktree"] = workspace
+    if workspace is not None:
+        payload["context"]["worktree"] = (
+            f"你的工作目录是 {workspace['path']}，不是仓根——"
+            "所有命令与改动都相对该目录，门也在该目录上跑。")
     return payload
 
 

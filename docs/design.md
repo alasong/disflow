@@ -319,6 +319,17 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 > 项目 `disflow.json` > 内建默认**，且是**合并**不是整体替换——节点只声明 `how` 时
 不把 `ask_host` 弄丢（丢掉 = 纪律静默变窄，而 brief 看上去还是「有纪律」）。
 
+**工作目录（worktree）：brief 的第四样。** `brief` 还告诉 worker **到哪干活**——新增
+`worktree` 字段：该节点已 `disflow worktree apply` 时给
+`{"path": <绝对路径>, "branch": "disflow/<tree>/<node>"}`，否则 `null`；并在
+`context.worktree` 写明「你的工作目录是 `<path>`，不是仓根」。**为什么必须写全**：`apply`
+把工作区建在 `<state_dir>/worktrees/<tree>/<node>`，而门（验收命令 / `git status` / 内容指纹）
+与 worker 若一个在 worktree、一个在仓根，两者不相交 ⇒ 改动看不见 ⇒ **空洞通过**。
+故 `start` 记下开工现场 `workspace = {"cwd", "head_sha", "worktree"}`，`done` 的**所有**门
+统一跑在 `_gate_cwd` 上（有真 worktree 就是它，否则仓根）；两处目录不一致时 fail-closed
+**响亮拒收**，不给「静默空洞通过」留路。改动集在 worktree 场景下取「脏文件 ∪ 相对
+`head_sha` 的已提交改动」——提交型 worker 的活也看得见（`git status` 为空 ≠ 没干活）。
+
 ---
 
 ## 6. 看板 = 视图（FR-21）

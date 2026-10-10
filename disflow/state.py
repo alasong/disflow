@@ -252,6 +252,9 @@ def _on_node_start(state: dict, event: dict) -> None:
     raw = event.get("baseline") or {}
     # 基线统一为 {路径: 内容指纹}；旧事件（路径列表）归一为 None 指纹 ⇒ 一律判为已改（保守）
     node["baseline"] = raw if isinstance(raw, dict) else dict.fromkeys(raw)
+    # 开工现场（cwd / head_sha / worktree）：`done` 据此把门跑在同一个目录上，
+    # 并在两者不一致时 fail-closed 拒收。旧事件没有它就为 None（无法核对，走宽容）。
+    node["workspace"] = event.get("workspace")
 
 
 def _on_node_collect(state: dict, event: dict) -> None:
