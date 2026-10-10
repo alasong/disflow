@@ -144,16 +144,28 @@ $D worktree reap <tree>            # **只打印命令，永不执行**
 它不告诉 worker 任何东西，也**不约束你把活派给谁**。所以「派给 dev」之后，你还得自己决定：
 **用什么 agent、给什么 skill、给什么工具上限**。
 
-### pi 里子代理默认拿得到什么（实测 + 读源码，不是推断）
+### pi 里子代理默认拿得到什么（读源码 + CHANGELOG，不是推断）
 
-| 层 | 子代理默认 | 证据 |
+| 层 | 子代理默认 | 谁在管 |
 | --- | --- | --- |
-| **全局层方法论**（`~/.pi/agent/AGENTS.md` + 规则 + 常驻卡） | **拿到 ✓** | 行为证据：worker 自发用「⟳ 进展块」格式、声明「方法论真名」——那两条只在 AGENTS.md 里 |
-| 项目层（项目 `AGENTS.md` / `.pi/` / `.agents/`） | **不继承** | `inheritProjectContext` 默认只在 `delegate` agent 为 true |
-| **skills** | **不继承** | `defaultInheritSkills() { return false; }`；且 12 个 subagent 的 meta 全是 `skills=[]` |
+| **项目层指令文件**（worker 自己 cwd 里的 `AGENTS.md`/`CLAUDE.md`） | **继承 ✓** | 所有内置 agent 都**显式**写了 `inheritProjectContext: true` |
+| **全局层 context**（`~/.pi/agent/AGENTS.md`：常驻卡、输出纪律、证据纪律） | **剥掉 ✗** | `inheritGlobalContext ?? false`（无内置声明）· CHANGELOG 原话「omit the operator's global context file by default」 |
+| **skills** | **剥掉 ✗** | 所有内置 agent 都写了 `inheritSkills: false` |
 
-**结论**：方法论它自带（harness 给的），但**领域 skill 和项目上下文默认都拿不到**。
-所以「执行能力弱」不是错觉，而是默认值如此——**要补就得在派活时补**。
+判据（源码）：`isGlobalContextFile(f) ⇔ dirname(f) == getAgentDir()`。
+所以「全局」的定义是**文件在 agent 目录里**，与「项目」无关。
+
+⚠ **一个很实际的后果**：worker **默认拿不到你的纪律**（进度块格式、证据纪律、方法论真名…）——
+它们住在 `~/.pi/agent/AGENTS.md`，属于被剥掉的全局层。所以：
+
+- 只靠默认，就得在**每一条 task 里手写纪律**——而手写会漂移，早晚与全局层不一致。
+- 正确做法是**显式决定**：要么 `inheritGlobalContext: true`（子代理自己带纪律），
+  要么接受「task 自带全部约定」并把它当纪律固定下来。
+- **别以为「项目层继承」就等于「它有纪律了」**：disflow 仓**没有**项目级 `AGENTS.md`，
+  所以派给 worker 的项目层实际上是**空的**。
+
+**结论**：方法论与纪律**默认不在**，领域 skill **默认也不在**。所以「执行能力弱」不是错觉，
+而是默认值如此——**要补就得在派活时补**。
 
 ### 三个口子（任选）
 
@@ -162,10 +174,15 @@ $D worktree reap <tree>            # **只打印命令，永不执行**
 subagent({ agent: "worker", skill: ["python-expert"], task: <brief JSON> })
 
 // ② 自定义 agent 定义：把继承打开
+//    inheritGlobalContext: true（← 最该考虑的是这个：给的是**纪律**，不是 skill）
 //    inheritSkills: true / inheritProjectContext: true
 
 // ③ 用 delegate agent：它**默认**就继承项目层（唯一一个）
 ```
+
+**先想清楚你缺的是能力还是纪律**：worker 老因为「没给证据」「乱写完成」被打回，
+那缺的是**纪律**（→ `inheritGlobalContext` 或把纪律写进 task）；
+老因为「不会用这库」卡住，那缺的才是**能力**（→ 给 skill）。
 
 ### 一个建议映射（**建议，不是机制**）
 
