@@ -230,3 +230,29 @@ disflow 是**语言中立**的（NFR-2：核心层零业务词），而「给哪
 - **别用 `skip` 掩盖「不知道该怎么办」**：`skip` 要写理由，而理由是给人看的。
   真不知道就 `blocked` 报上来。
 - **别改状态文件**：`state.json` 是投影，会被 `rebuild` 覆盖。要改就走动词（事件才是真相）。
+
+## 9 两个视图，别混（一个知道「是什么活」，一个知道「跑到哪了」）
+
+| 视图 | 命令 | 数据源 | 它答的问题 |
+| --- | --- | --- | --- |
+| **树看板** | `$D board <tree>` | disflow 自己的事件流 | 谁完成 / 谁在跑 / 谁就绪 / 依赖关系 |
+| **执行视图** | `.agents/skills/disflow/lanes_watch.sh` | **宿主（pi）的 run 目录** | 某个 worker **现在在干什么**、最后一条命令、最后一句进展 |
+
+```bash
+sh .agents/skills/disflow/lanes_watch.sh once   # 快照（默认是常驻刷新，会一直占着终端）
+sh .agents/skills/disflow/lanes_watch.sh        # 常驻 5s 刷新（备用屏，无闪）
+sh .agents/skills/disflow/lanes_watch.sh all    # 含已过窗口的历史 lane
+```
+
+**为什么是两个而不是一个**：disflow **不 spawn**，所以它无从知道「worker 在跑哪条命令」；
+反过来 pi 不知道树的结构。两边各答一半。
+
+执行视图**已经把两半接起来**了（v6）：它额外只读 `$DISFLOW_STATE_DIR/state.json`，
+把 lane 名（= 派活时给的 `key`，即节点 id）映回 `goal`/`stage`/`status`/`points`，
+所以一行里能同时看到「这是什么活」与「跑到哪了」。**读不到就明说读不到，不猜一个 goal 顶上。**
+
+⚠ 它读的是 pi 的**内部布局**（`status.json` / `session.jsonl`）——所以它属于**宿主侧工具**，
+住在宿主手册旁边，**不进 `disflow/` 核心**（那会把引擎绑死在 pi 上，破 NFR-2）。
+
+另一个宿主侧工具是**派活器**（生成 pi-subagents 的 workflow JS，纪律块已内建）。
+它随宿主环境走，不在本仓里；没有它也能干活，只是每一波要手写那四行 `runs.all`。
