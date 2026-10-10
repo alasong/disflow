@@ -1,12 +1,12 @@
 """disflow · 投影 reducer（事件流 → 状态）。
 
-事件是唯一真相；本模块把事件折叠成投影 `{"trees": {name: {goal, root, nodes, assets}}}`。
+事件是唯一真相；本模块把事件折叠成投影 `{"trees": {name: {goal, root, nodes, assets, deadline}}}`。
 未知 kind 一律报错（事件闭集，不静默丢弃）。
 """
 from __future__ import annotations
 
 from . import graph
-from .model import new_node, next_id, validate_node_spec
+from .model import new_node, next_id, validate_node_spec, validate_points
 
 ROOT_ID = "root"
 
@@ -33,7 +33,12 @@ def apply_event(state: dict, event: dict) -> None:
 
 
 def _tree(state: dict, name: str) -> dict:
-    return state["trees"].setdefault(name, {"goal": "", "root": None, "nodes": {}, "assets": {}})
+    # 不存 `slug`：它恒等于外层 key（可推导值，不该持久化进投影）；指标层改为显式接收
+    # slug/预过滤 events。`deadline` 留在这里——它是真声明（`tree.deadline` 事件写的），
+    # 不是可推导值。
+    return state["trees"].setdefault(
+        name, {"goal": "", "root": None, "nodes": {}, "assets": {},
+               "deadline": None})
 
 
 def _node(state: dict, tree_name: str, node_id: str) -> dict:
@@ -62,6 +67,18 @@ def _on_tree_goal(state: dict, event: dict) -> None:
         root["goal"] = tree["goal"]
 
 
+def _on_tree_deadline(state: dict, event: dict) -> None:
+    """设置树级 `deadline`（迭代边界）：日期串或 None 清空。
+
+    经 `Engine.deadline` 写入的值必然合法（写时 `parse_deadline` 归一，非法即拒、不落盘）。
+    但 reducer 只做纯赋值、**不做值校验**——校验必须放在写时，否则重放历史里已有的
+    非法值会炸。于是**绕过 Engine 直写事件流**（如 `store.append_event`）仍能把非法值写进去；
+    这一点由读路径 `metrics` 用 `deadline_reason` 显式报告（不静默忽略），而不是靠 reducer 拦截。
+    """
+    tree = _tree(state, event["slug"])
+    tree["deadline"] = event.get("deadline") or None
+
+
 def _on_node_expand(state: dict, event: dict) -> None:
     tree_name = event["slug"]
     parent = _node(state, tree_name, event["node"])
@@ -80,7 +97,8 @@ def _on_node_expand(state: dict, event: dict) -> None:
             acceptance=spec.get("acceptance"),
             touch_plan=spec.get("touch_plan"), awaits=spec.get("awaits"),
             requires=spec.get("requires"), relates=spec.get("relates"),
-            produces=spec.get("produces"), consumes=spec.get("consumes"))
+            produces=spec.get("produces"), consumes=spec.get("consumes"),
+            points=validate_points(spec.get("points")))
         pending.append((spec, node_id))
     # 两阶段 + 分相：先建齐**所有**节点，再接线。否则同批兄弟之间互相声明（B produces X、
     # A consumes X；或 B requires A）会被误判为「悬空」。分相让同批内的声明顺序无关。
@@ -269,6 +287,7 @@ def _on_node_reclaim(state: dict, event: dict) -> None:
 _HANDLERS = {
     "tree.init": _on_tree_init,
     "tree.goal": _on_tree_goal,
+    "tree.deadline": _on_tree_deadline,
     "node.expand": _on_node_expand,
     "node.require": _on_node_require,
     "node.unrequire": _on_node_unrequire,

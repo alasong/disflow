@@ -33,7 +33,7 @@ SEDIMENT_ENTRIES: tuple[str, ...] = ("reflect", "standardize")
 
 # 事件 kind 闭集（投影 reducer 只认这些；出现未知 kind 即报错）
 EVENT_KINDS: tuple[str, ...] = (
-    "tree.init", "tree.goal",
+    "tree.init", "tree.goal", "tree.deadline",
     "node.expand", "node.require", "node.unrequire", "node.relate", "node.unrelate",
     "node.import",
     "node.context",

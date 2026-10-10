@@ -5,13 +5,15 @@
 """
 from __future__ import annotations
 
+import math
+
 from .spec import KINDS, STORED_STATUS
 
 # 节点在**投影里**的完整字段集
 NODE_FIELDS: frozenset[str] = frozenset({
     "id", "parent", "kind", "stage", "role", "goal", "context", "entry",
     "requires", "relates", "produces", "consumes", "touch_plan", "acceptance",
-    "awaits", "status", "lease", "evidence",
+    "awaits", "status", "lease", "evidence", "points",
 })
 
 # 运行时/派生字段：由事件流决定，**不允许**在 `expand` 的声明里给
@@ -31,6 +33,7 @@ _LIST_FIELDS = ("requires", "relates", "produces", "consumes", "touch_plan", "aw
 def new_node(node_id: str, *, parent: str | None = None, kind: str = "task",
              stage: str = "dev", role: str = "dev", goal: str = "",
              context: dict | None = None, entry: str = "",
+             points: float | None = None,
              acceptance: dict | None = None,
              touch_plan: list[str] | None = None,
              awaits: list[str] | None = None,
@@ -50,13 +53,36 @@ def new_node(node_id: str, *, parent: str | None = None, kind: str = "task",
         raise ValueError(f"kind 非法：{kind!r}（应为 {KINDS}）")
     return {
         "id": node_id, "parent": parent, "kind": kind, "stage": stage, "role": role,
-        "goal": goal, "context": dict(context or {}), "entry": entry,
+        "goal": goal, "context": dict(context or {}), "entry": entry, "points": points,
         "requires": list(requires or []), "relates": list(relates or []),
         "produces": list(produces or []), "consumes": list(consumes or []),
         "touch_plan": list(touch_plan or []), "awaits": list(awaits or []),
         "acceptance": dict(acceptance) if acceptance else None,
         "status": "pending", "lease": None, "evidence": None,
     }
+
+
+def validate_points(value: object) -> float | None:
+    """量化估点：None 放行（未估），正数归一为 float，其余**响亮拒绝**。
+
+    为何 `bool`/`str` 也要拒：`True` 是 `int` 的子类，`points=True` 会被静默当成 1 点；
+    字符串 `"3"` 不是数值却看着像。两者都会让求和悄悄出错，故与 0/负数一样拒。
+    为何不静默丢弃非法值：写错点数却当成「没估」会让 velocity / eta 悄悄失真。
+
+    为何用 `math.isfinite` 而非 `value <= 0` 判非法：`nan <= 0` 与 `inf <= 0` 都是 `False`，
+    只判负会让 `NaN`/`+inf` 漏网、污染之后**全部**求和（`json.loads` 默认收 `NaN`，可端到端落盘）。
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"points 应为正数或 None（未估），得到 {value!r}")
+    if not math.isfinite(value):
+        raise ValueError(
+            f"points 应为有限正数，得到 {value!r}（NaN/±inf 会污染求和，一律拒）")
+    if value <= 0:
+        raise ValueError(
+            f"points 应为正数，得到 {value!r}（0 与负数无意义；不估请留 None）")
+    return float(value)
 
 
 def validate_node_spec(spec: dict) -> None:
@@ -73,6 +99,7 @@ def validate_node_spec(spec: dict) -> None:
             "`status`/`lease` 走 start/fail/retry/skip/reap 动词；`evidence` 由 done 自算）")
     if spec.get("kind", "task") not in KINDS:
         raise ValueError(f"kind 非法：{spec.get('kind')!r}（应为 {KINDS}）")
+    validate_points(spec.get("points"))
     for key in _LIST_FIELDS:
         value = spec.get(key)
         if value is not None and not isinstance(value, list):
