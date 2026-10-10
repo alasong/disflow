@@ -10,8 +10,18 @@ from .spec import TERMINAL
 RUNNING = "running"
 
 
-def is_ready(nodes: dict, node_id: str) -> bool:
-    """任务节点就绪 = pending ∧ 未被租约占用 ∧ requires 全 done。
+def awaits_of(node: dict) -> list[str]:
+    """跨树完成信号：本节点等待哪些**别的树** `closed`（不是图上的 `requires`）。"""
+    return list(node.get("awaits") or [])
+
+
+def awaits_unmet(node: dict, closed: set[str] | frozenset[str]) -> list[str]:
+    return [tree for tree in awaits_of(node) if tree not in closed]
+
+
+def is_ready(nodes: dict, node_id: str,
+             closed: set[str] | frozenset[str] = frozenset()) -> bool:
+    """任务节点就绪 = pending ∧ 未被租约占用 ∧ requires 全 done ∧ awaits 全 closed。
 
     容器节点不派发（由子节点推导完成），恒 False。
     """
@@ -24,17 +34,21 @@ def is_ready(nodes: dict, node_id: str) -> bool:
         return False
     if node.get("lease"):
         return False
+    if awaits_unmet(node, closed):
+        return False
     return not unmet_requires(node, nodes)
 
 
-def blocked_by(nodes: dict, node_id: str) -> list[str]:
-    """列出阻塞该节点的前置（含悬空引用）。"""
-    return unmet_requires(nodes[node_id], nodes)
+def blocked_by(nodes: dict, node_id: str,
+               closed: set[str] | frozenset[str] = frozenset()) -> list[str]:
+    """列出阻塞该节点的前置（悬空 `requires` 与未满足的跨树 `awaits`，后者带 `@`）。"""
+    node = nodes[node_id]
+    return unmet_requires(node, nodes) + [f"@{tree}" for tree in awaits_unmet(node, closed)]
 
 
-def ready_tasks(nodes: dict) -> list[str]:
+def ready_tasks(nodes: dict, closed: set[str] | frozenset[str] = frozenset()) -> list[str]:
     """全部就绪的任务节点（id 升序，确定性）。"""
-    return [nid for nid in sorted(nodes) if is_ready(nodes, nid)]
+    return [nid for nid in sorted(nodes) if is_ready(nodes, nid, closed)]
 
 
 def _touch_pair_overlap(left: str, right: str) -> bool:
@@ -76,14 +90,14 @@ def live_tasks(nodes: dict) -> list[str]:
                   if node.get("kind") == "task" and node.get("status") not in TERMINAL)
 
 
-def is_stuck(nodes: dict) -> bool:
+def is_stuck(nodes: dict, closed: set[str] | frozenset[str] = frozenset()) -> bool:
     """卡死：还有 **pending** 任务、但既无就绪也无运行（被阻塞 / 成环 / 引用悬空）。
 
     `failed` 不算卡死 —— 它可见、可 retry；卡死指的是「没有任何东西能推进也不在跑」。
     """
     pending = [nid for nid, node in nodes.items()
                if node.get("kind") == "task" and node.get("status") == "pending"]
-    return bool(pending) and not ready_tasks(nodes) and not running_tasks(nodes)
+    return bool(pending) and not ready_tasks(nodes, closed) and not running_tasks(nodes)
 
 
 def progress(nodes: dict) -> dict:

@@ -154,7 +154,8 @@ def cmd_status(engine: Engine, args) -> int:
         print(f"树 {args.tree}：{status['goal']}")
         print(f"进度 {progress['done']}/{progress['tasks']}（{progress['pct']}%）"
               f" · 就绪 {len(status['ready'])} · 运行中 {len(status['running'])}"
-              f" · 卡死 {'是' if status['stuck'] else '否'}")
+              f" · 卡死 {'是' if status['stuck'] else '否'}"
+              f" · 已关闭 {'是' if status['closed'] else '否'}")
         return 0
     trees = engine.trees()
     if not trees:
@@ -265,6 +266,20 @@ def cmd_close(engine: Engine, args) -> int:
         _dump(reject.contract)
         return 2
     print(f"✓ {args.tree} 已关闭（终止条件门通过）")
+    return 0
+
+
+def cmd_trees(engine: Engine, args) -> int:
+    names = engine.trees()
+    if not names:
+        print("（无树）")
+        return 0
+    for name in names:
+        status = engine.status(name)
+        progress = status["progress"]
+        mark = "●" if status["closed"] else "·"
+        print(f"{mark} {name}: {progress['done']}/{progress['tasks']}（{progress['pct']}%）"
+              f" · 就绪 {len(status['ready'])} · {status['goal']}")
     return 0
 
 
@@ -381,6 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
     node = add("close", cmd_close)
     node.add_argument("tree")
 
+    add("trees", cmd_trees)
     add("doctor", cmd_doctor)
     return parser
 

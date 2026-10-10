@@ -51,6 +51,15 @@ class Engine:
         return tree
 
     @staticmethod
+    def _closed(state: dict) -> set[str]:
+        """已关闭的树集合（跨树完成信号 `awaits` 的判据）。"""
+        return {name for name, tree in (state.get("trees") or {}).items()
+                if tree.get("closed")}
+
+    def closed_trees(self) -> set[str]:
+        return self._closed(self.load())
+
+    @staticmethod
     def _need(tree: dict, node_id: str) -> dict:
         node = tree["nodes"].get(node_id)
         if node is None:
@@ -60,8 +69,11 @@ class Engine:
     # ── 写 ────────────────────────────────────────────────────────────────
 
     def _write(self, kind: str, *, tree: str, node: str = "", prepare=None,
-               guard=None, existing: bool = True) -> dict:
-        """唯一写点：锁内 读 → 校验 → append。`prepare(tree)` 返回事件的 extra 字段。"""
+               guard=None, guard_state=None, existing: bool = True) -> dict:
+        """唯一写点：锁内 读 → 校验 → append。`prepare(tree)` 返回事件的 extra 字段。
+
+        `guard(tree)` 只看本树；`guard_state(tree, state)` 还能看到全局（跨树信号）。
+        """
         with store.lock(self.spec):
             state = self.load()
             current = state.get("trees", {}).get(tree)
@@ -69,8 +81,11 @@ class Engine:
                 raise EngineError(f"树不存在：{tree}")
             if not existing and current is not None:
                 raise EngineError(f"树已存在：{tree}")
-            if guard is not None and current is not None:
-                guard(current)
+            if current is not None:
+                if guard is not None:
+                    guard(current)
+                if guard_state is not None:
+                    guard_state(current, state)
             extra = prepare(current) if prepare is not None else {}
             store.append_event(self.spec, kind, project=project, slug=tree,
                                node=node, extra=extra or {})
@@ -127,16 +142,16 @@ class Engine:
     # ── 生命周期 ──────────────────────────────────────────────────────────
 
     def start(self, tree: str, node: str, holder: str = "") -> dict:
-        def guard(t: dict) -> None:
+        def guard(t: dict, state: dict) -> None:
             item = self._need(t, node)
             if item.get("kind") != "task":
                 raise EngineError(f"{node} 是容器，不派发")
             if item.get("status") != "pending":
                 raise EngineError(f"{node} 状态为 {item.get('status')}，不可 start")
-            blockers = blocked_by(t["nodes"], node)
+            blockers = blocked_by(t["nodes"], node, self._closed(state))
             if blockers:
                 raise EngineError(f"{node} 未就绪，被阻塞：{blockers}")
-        return self._write("node.start", tree=tree, node=node, guard=guard,
+        return self._write("node.start", tree=tree, node=node, guard_state=guard,
                            prepare=lambda _: {"lease": {"holder": holder or "unknown",
                                                         "at": now_iso()},
                                               "baseline": gates.git_changed_files(self.cwd) or []})
@@ -224,23 +239,28 @@ class Engine:
     # ── 推进面（只读）──────────────────────────────────────────────────────
 
     def drive(self, tree: str) -> dict:
-        return run_drive(tree, self.tree(tree))
+        state = self.load()
+        return run_drive(tree, self.tree(tree, state), self._closed(state))
 
     def plan(self, tree: str) -> list[dict]:
-        return dispatch_plan(tree, self.tree(tree))
+        state = self.load()
+        return dispatch_plan(tree, self.tree(tree, state), self._closed(state))
 
     def brief(self, tree: str, node: str) -> dict:
         return handoff_brief(tree, self.tree(tree), node)
 
     def status(self, tree: str) -> dict:
-        target = self.tree(tree)
+        state = self.load()
+        target = self.tree(tree, state)
         nodes = target["nodes"]
+        closed = self._closed(state)
         return {
             "tree": tree,
             "goal": target.get("goal", ""),
+            "closed": bool(target.get("closed")),
             "progress": progress(nodes),
-            "ready": ready_tasks(nodes),
+            "ready": ready_tasks(nodes, closed),
             "running": running_tasks(nodes),
-            "stuck": is_stuck(nodes),
+            "stuck": is_stuck(nodes, closed),
             "nodes": nodes,
         }

@@ -13,11 +13,12 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 61 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 65 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
 | 看板视图 | `board` / `tree` / `graph` 三视图同源 |
+| 多块板 | 多树作用域隔离 + 跨树 `awaits` 显式完成信号（`tree.close`） |
 | 偏离 | 本机无 pytest → 标准库 `unittest`（与 NFR-1 零依赖一致） |
 
 **门清单（设计 §7）**：`acceptance` ✅ · `design_first` ✅ · `size_budget` ✅ · `tree_closure` ✅。
@@ -119,4 +120,5 @@ V3 的「篡改投影必须被抓」**确实被抓**（exit 1）—— 一致性
 2. 修 V3 发现：`cli.main` 捕获 `ValueError`/`OSError`（已做，`tests/test_cli.py` 守）。
 3. 补 `tree_coverage` 门（v0.2）。
 4. 实现 §10 的三条偏离（v0.2，若迁移是主打场景）。
-5. v0.2：多棵树（多块板）作用域隔离 + 跨树完成信号。
+5. ~~v0.2：多棵树（多块板）作用域隔离 + 跨树完成信号~~ ✅ 已完成（`awaits` + `tree.close`，`tests/test_multitree.py` 守）。
+6. v0.2 余项：每树物理隔离（`DISFLOW_STATE_DIR`）；`phase/layer` 标签；`registry` 资产登记。

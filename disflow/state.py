@@ -75,7 +75,7 @@ def _on_node_expand(state: dict, event: dict) -> None:
             role=spec.get("role", "dev"), goal=spec.get("goal", ""),
             context=spec.get("context"), entry=spec.get("entry", ""),
             acceptance=spec.get("acceptance"),
-            touch_plan=spec.get("touch_plan"))
+            touch_plan=spec.get("touch_plan"), awaits=spec.get("awaits"))
 
 
 def _append_unique(node: dict, key: str, value: str) -> None:

@@ -17,13 +17,17 @@ from .ready import (
 )
 
 
-def drive(tree_name: str, tree: dict) -> dict:
-    """一次只读推进：列出活节点、就绪波次、阻塞、卡死。同输入必同输出。"""
+def drive(tree_name: str, tree: dict,
+          closed: set[str] | frozenset[str] = frozenset()) -> dict:
+    """一次只读推进：列出活节点、就绪波次、阻塞、卡死。同输入必同输出。
+
+    `closed`：已关闭的树集合（跨树完成信号 `awaits` 的判据）。
+    """
     nodes = tree["nodes"]
-    ready = ready_tasks(nodes)
+    ready = ready_tasks(nodes, closed)
     waves = pack_waves(nodes, ready)
-    blocked = {nid: blocked_by(nodes, nid) for nid in live_tasks(nodes)
-               if blocked_by(nodes, nid)}
+    blocked = {nid: blocked_by(nodes, nid, closed) for nid in live_tasks(nodes)
+               if blocked_by(nodes, nid, closed)}
     return {
         "tree": tree_name,
         "goal": tree.get("goal", ""),
@@ -33,7 +37,7 @@ def drive(tree_name: str, tree: dict) -> dict:
         "ready_wave": waves[0] if waves else [],
         "waves": waves,
         "blocked": blocked,
-        "stuck": is_stuck(nodes),
+        "stuck": is_stuck(nodes, closed),
         "progress": progress(nodes),
     }
 
@@ -48,9 +52,10 @@ def handoff_brief(tree_name: str, tree: dict, node_id: str) -> dict:
     return payload
 
 
-def dispatch_plan(tree_name: str, tree: dict) -> list[dict]:
+def dispatch_plan(tree_name: str, tree: dict,
+                  closed: set[str] | frozenset[str] = frozenset()) -> list[dict]:
     """就绪波次里每个节点的可照抄派发计划（不含实际 spawn）。"""
-    result = drive(tree_name, tree)
+    result = drive(tree_name, tree, closed)
     plan = []
     for index, node_id in enumerate(result["ready_wave"], 1):
         node = tree["nodes"][node_id]

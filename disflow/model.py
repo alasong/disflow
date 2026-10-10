@@ -11,25 +11,29 @@ from .spec import KINDS, STORED_STATUS
 NODE_FIELDS: frozenset[str] = frozenset({
     "id", "parent", "kind", "stage", "role", "goal", "context", "entry",
     "requires", "relates", "produces", "consumes", "touch_plan", "acceptance",
-    "status", "lease", "evidence",
+    "awaits", "status", "lease", "evidence",
 })
 
-_LIST_FIELDS = ("requires", "relates", "produces", "consumes", "touch_plan")
+_LIST_FIELDS = ("requires", "relates", "produces", "consumes", "touch_plan", "awaits")
 
 
 def new_node(node_id: str, *, parent: str | None = None, kind: str = "task",
              stage: str = "dev", role: str = "dev", goal: str = "",
              context: dict | None = None, entry: str = "",
              acceptance: dict | None = None,
-             touch_plan: list[str] | None = None) -> dict:
-    """构造一个 status=pending 的节点（不校验、不入库）。"""
+             touch_plan: list[str] | None = None,
+             awaits: list[str] | None = None) -> dict:
+    """构造一个 status=pending 的节点（不校验、不入库）。
+
+    `awaits`：跨树完成信号（等待别的树 `closed`）—— 不是图上的 `requires`。
+    """
     if kind not in KINDS:
         raise ValueError(f"kind 非法：{kind!r}（应为 {KINDS}）")
     return {
         "id": node_id, "parent": parent, "kind": kind, "stage": stage, "role": role,
         "goal": goal, "context": dict(context or {}), "entry": entry,
         "requires": [], "relates": [], "produces": [], "consumes": [],
-        "touch_plan": list(touch_plan or []),
+        "touch_plan": list(touch_plan or []), "awaits": list(awaits or []),
         "acceptance": dict(acceptance) if acceptance else None,
         "status": "pending", "lease": None, "evidence": None,
     }

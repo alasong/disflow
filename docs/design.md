@@ -69,6 +69,7 @@ disflow checkpoint <tree>                # 记录事件偏移
   "produces": ["parse_config"],   // 图边：产出物
   "consumes": ["config_schema"],  // 图边：消费物（须指向已登记产出）
   "touch_plan": ["src/parse.py"], // 写面声明（规模门 + 冲突检测）
+  "awaits": ["boardA"],         // 跨树完成信号（等待别的树 closed），非图边
   "acceptance": {                 // 门
     "cmd": "pytest tests/test_parse.py",
     "expect": "exit0"
@@ -87,6 +88,7 @@ disflow checkpoint <tree>                # 记录事件偏移
 | 调度依赖（顺序） | `requires`（图，DAG） | `require` |
 | 软引用 | `relates`（图，任意） | `relate` |
 | 供给-消费 | `produces`/`consumes`（图） | `produce`/`consume` |
+| 跨树依赖 | `awaits`（**非图边**；信号 = 对方树 `closed`） | `expand` |
 | 派生就绪 | `ready`（**不存储**，现算） | — |
 | 审批/验证 | **节点**（kind=task, stage=verify/approve） | `expand` |
 
@@ -103,6 +105,7 @@ disflow checkpoint <tree>                # 记录事件偏移
 
 - 上下文**只走树**：走图会成环、多路径、指数膨胀。
 - 调度**必须进图**：跨子树依赖、横向产出物依赖，树表达不了。
+- 跨**树**（多块板）依赖**不进图**：它降级为 `awaits` 显式完成信号（§6）。
 
 ### 2.3 节点分型（修「容器/任务」混用）
 
@@ -121,10 +124,12 @@ disflow checkpoint <tree>                # 记录事件偏移
 ready(n) := kind(n) == task
           ∧ status(n) == pending
           ∧ ∀ d ∈ requires(n): status(d) == done        # 图入边
+          ∧ ∀ t ∈ awaits(n): t ∈ closed                 # 跨树完成信号
           ∧ lease(n) == null                            # 未被告占用
           ∧ 无环（写入时已保证）
 
 blocked_by(n) := [ d ∈ requires(n) : status(d) != done ]
+                 ⊕ [ "@"+t : t ∈ awaits(n) ∧ t ∉ closed ]
 ```
 
 **唯一性**（FR-11）：分发器和 worker 调**同一份** `ready`；两面不分叉。
@@ -140,7 +145,7 @@ wave := greedy_pack({ n : ready(n) }, 冲突判据 = touch_plan 有交集)
 **卡死检测**（FR-27）：
 
 ```text
-stuck := ready() == ∅ ∧ running() == ∅ ∧ ∃ status != done
+stuck := pending() != ∅ ∧ ready() == ∅ ∧ running() == ∅
 ```
 
 出现即报错（通常是环或全被阻塞）。
@@ -217,13 +222,16 @@ disflow tree  <tree>                 # 树：按 parent 缩进
 disflow graph <tree> [--dot]         # 图：requires/relates
 ```
 
-**「多块板」= 多棵树**（FR-22）：每棵树一个 namespace，作用域隔离，各有权威分发者。
-跨树依赖**降级为显式完成信号**（FR-23），不假装是一张图（理由见讨论：跨边界依赖会引入分布式共识）。
+**「多块板」= 多棵树**（FR-22）：每棵树作用域隔离，各有权威分发者（`drive`/`ready` 只看本树节点）。
+跨树依赖**不进图**（FR-23）：降级为 **`awaits` 显式完成信号** —— 节点声明 `awaits: [<tree>]`，
+就绪要求那些树已 `closed`（`tree.close` 经 `tree_closure` 门写入）。理由：把多棵树连成一张图会引入分布式共识。
 
 ```text
-disflow trees                        # 列出所有树
-disflow board --all                  # 多板总览
+disflow trees                        # 列出所有树（● = 已 closed）
+disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 closed（跨树信号源）
 ```
+
+> 当前实现：多棵树共享一个状态目录（`trees` 映射）。**物理隔离**可用 `DISFLOW_STATE_DIR` 给每棵树独立的事件流。
 
 ---
 
@@ -347,13 +355,13 @@ disflow doctor                                     # 自检
 
 ## 12. 风险与未决
 
-| # | 项 | 倾向 |
+| # | 项 | 状态 / 倾向 |
 | --- | --- | --- |
-| R1 | 复用 flowcore vs fork | 先复用，接口对齐后再定 |
+| R1 | 复用 flowcore vs fork | ✅ 定：只 vendor `store.py`（其余重写） |
 | R2 | `relates` 传递深度 | 默认 1 跳，可配置，超预算即报错 |
-| R3 | 环检测时机 | 写入即拒（fail-fast） |
-| R4 | 跨 tree 完成信号协议 | 显式事件，不共享图 |
+| R3 | 环检测时机 | ✅ 定：写入即拒（fail-fast） |
+| R4 | 跨 tree 完成信号协议 | ✅ 定：`awaits` + `tree.close`（显式信号，不共享图） |
 | R5 | 多写者跨仓/跨 worktree | 单写者收口 + 租约，跨仓暂不做 |
-| R6 | POC 范围 | 树 + `requires` + `ready` + `drive` 最小闭环 |
-| R7 | 是否 `git init` | 本仓非 git 仓，一致性门依赖 git，落地前确认 |
-| R8 | 规模预算阈值 | 先观察，跑真实任务后调 |
+| R6 | POC 范围 | ✅ 定：树 + `requires` + `ready` + `drive` |
+| R7 | 是否 `git init` | ✅ 已做（`a76932b` 为基线） |
+| R8 | 规模预算阈值 | 出厂 400 行；可 `node.context.size_budget` 覆盖，`size_waiver` 破例 |
