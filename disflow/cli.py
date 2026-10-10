@@ -526,14 +526,34 @@ def _days(text: str, *, remaining: int | None, overdue: int | None) -> str:
 _NO_DEADLINE = "未声明"
 
 
-def _burn_line(label: str, series: list[dict], *, field: str, ideal) -> str:
+def _ideal_tail(ideal: list[dict], *, ideal_field: str) -> str:
+    """理想线读数的尾巴：`（理想线 → <末点日> 归零）`。
+
+    **「归零」只允许用在末点值确实为 0 的那天。** 末点日就是 deadline、值恒为 0
+    （`metrics.burndown` 这么构造），但措辞不得寄生在这个不变量上：末值 > 0（线被截断）时
+    如实报还剩多少——本模块曾把「被截断在今天的末点」当成归零日，在值是 22 的那天说「归零」。
+
+    `ideal_field` 指明取哪一列（`ideal` 点数 / `ideal_nodes` 节点数），与 `_burn_line` 的
+    `field` 一样：两个维度各取自己那一列，不靠猜。
+    """
+    last = ideal[-1]
+    if last[ideal_field] != 0:
+        return f"（理想线 → {last['day']} 剩 {_pts(last[ideal_field])}）"
+    return f"（理想线 → {last['day']} 归零）"
+
+
+def _burn_line(label: str, series: list[dict], *, field: str, ideal,
+               ideal_field: str) -> str:
     """一行燃尽读数：`<维度> 首日 值 → 末日 值（理想线 → 日 归零）`。
 
     `field` 明确指定取哪一列（`remaining` 点数 / `remaining_nodes` 节点数）——两个维度
     各打印一行、各有标签，不把两个数混成一个。
+
+    首末两点都取 `series`（实际读数只到今天）；理想线是**另一条 x 轴**（画到 deadline，
+    与 `series` 故意不等长），故它的读数另由 `_ideal_tail` 取，不拿 `series` 的下标去凑。
     """
     first, last = series[0], series[-1]
-    tail = f"（理想线 → {ideal[-1]['day']} 归零）" if ideal else ""
+    tail = _ideal_tail(ideal, ideal_field=ideal_field) if ideal else ""
     return (f"{label}{first['day']} {_pts(first[field])}"
             f" → {last['day']} {_pts(last[field])}{tail}")
 
@@ -582,10 +602,13 @@ def cmd_metrics(engine: Engine, args) -> int:
         # 两行：节点数与点数各带标签（点数未声明时点数那一行不打印——留着只会是「0 → 0」）。
         print("  燃尽    " + _burn_line("节点  ", burn["series"],
                                               field="remaining_nodes",
-                                              ideal=burn["ideal_nodes"]))
+                                              ideal=burn["ideal_nodes"],
+                                              ideal_field="ideal_nodes"))
         if points_declared:
             print("          " + _burn_line("点数  ", burn["series"],
-                                            field="remaining", ideal=burn["ideal"]))
+                                            field="remaining",
+                                            ideal=burn["ideal"],
+                                            ideal_field="ideal"))
     if burn["ideal_reason"]:
         print(f"  理想线  ⚠ {burn['ideal_reason']}")
     return 0
