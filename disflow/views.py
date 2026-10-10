@@ -4,14 +4,14 @@
 
 看板 = **阶段列 × 树层级**（2026-10-11 用户要求：「看板的运行视图，能按照阶段列出来，
 并且能按树结构的类别分层」）。布局**只有 `board_layout` 一处实现**：人读态（`board_lines`）
-与机器态（`disflow board --json`）都从它渲染，后续宿主的**运行视图**也从同一份数据取
-「列 + 层级 + 状态分组」。**任何一侧都不许再写一套分列/缩进**——本仓已知的「两面分叉」病
-（同一个判据两份实现 ⇒ 两边给出不同答案）正是这条要防的。
+与机器态（`disflow board --json`）都从它渲染。宿主**运行视图**有自己的分列（v10 起它答的是另一个
+问题：**现在谁在跑 / 谁还没做**，见 `.agents/skills/disflow/lanes_watch.py`），但**阶段列名与 goal
+截断仍共用**（列读配置、截断走 `truncate_goal`）。
 
 **人读态 vs 机器态（2026-10-11 用户当场提）**：`board_lines` 给的是**屏幕维度**——终态行
 （`✓ 完成` / `— 跳过`）默认**不打印 goal**（一行几百字没法扫），其余行的 goal 统一走
 `truncate_goal`（首行、≤80 字、`…` 结尾）；**完整 goal 只在 `board --json`**。
-`active_only=True`（运行视图的 `--active`）只留「运行中 + 待完成」那些组。
+`active_only=True`（`board` 的默认）只留「运行中 + 待完成」那些组（`board --all` 展开）。
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _CONTAINER_MARK = "◦"
 # 人读态里**不打印 goal** 的组：终态节点一行一个「几百字目标」时屏幕没法扫。
 # 完整目标留给 `board --json`（`board_layout` 的 `goal` 字段照旧全文）。
 _GOAL_OMITTED_GROUPS: frozenset[str] = frozenset({"done", "skipped"})
-# `--active`（运行视图旗标）保留的组：「运行中 + 待完成（可派/待前置/被在跑挡住）」+ 结构行。
+# `active_only`（`board` 默认）保留的组：「运行中 + 待完成（可派/待前置/被在跑挡住）」+ 结构行。
 _ACTIVE_GROUPS: frozenset[str] = frozenset(
     {"structure", "running", "ready", "blocked", "deferred"})
 
@@ -178,7 +178,7 @@ def board_layout(tree: dict, stage: str | None = None,
     对未知值容忍；「用法错误」在 CLI 这层拦。）被选中的列**没有节点时**照旧打 `[{stage}] 0/0`
     ——改动前什么都不打（与「列名拼错」无法区分）。
 
-    **`active_only`（`--active`）**：只留 `_ACTIVE_GROUPS`（运行中 / 可派 / 待前置 / 被在跑
+    **`active_only`（`board` 默认）**：只留 `_ACTIVE_GROUPS`（运行中 / 可派 / 待前置 / 被在跑
     挡住 + 结构行），隐藏 `✓ 完成` / `— 跳过` / `✗ 失败` / 非规范兜底 —— 「只显示运行中的
     和待完成的」。**默认 False，行为不变**；列头计数照旧是全列的口径（隐藏 ≠ 改写事实）。
 

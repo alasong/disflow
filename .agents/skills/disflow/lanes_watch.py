@@ -281,7 +281,7 @@ def effective_status(row, lane):
 
 
 def render(show_all=False, verbose=False):
-    """一轮的完整块（自带时间戳头，块间互不依赖）—— 追加式刷新直接照打。"""
+    """一轮的完整块（自带时间戳头，块间互不依赖）—— top 式清屏重绘直接照打。"""
     proj = load_projection()
     rows = items(proj)
     runs = [r for r in (load(d) for d in glob.glob(PAT)) if r]
