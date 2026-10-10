@@ -38,6 +38,45 @@ def _make_lease(holder: str, ttl: int) -> dict:
     }
 
 
+# 提问纪律（`host-next` 的 brief 片段里写明）：worker 的提问天然走**宿主通道**
+# （pi 里即 `contact_supervisor`），而该通道不进 disflow 的事件流 ⇒ 树上看不到这次提问、
+# 追溯缺一块。故**两条都要做**：走宿主通道提问，**且**在 `collect` 的结果里把 `status` 置
+# `blocked`（事件流留痕）。只做前者 = disflow 树上看不见；只做后者 = 宿主收不到。
+QUESTION_PROTOCOL = (
+    "worker 有疑问时**两条都要做**：① 走宿主通道提问（pi 里即 contact_supervisor，"
+    "reason=\"need_decision\"）——问题才会到宿主手里；② **同时**在 `collect --result` 里把问题"
+    "写进 summary 且 `status` 置 \"blocked\"——disflow 事件流才留得下痕（缺②则树上查不到这次"
+    "提问）。两条都不做 = 自己拍板改范围，禁止。"
+)
+
+
+def _dispatch_state(result: dict) -> tuple[str, str]:
+    """无就绪节点时的**显式**说明（不许静默返回空）：全部完成 / 卡住 / 在跑 / 有失败。
+
+    就绪波次非空 → `ready`。返回 `(state, message)`，`state ∈ {ready, complete, stuck, running,
+    failed}`，`message` 是人能读的一句话。判据取自 `drive` 的同一份读数（`waves` / `stuck` /
+    `running` / `progress`），两面不分叉。
+    """
+    waves = result["waves"]
+    if waves:
+        total = sum(len(wave) for wave in waves)
+        return "ready", (f"就绪 {total} 个（{len(waves)} 波，首波 {len(waves[0])} 个）："
+                         "下面每个节点的 brief 即 worker 的 task")
+    progress = result["progress"]
+    if progress["done"] == progress["tasks"]:
+        if progress["tasks"] == 0:
+            return "complete", "树内无任务节点，无就绪节点"
+        return "complete", (f"全部完成：{progress['done']}/{progress['tasks']} 节点已终态，"
+                            "无就绪节点")
+    if result["stuck"]:
+        return "stuck", (f"卡住（stuck）：还有 pending 节点，但既无就绪也无运行——"
+                         f"被阻塞 {len(result['blocked'])} 个：{result['blocked']}")
+    if result["running"]:
+        return "running", (f"无就绪节点，但有 {len(result['running'])} 个运行中——"
+                           f"等 {', '.join(result['running'])} 收尾")
+    return "failed", "无就绪节点：有 failed 节点待 retry / skip（failed 不算 stuck）"
+
+
 class EngineError(Exception):
     """引擎级错误（用法 / 依赖 / 状态非法）。"""
 
@@ -563,6 +602,64 @@ class Engine:
         # worktree 路径是**绝对**的宿主现场（派生资源）——`brief` 是 worker 的契约，
         # 必须在那里告诉它「你的工作目录是 path，不是仓根」（见 dispatch.handoff_brief）。
         return payload
+
+    def host_next(self, tree: str) -> dict:
+        """宿主「下一步」：把一轮派活的六步压成一次**只读**调用。
+
+        `drive → brief → start → 派活 → collect → done` 每轮六步，而宿主的 subagent 工具
+        「一步就能派活」——于是 disflow 被绕开（宿主实测：3 小时 4 次派发、disflow 事件参与 0 次）。
+        本动词一次给出「该派谁 + 每个 worker 的完整 task + 收尾要跑的命令」，宿主一次调用即可派活。
+
+        **纯读**：只读投影 + 只读的 worktree 对账，**不落任何事件、不改状态、不起常驻进程**
+        （宿主只是拿它去派活）。无就绪节点时以 `state` / `state_message` **显式**报
+        `complete`（全部完成）或 `stuck`（卡住），不静默返回空（见 `_dispatch_state`）。
+        """
+        state = self.load()
+        target = self.tree(tree, state)
+        result = run_drive(tree, target, self._closed(state))
+        plan = []
+        for wave_index, wave in enumerate(result["waves"], 1):
+            for node_id in wave:
+                plan.append(self._host_entry(tree, target, node_id, wave_index))
+        wave_state, wave_message = _dispatch_state(result)
+        return {
+            "tree": tree,
+            "goal": target.get("goal", ""),
+            "root": target.get("root"),
+            "state": wave_state,
+            "state_message": wave_message,
+            "progress": result["progress"],
+            "running": result["running"],
+            "waves": result["waves"],
+            "ready_wave": result["ready_wave"],
+            "blocked": result["blocked"],
+            "stuck": result["stuck"],
+            "plan": plan,
+        }
+
+    def _host_entry(self, tree: str, target: dict, node_id: str, wave: int) -> dict:
+        """一个就绪节点的派活条目：完整 brief（= worker 的 task）+ start/collect/done 命令。
+
+        `brief` 直接用 `handoff_brief`（与 `disflow brief` 同一份，含必填声明 / 提问纪律 /
+        结果契约 / 工作目录），再补上 `question_protocol` —— 那条约定指出：提问走宿主通道
+        **且**在 `collect` 里标 `blocked`，事件流才留得下痕。
+        """
+        node = target["nodes"][node_id]
+        brief = handoff_brief(tree, target, node_id, self.cfg, repo=self.cwd)
+        brief["question_protocol"] = QUESTION_PROTOCOL
+        return {
+            "node": node_id,
+            "wave": wave,
+            "stage": node.get("stage"),
+            "role": node.get("role"),
+            "goal": node.get("goal", ""),
+            "brief": brief,
+            "start_cmd": f"disflow start {tree} {node_id} --holder <HOST>",
+            "collect_cmd": (f"disflow collect {tree} {node_id} --result "
+                            "'{\"status\": \"ok\", \"summary\": \"<一句话>\", "
+                            "\"changed_files\": [\"<路径>\"]}'"),
+            "done_cmd": f"disflow done {tree} {node_id} --decl '{{\"evidence\": …}}'",
+        }
 
     def status(self, tree: str) -> dict:
         state = self.load()
