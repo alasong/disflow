@@ -317,7 +317,9 @@ class Engine:
         def prepare(_: dict) -> dict:
             cwd = self._gate_cwd(tree, node)
             # `workspace` 记下开工现场：`done` 据此把门跑在同一目录上，并在「起点与终点不是
-            # 同一个目录」时 fail-closed 拒收。`head_sha` 让已提交的改动也能被 `done` 看见。
+            # 同一个目录」时 fail-closed 拒收。`head_sha` **一律**记录（worktree 与原地派发
+            # 都一样）——worker 可能把活干完就 `git commit`，只看 `git status` 会看不见已提交
+            # 的改动 ⇒ 门空洞通过。
             return {"lease": lease,
                     "baseline": gates.snapshot(cwd, self.cfg),
                     "workspace": {"cwd": cwd,
@@ -375,8 +377,11 @@ class Engine:
                         # 不同形（/private/var/… 与 /var/…），裸字符串比对会**误拒**（假红）。
                         or os.path.realpath(recorded_cwd) != os.path.realpath(cwd)):
                     raise baseline_elsewhere()
-            # 只有 worktree 场景才用 head_sha 并已提交改动：无 worktree 的节点行为逐字节不变（回归）。
-            base_sha = workspace.get("head_sha") if now_worktree else None
+            # **一律**把 `start` 记下的 head_sha 交给门：原地派发的 worker 同样可能自己
+            # `git commit`，此时只读 `git status --porcelain` 是空的 ⇒ introduced/changed_files
+            # 为空 ⇒ 空洞通过（fail-open）。worktree 与原地两条路必须走同一条判据。
+            # （旧事件没有 `workspace` 时取到 None，退回只读 `git status`，不炸。）
+            base_sha = workspace.get("head_sha")
             ok, why, evidence = gates.evidence_meta(item.get("acceptance"), cwd,
                                                    self.cfg, base_sha=base_sha)
             baseline = item.get("baseline") or {}

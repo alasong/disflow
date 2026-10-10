@@ -17,6 +17,8 @@
   - **A3**：worktree 里改**并提交** ⇒ 门仍看到（`git status` 为空，靠 `base_sha` 的
     已提交改动并集看见）——覆盖「改了什么」判据必须扩；
   - **A4**：无 worktree 的节点行为逐字节不变（回归）；
+  - **A5**：**原地派发 + worker 自己 commit** ⇒ 门仍看见 introduced（`git status` 为空，
+    靠 `start` 记的 `head_sha` 看见已提交改动）——这正是「`else None`」那个 fail-open 分支；
   - **fail-closed（顺序错）**：开工基线不在门目录里（start 时无 worktree、done 时有）⇒
     响亮拒收，报错给出 `disflow reopen …` 补救；
   - **fail-closed（对称化）**：start 记录有 worktree，done 前整个 worktree 被删（reap/手工）⇒
@@ -188,6 +190,33 @@ class WorktreeGateTest(DisflowTestCase):
         evidence = self.engine.tree("t")["nodes"]["a"]["evidence"]
         self.assertEqual(evidence["introduced"], ["README.md"])
         self.assertEqual(evidence["vacuous"], {})
+
+    # ── A5：原地派发 + worker 自己 commit（修「门看不见已提交的改动」）──
+
+    def test_a5_inplace_committed_change_is_seen(self):
+        """无 worktree（原地派发）+ worker 自己 `git commit` ⇒ introduced 必须非空。
+
+        修前：`done` 只对 worktree 传 `base_sha`，原地派发时它恒为 None ⇒ 门只读
+        `git status --porcelain`；提交后它为空 ⇒ 读数
+        introduced=[]、vacuous={design_first,size_budget}、done exit=0（宿主实测的空洞通过）。
+        同时钉住第 1 条：原地派发也在 `start` **一律**记下 `head_sha`。
+        """
+        self._node("a", acceptance=acceptance("ok"), touch_plan=["README.md"])
+        self.engine.start("t", "a", "w")
+        workspace = self.engine.tree("t")["nodes"]["a"]["workspace"]
+        self.assertFalse(workspace["worktree"])          # 前置：确实是原地派发
+        self.assertTrue(workspace.get("head_sha"))       # 第 1 条：一律记 head_sha
+
+        touch(os.path.join(self.repo, "README.md"), "changed\n")
+        commit(self.repo, "change README in place")
+
+        self.engine.done("t", "a")
+        evidence = self.engine.tree("t")["nodes"]["a"]["evidence"]
+        # `git status --porcelain` 现在为空；introduced 非空只能来自 base_sha 的已提交并集
+        self.assertEqual(evidence["introduced"], ["README.md"])
+        self.assertIn("README.md", evidence["changed_files"])
+        self.assertNotIn("design_first", evidence["vacuous"])
+        self.assertEqual(self.engine.tree("t")["nodes"]["a"]["status"], "done")
 
     def test_a4_without_worktree_no_change_still_vacuous(self):
         """无 worktree、无改动：与旧行为一致 —— introduced 为空且空洞警告照旧。"""
