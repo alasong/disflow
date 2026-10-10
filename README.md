@@ -2,6 +2,109 @@
 
 任务分发流引擎：**树提供上下文继承，图提供调度与引用，看板是视图，分发器只推不跑。**
 
+## 5 分钟上手：看它自己排顺序，并拒收一次假的完成
+
+零第三方依赖（只用 Python 标准库）。在**一个空目录**里试，不碰你自己的仓库。
+
+```bash
+cd "$(mktemp -d)"                              # 一个临时目录
+export PYTHONPATH=/改成你 clone 的 disflow 路径
+export DISFLOW_STATE_DIR="$PWD/.disflow"
+```
+
+**准备**——注意 `.gitignore`：状态目录必须被忽略，否则它会以「未跟踪目录」的身份
+被改动归因当成“本节点引入的改动”。
+
+```bash
+# disflow-walkthrough:prepare
+git init -q .
+printf '.disflow/\n' > .gitignore
+printf 'Hello\n' > greeting.txt
+```
+
+**跑一遍**（下面的输出都是**真实输出**，照抄就能得到同样的结果）：
+
+```bash
+# disflow-walkthrough:run
+d() { python3 -m disflow.cli "$@"; }        # 后面都用 d 代替那个长命令
+
+cat > demo-children.json <<'JSON'
+[
+ {"id":"A","goal":"改 greeting.txt","touch_plan":["greeting.txt"],
+  "acceptance":{"cmd":"python3 -c \"print(open('greeting.txt').read().strip())\"","expect":"contains:Hi"}},
+ {"id":"B","goal":"补一条测试","touch_plan":["test_greeting.py"],"requires":["A"],
+  "acceptance":{"cmd":"python3 -m unittest test_greeting -q","expect":"exit0"}}
+]
+JSON
+
+# ① 建树：只声明“谁依赖谁”，不写顺序
+d init demo --goal "把 greeting 从 Hello 改成 Hi，并补一条测试"
+d expand demo root --children "$(cat demo-children.json)"
+
+# ② 它自己算出首波（B 被 A 阻塞）
+d drive demo
+
+# ③ 这就是派给 worker 的全部契约（写面 + 验收命令）
+d brief demo A
+
+# ④ 先交一次**假的**完成：什么都没改就 done
+d start demo A --holder me
+d done demo A
+
+# ⑤ 真把活干了，再 done
+printf 'Hi\n' > greeting.txt
+d done demo A
+
+# ⑥ 依赖自动解除
+d drive demo
+
+# ⑦ 三视图同源（同一投影的不同投影面）
+d board demo
+d graph demo
+
+# ⑧ 关树：先看它要什么（收益验证 + 经验沉淀）
+d close demo
+d context demo root --set '{"closure":"not_applicable: 演示仓，不跑收益验证与沉淀"}'
+d close demo                                    # 逃生口给了具体理由就放行
+d trees
+d doctor                                        # 自检全绿
+```
+
+四件值得看的事：
+
+| 看什么 | 在哪一步 |
+| --- | --- |
+| **顺序由它算**：我只说了 `B requires A`，`drive` 只把 A 放进首波 | ② |
+| **门会拒收假的完成**：没改任何东西就 `done` → 退出码 2，理由逐条列出 | ④ |
+| **证据引擎自算**：`done` 后 `introduced` / `size` / `acceptance` 由引擎采集，不是手抄 | ⑤ |
+| **看板/树/图不是第二份存储**：它们都读同一份投影 | ⑦ |
+
+第 ④ 步的真实输出：
+
+```text
+✗ 门拒收 A：
+  - 验收未通过：exit=0；期望包含 'Hi'
+契约片段：
+{ ... "touch_plan": ["greeting.txt"], "size_budget": 400, ... }
+```
+
+第 ⑤ 步过后，节点证据长这样（`disflow status demo --json` 或直接读 `$DISFLOW_STATE_DIR/state.json`）：
+
+```text
+introduced = ['greeting.txt']      # 只归因本节点开工后**内容真的变了**的文件
+size       = 1 行                   # 相对最后一次提交的净改动
+vacuous    = {}                     # 没有“空洞通过”的门
+```
+
+> `vacuous` 为空表示两道门**真的验到了东西**；若它为 `design_first`/`size_budget`，
+> 说明那些门没东西可验（“门全过” ≠ “门都验了”）——见 `docs/design.md` §7.5。
+
+关树时若直接 `d close demo` 会先被拒——它要求树里有**收益验证**与**经验沉淀**，
+或者树根声明一个带理由的逃生口（`design.md` §7）。上面的第 ⑧ 步把两个分支都走了。
+
+想用它在**真活**上驱动一个循环（我跑过两遍的那个），配方见
+`docs/dev-board.md` §0.1 与 §0.6：`drive` → `brief` → 干活 → `collect` → `done`。
+
 ## 文档
 
 | 文档 | 内容 |
@@ -62,9 +165,13 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 237 passed（零第三方依赖）
+python3 -m unittest discover -s tests -t tests    # 240 passed（零第三方依赖）
 python3 scripts/mutation_check.py                 # 变异测试：24/24（验证测试真的有牙）
 ```
+
+> 上面那段「5 分钟上手」本身也被测试盯着：`tests/test_readme_walkthrough.py` 会
+> **抽取 README 里标记的代码块并真的执行**，再断言本文声明的结果。
+> 改文档时若命令漂了，测试会红——不然“照抄可跑”只是一句声称。
 
 ## 结构
 
