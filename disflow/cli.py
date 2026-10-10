@@ -465,14 +465,37 @@ def cmd_board(engine: Engine, args) -> int:
         print(f"✗ --stage 取值非法：{args.stage!r}（允许：{list(stages)}）", file=sys.stderr)
         return 2
     tree = engine.tree(args.tree)
-    # `closed` 与 `drive`/`host_next` 同源（跨树 `awaits` 的判据），否则看板与派活面会说
-    # 两套「可派」。人读态与 --json 都走 `board_layout`（唯一布局实现）——不许两面分叉。
-    kwargs = {"stages": stages, "closed": engine.closed_trees(), "tree_name": args.tree}
+    # 默认只列「运行中 + 待完成」（用户 2026-10-11：要清晰干净的视图）；`--all` 展开终态。
+    # 空列默认不铺版面（`--all-columns` 铺；`--json` 恒铺 = 机器看事实）；但**事实不丢**：
+    # 表头的「列」摘要把每一列（含折叠掉的空列）都报出来。
+    active_only = not args.all
+    empty_columns = bool(args.all_columns or args.json or args.stage)
+    kwargs = {"stages": stages, "closed": engine.closed_trees(), "tree_name": args.tree,
+              "active_only": active_only, "empty_columns": empty_columns}
     if args.json:
-        _dump(views.board_layout(tree, args.stage, **kwargs))
+        # 机器视图 = **事实全量**：全部列 + 全部状态（不受 --all/--all-columns 影响；要过滤由消费者做）。
+        # 人读态是同一份布局的**渲染**（默认折叠终态/空列）——“同源”指同一实现，不是同一子集。
+        _dump(views.board_layout(tree, args.stage,
+                                 **{**kwargs, "active_only": False, "empty_columns": True}))
         return 0
-    for line in views.board_lines(tree, args.stage, **kwargs):
+    # 摘要要**全部列 × 全部状态**（与默认折叠无关）——同一布局实现，只换两个开关，不另算一套。
+    full = views.board_layout(tree, args.stage,
+                              **{**kwargs, "active_only": False, "empty_columns": True})
+    print(f"══ 看板 {args.tree} ══ {views.truncate_goal(tree.get('goal'), 86)}")
+    print("列 " + " · ".join(f"{c['stage']} {c['done']}/{c['tasks']}" for c in full["columns"]))
+    tally: dict[str, int] = {}
+    for column in full["columns"]:
+        for group in column["groups"]:
+            if group["group"] != "structure":
+                tally[group["label"]] = tally.get(group["label"], 0) + len(group["rows"])
+    folded = "" if (args.all or not tally) else "    （终态折叠：--all 展开）"
+    print("状态 " + (" · ".join(f"{label} {n}" for label, n in tally.items()) or "（无）") + folded)
+    print()
+    body = views.board_lines(tree, args.stage, **kwargs)
+    for line in body:
         print(line)
+    if not body and not args.all:
+        print("（这棵树没有运行中 / 待办的任务 —— 终态与空列请看 --all / --all-columns）")
     return 0
 
 
@@ -1014,7 +1037,13 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("tree")
     node.add_argument("--stage", default=None,
                       help="只显示该阶段列（如 dev；必须在配置的 stages 内，非法列名退出码 2）；"
-                           "省略=全部阶段列（含空列）")
+                           "省略=配置里的全部阶段列")
+    node.add_argument("--all", action="store_true", dest="all",
+                      help="展开终态（✓ 完成 / — 跳过 / ✗ 失败）；默认只列「运行中 + 待完成」"
+                           "（终态用表头一行摘要报数）")
+    node.add_argument("--all-columns", action="store_true",
+                      help="把没有任务的空列也铺成列头（默认只在表头「列」摘要里报 `design 0/0`，"
+                           "不占版面）；`--json` 恒为全列")
     node.add_argument("--json", action="store_true",
                       help="机器可读输出（与人读态同源：同一份布局，含列/分组/父子/深度）")
 

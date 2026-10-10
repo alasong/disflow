@@ -185,8 +185,11 @@ class ViewsTest(DisflowTestCase):
         self.assertEqual(layout["goal"], "树目标：看板=阶段列+树层级")
         self.assertEqual(self._rows(layout, "req")["root"]["goal"], fixture["goal"])
         self.assertEqual(lines[0], "[req] 0/0")
-        self.assertTrue(any("◦ root" in line and fixture["goal"] in line for line in lines),
-                        "[req] 列里必须看见需求本身")
+        # root 容器行只给 `◦ root`（2026-10-11：目标是**表头**的事，列里不再重复同一段长文本）；
+        # 「需求看得见」由 CLI 人读态的表头行 `══ 看板 t ══ <goal>` 承担（见 test_cli_readonly），
+        # `--json` 里 `row["goal"]` 仍是全文（上一行已断言）。
+        self.assertTrue(any(line.rstrip().endswith("◦ root") for line in lines),
+                        "root 以结构行出现（不打 goal，避免与表头重复）")
 
     def test_board_indents_tasks_by_parent_within_the_column(self):
         """列内缩进反映父子：`box → inner → deep` 三层的深度必须是 0/1/2。"""
@@ -293,7 +296,7 @@ class ViewsTest(DisflowTestCase):
             for group in col["groups"]:
                 for row in group["rows"]:
                     indent = "  " * (row["depth"] + 1)
-                    head = f"{indent}{row['mark']} {row['node']}  "
+                    head = f"{indent}{row['mark']} {row['node']}"
                     line = next((x for x in lines if x.startswith(head)), None)
                     self.assertIsNotNone(
                         line, f"{row['node']} 没按列内深度 {row['depth']} 渲染")
@@ -301,8 +304,11 @@ class ViewsTest(DisflowTestCase):
                     if group["group"] in ("done", "skipped"):
                         self.assertNotIn(row["goal"], line,
                                          "终态行默认不打印 goal（完整文本在 --json）")
+                    elif row["kind"] != "task" and not row["parent"]:
+                        self.assertEqual(line.rstrip(), head,
+                                         "root 容器行只给 `◦ root`（目标在表头 / --json）")
                     else:
-                        self.assertEqual(line[len(head):].split("  （")[0], row["goal"],
+                        self.assertEqual(line[len(head):].split("  （")[0].strip(), row["goal"],
                                          "非终态行 goal 原样（截断只对超长目标生效）")
 
     # ── goal 呈现：单一截断助手 + 终态行不打 goal ─────────────────────────

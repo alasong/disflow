@@ -319,30 +319,25 @@ def progress_lines(node, lane, verbose, indent):
 def tree_block(slug, tree, lanes, closed, verbose, active_only=False):
     """一棵树：**逐行复用看板的渲染**（列 / 缩进 / 分组），再就地追加 join 来的实时行。
 
-    `board_lines` 与 `board_layout` 是同一份布局的两种投影（人读态 / 结构化），行序一一对应
-    ——这里按 layout 的列→组→行顺序消费，`next(base)` 取到的就是**看板自己渲染的那一行**。
-    运行视图因此**没有第二套缩进/分列**。`active_only` 同时传给两侧，否则两侧行序会错位。
+    `dviews.board_rows` 是**唯一行序来源**（`kind = column|group|row`）；这里按 `kind` 消费，
+    **不再按位置 `next()`** —— 2026-10-11 实测：看板折叠空列后，按位置的消费方直接
+    `StopIteration`（渲染变了，消费方不该错位）。运行视图因此**没有第二套缩进/分列**。
     """
     cols = _stages()
-    layout = dviews.board_layout(tree, stages=cols, closed=closed, tree_name=slug,
-                                 active_only=active_only)
-    base = iter(dviews.board_lines(tree, stages=cols, closed=closed, tree_name=slug,
-                                   active_only=active_only))
     out = []
-    for column in layout["columns"]:
-        out.append(next(base))                    # 列头
-        for group in column["groups"]:
-            out.append(next(base))                # 组标签
-            for row in group["rows"]:
-                line = next(base)                 # 行（缩进/标记/目标/理由都来自看板）
-                out.append(line)
-                # 续行缩进 = 该行自身的行首空白（不另写一份缩进公式）
-                indent = line[:len(line) - len(line.lstrip())]
-                lane = lanes.get(row["node"])
-                if lane is not None:
-                    out.append(indent + node_annotation(lane))
-                if is_running(row, lane):
-                    out.extend(progress_lines(row, lane, verbose, indent + "  "))
+    for item in dviews.board_rows(tree, stages=cols, closed=closed, tree_name=slug,
+                                  active_only=active_only, empty_columns=verbose):
+        out.append(item["text"])                  # 列头 / 组标签 / 行：全来自看板那一份
+        if item["kind"] != "row":
+            continue
+        line, row = item["text"], item["row"]
+        # 续行缩进 = 该行自身的行首空白（不另写一份缩进公式）
+        indent = line[:len(line) - len(line.lstrip())]
+        lane = lanes.get(row["node"])
+        if lane is not None:
+            out.append(indent + node_annotation(lane))
+        if is_running(row, lane):
+            out.extend(progress_lines(row, lane, verbose, indent + "  "))
     return out
 
 
@@ -396,11 +391,27 @@ def batch_section(runs, keep, parents, node_meta, verbose):
     return out
 
 
-def render(all_, verbose=False, only_active=False):
+def has_active_work(tree):
+    """这棵树有「运行中 / 待办」的**任务**吗 —— 运行视图默认只显示有活的树（用户 2026-10-11）。
+
+    容器不算（它恒 `pending`，会让「空树」永远看起来有活——与 `ready.progress`/`metrics`
+    「容器不量化」同一口径）。
+    """
+    for node in (tree.get("nodes") or {}).values():
+        if (isinstance(node, dict) and node.get("kind") != "container"
+                and node.get("status") in ("pending", "running")):
+            return True
+    return False
+
+
+def render(all_, verbose=False, only_active=False, tree=None, active_trees_only=False):
     """一轮的**完整块**（自带时间戳头，不依赖上一轮）——追加式刷新直接照打。
 
-    `only_active`（**默认 True**；`--full` 关掉它）：只列「运行中 + 待完成」的组（终态组整组隐藏，
-    与看板同源）。次级「派发批次」区默认不显示，`-v` 才展开。
+    `only_active`（**默认 True**；`--all`／`--full` 关掉它）：只列「运行中 + 待完成」的组
+    （终态组整组隐藏，与看板同源）。次级「派发批次」区默认不显示，`-v` 才展开。
+
+    `tree`（`--tree <slug>`）只看那一棵树；`active_trees_only` **只看有活的树**（默认；
+    一棵都没有时每棵树只给一行摘要，不是空白屏）—— 树 : 看板 = 1:1，不分屏叠树。
     """
     proj = load_projection()
     runs = [r for r in (load(d) for d in glob.glob(PAT)) if r]
@@ -429,14 +440,38 @@ def render(all_, verbose=False, only_active=False):
         if isinstance(node, dict) and is_running(node, lanes.get(nid)))
     nrunning = sum(1 for r in keep if r["state"] == "running")
     cols = _stages()
+    # 树 : 看板 = 1:1 ⇒ 默认只看「有活的那棵」，不把 3 棵树叠成一屏。
+    slugs = sorted(trees)
+    note, pre = "", []
+    if tree is not None:
+        if tree in trees:
+            slugs = [tree]
+            note = f" · --tree {tree}"
+        else:
+            slugs = []
+            pre = ["", f"✗ 没有名为 {tree!r} 的树（现有：{', '.join(sorted(trees)) or '（无）'}）"]
+    elif active_trees_only:
+        live = [s for s in slugs if isinstance(trees[s], dict) and has_active_work(trees[s])]
+        if live:
+            slugs = live
+            note = (f" · 只显示有活的 {len(live)} 棵"
+                    "（--all-boards 看全部 · --tree <slug> 指定）")
+        else:
+            slugs = []
+            pre = [""]
+            for s in sorted(trees):
+                t = trees[s]
+                g = dviews.truncate_goal(str(t.get("goal") or "")) if isinstance(t, dict) else ""
+                pre.append(f"▌树 {s}  {g}  （没有运行中 / 待办的任务）")
     out = [f"══ 运行视图 @ {time.strftime('%H:%M:%S')} ══",
            "数据源：disflow 投影（骨架 = 全部节点，布局同看板） + pi 运行目录（实时事实）",
            f"树 {len(trees)} 棵：{', '.join(sorted(trees)) if trees else '（读不到 state.json）'}"
            f" · 列（同看板）：{'|'.join(cols)}"
-             + (" · 默认：只列运行中 + 待完成（--full 看全部状态）" if only_active
-                else " · --full：显示全部状态"),
+             + ((" · 默认：只列运行中 + 待完成（--all 看全部状态）" if only_active
+                 else " · --all：显示全部状态") + note),
            f"在跑 lane {nrunning} 路 · 窗口内 lane {len(keep)} 路 · 静默阈值 10 分钟"
            f" · state dir {state_dir()}"]
+    out.extend(pre)
     if running_nodes == 0:
         out.append("")
         out.append("当前无在跑节点 ⇒ 无实时进展（进展只对在跑节点显示）")
@@ -447,15 +482,15 @@ def render(all_, verbose=False, only_active=False):
     elif not trees:
         out.append("")
         out.append("（state.json 里没有树）")
-    for slug in sorted(trees):
-        tree = trees[slug]
-        if not isinstance(tree, dict) or not isinstance(tree.get("nodes"), dict):
+    for slug in slugs:
+        t = trees[slug]
+        if not isinstance(t, dict) or not isinstance(t.get("nodes"), dict):
             out.append(f"▌树 {slug}  ⚠ 投影节点不是对象（读时容忍：跳过，不猜）")
             continue
-        goal = dviews.truncate_goal(str(tree.get("goal") or ""))
+        goal = dviews.truncate_goal(str(t.get("goal") or ""))
         out.append("")
         out.append(f"▌树 {slug}  {goal}")
-        out.extend(tree_block(slug, tree, lanes, closed, verbose, only_active))
+        out.extend(tree_block(slug, t, lanes, closed, verbose, only_active))
     if verbose:            # 次级「派发批次」区：默认不显示（用户 2026-10-11），`-v` 才展开
         out.extend(batch_section(runs, keep, parents, node_meta, verbose))
     return out
@@ -486,13 +521,13 @@ def leave(*_):
     sys.exit(0)
 
 
-def append_loop(iv, verbose, only_active):
+def append_loop(iv, verbose, only_active, tree=None, active_trees_only=False):
     """**默认刷新模式**：追加式（不用备用屏）——每轮一整个块（自带时间戳头），
     回滚缓冲保留 ⇒ 滞轮/scrollback 可用；块间互不依赖。Ctrl-C → 干净退出。
     """
     try:
         while True:
-            block = render(False, verbose, only_active) + [append_footer(iv)]
+            block = render(False, verbose, only_active, tree, active_trees_only) + [append_footer(iv)]
             sys.stdout.write("\n".join(block) + "\n")
             sys.stdout.flush()
             time.sleep(iv)
@@ -500,7 +535,7 @@ def append_loop(iv, verbose, only_active):
         return 0
 
 
-def screen_loop(iv, verbose, only_active):
+def screen_loop(iv, verbose, only_active, tree=None, active_trees_only=False):
     """显式 `--screen`：备用屏整屏重绘（不闪，代价是**不留回滚**）。"""
     signal.signal(signal.SIGINT, leave)
     signal.signal(signal.SIGTERM, leave)
@@ -515,20 +550,28 @@ def screen_loop(iv, verbose, only_active):
     return 0
 
 
-_FLAGS = ("-v", "--screen", "--active", "--open", "--full")
+_FLAGS = ("-v", "--screen", "--active", "--open", "--full", "--all", "--all-boards")
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     verbose = "-v" in argv
     screen = "--screen" in argv
-    # 默认只列「运行中 + 待完成」——用户 2026-10-11：显示太多、已完成的不必看。
-    # `--full` 恢复「显示全部状态」；`--active/--open` 保留为显式写法（现在等于默认）。
-    only_active = "--full" not in argv
+    # `--all`（别名 `--full`）：展开终态（旧默认）。
+    show_all = "--all" in argv or "--full" in argv
+    only_active = not show_all
+    # `--tree <slug>`：只看这一棵树（树 : 看板 = 1:1；不指定就自动选「有活的那棵」）。
+    tree = None
+    if "--tree" in argv:
+        i = argv.index("--tree")
+        tree = argv[i + 1] if i + 1 < len(argv) else None
+        argv = [a for j, a in enumerate(argv) if j not in (i, i + 1)]
+    # 默认**只看有活的树**（用户 2026-10-11：「怎么分 3 个树展示？树和看板是 1:1 关系啊」）。
+    active_trees_only = tree is None and not show_all and "--all-boards" not in argv
     rest = [a for a in argv if a not in _FLAGS]
     mode = rest[0] if rest else "5"
     if mode in ("once", "all"):
-        print("\n".join(render(mode == "all", verbose, only_active)))
+        print("\n".join(render(mode == "all", verbose, only_active, tree, active_trees_only)))
         return 0
     try:
         iv = float(mode)
@@ -536,11 +579,11 @@ def main(argv=None):
         iv = 5.0
     if not sys.stdout.isatty():
         # 非 TTY（管道 / 重定向）：**零控制序列** —— 打一轮独立块就退（没人会看第二次刷新）。
-        print("\n".join(render(False, verbose, only_active)))
+        print("\n".join(render(False, verbose, only_active, tree, active_trees_only)))
         return 0
     if screen:
-        return screen_loop(iv, verbose, only_active)
-    return append_loop(iv, verbose, only_active)
+        return screen_loop(iv, verbose, only_active, tree, active_trees_only)
+    return append_loop(iv, verbose, only_active, tree, active_trees_only)
 
 
 if __name__ == "__main__":

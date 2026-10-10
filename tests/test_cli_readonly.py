@@ -203,11 +203,18 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         self.assertNotIn("[dev]", only, "--stage 过滤不许泄漏别的列")
 
     def test_board_shows_all_four_flow_columns_even_when_empty(self):
-        """人读态固定列：需求/设计/开发/验证**四列都在**（空列显式 0）；`done` 不是列。"""
+        """四列都在（含空列）；`done` 不是列。默认**空列不铺版面**（干净），
+        但事实不丢 —— 表头「列」摘要照报四列；`--all-columns` 把空列也铺成列头。"""
         self._seed()
         code, out, _err = self._run(["board", "t"])
         self.assertEqual(code, 0)
-        headers = [line for line in out.splitlines() if line.startswith("[")]
+        summary = next(line for line in out.splitlines() if line.startswith("列 "))
+        self.assertEqual(summary, "列 req 0/0 · design 0/0 · dev 0/1 · verify 0/1",
+                         "空列的事实必须看得到（只是不占版面）")
+        self.assertNotIn("[design]", out, "为空且无正文的列默认不铺")
+        code2, out2, _err2 = self._run(["board", "t", "--all-columns"])
+        self.assertEqual(code2, 0)
+        headers = [line for line in out2.splitlines() if line.startswith("[")]
         self.assertEqual(headers, ["[req] 0/0", "[design] 0/0", "[dev] 0/1", "[verify] 0/1"])
 
     def test_board_columns_come_from_the_project_config(self):
@@ -220,16 +227,20 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         self.addCleanup(os.environ.pop, "DISFLOW_CONFIG", None)
         code, out, _err = self._run(["board", "t"])
         self.assertEqual(code, 0)
-        headers = [line for line in out.splitlines() if line.startswith("[")]
-        self.assertEqual(headers[:2], ["[todo] 0/0", "[doing] 0/0"],
-                         "列必须跟着配置走（视图层不另抄一份字面量）")
+        summary = next(line for line in out.splitlines() if line.startswith("列 "))
+        self.assertTrue(summary.startswith("列 todo 0/0 · doing 0/0"),
+                        f"列定义/顺序必须跟着配置走（非规范历史列追加在后）：{summary!r}")
+        code2, out2, _err2 = self._run(["board", "t", "--all-columns"])
+        self.assertEqual(code2, 0)
+        headers = [line for line in out2.splitlines() if line.startswith("[")]
+        self.assertEqual(headers[:2], ["[todo] 0/0", "[doing] 0/0"])
 
     def test_board_empty_legal_column_prints_zero_and_exits_zero(self):
         """合法但**为空**的列：打 `0/0`、退出码 0（空列是事实，不是错误）。"""
         self._seed()
         code, out, _err = self._run(["board", "t", "--stage", "design"])
         self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines(), ["[design] 0/0"])
+        self.assertIn("[design] 0/0", out.splitlines(), "显式选列：空列也照打 0/0")
 
     def test_board_rejects_an_illegal_stage_column(self):
         """非法列名**响亮拒收**（2 = 用法错误，与 argparse 同款）：放行会打出 `[bogus] 0/0`，
@@ -248,7 +259,8 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         code, out, _err = self._run(["board", "t", "--stage", "req"])
         self.assertEqual(code, 0)
         lines = out.splitlines()
-        self.assertEqual(lines[0], "[req] 0/0", "容器不计入任务计数（它不是该列的任务行）")
+        self.assertIn("[req] 0/0", lines, "容器不计入任务计数（它不是该列的任务行）")
+        self.assertTrue(lines[0].startswith("══ 看板 t ══"), "表头第一行 = 看板名 + 树目标")
         self.assertTrue(any("◦ root" in line for line in lines), "root 以结构行出现")
         self.assertIn("只读测试", out, "[req] 列必须打出树自身的目标")
 
@@ -269,8 +281,10 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         for row in rows:
             self.assertIn("parent", row, "运行视图要据此分层：每行必备 parent")
             self.assertIn("depth", row, "运行视图要据此缩进：每行必备 depth")
-        # 同源：人读态的列头与组标签就是这份 layout 的渲染（顺序、文本都对得上）
-        _code, human, _err = self._run(["board", "t"])
+        # 同源：人读态**显式展开**（--all --all-columns）后，列头与组标签就是这份 layout 的渲染
+        # （顺序、文本逐字对得上）；默认折叠是**渲染开关**，不是另一份布局。
+        code2, human, _err = self._run(["board", "t", "--all", "--all-columns"])
+        self.assertEqual(code2, 0)
         self.assertEqual([line for line in human.splitlines() if line.startswith("[")],
                          [col["header"] for col in payload["columns"]])
         labels = [group["label"] for col in payload["columns"] for group in col["groups"]]

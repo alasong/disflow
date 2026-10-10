@@ -3,8 +3,10 @@
 判据（2026-10-11 用户要求改版，见 brief b6-run-view-live）：
 
 1. **骨架 = 全部节点**（含 pending/skipped/failed）：临时 state dir 摆一棵 2 层 + 多阶段的树，
-   运行视图必须打出**四个阶段列（含空列）**与**全部节点**——pending 不许消失（这正是 v6 的
-   病：外层循环是 pi 的 run 目录 ⇒ 一个 pending 都看不见）。
+   运行视图必须打出**全部节点**——pending 不许消失（这正是 v6 的病：外层循环是 pi 的 run 目录
+   ⇒ 一个 pending 都看不见）。**默认只列「运行中 + 待完成」**（2026-10-11 用户：「默认显示
+   running 和 pending，可以选择是否显示 done」）：终态折叠，`--all` 展开；空列不铺版面但在
+   表头「列」摘要里报数。
 2. **布局同源**：列头 / 列内缩进 / 状态分组逐行复用 `disflow.views.board_lines`（本文件断言
    运行视图的输出里出现看板**一模一样**的列头与缩进）——运行视图没有第二套分列/缩进。
 3. **就地标注 lane**：join 键 = lane 名（父 run 的 `childId`）== 节点 id；**没有 lane 的节点照样
@@ -16,7 +18,7 @@
    ① 默认刷新模式 = **追加式**（每轮一整块、带时间戳头、保留回滚），**不出现** `\033[?1049` /
       `\033[2J`；备用屏只能**显式** `--screen`（并写明代价）；**非 TTY 零控制序列**；
    ② `✓ 完成` / `— 跳过` 行默认**不打 goal**（只给 `标记 + id + 状态`）；
-   ③ `--active`（别名 `--open`）只留运行中 + 待完成；**默认不变**；
+   ③ `--active`（别名 `--open`）只留运行中 + 待完成；**现在这就是默认**（`--all`／`--full` 展开）；
    ④ 无在跑节点时**显式打一句**（进展只对在跑节点显示是设计，不是没了）。
 """
 from __future__ import annotations
@@ -92,8 +94,9 @@ class LanesWatchTest(DisflowTestCase):
         with open(os.path.join(self.tmp, "state.json"), "w", encoding="utf-8") as fh:
             json.dump({"trees": trees if trees is not None else {"t": _tree()}}, fh)
 
-    def _render(self, all_=True, only_active=True) -> list[str]:
-        return lanes_watch.render(all_, only_active=only_active)
+    def _render(self, all_=True, only_active=True, tree=None, active_trees_only=False,
+                verbose=False) -> list[str]:
+        return lanes_watch.render(all_, verbose, only_active, tree, active_trees_only)
 
     def _fake_run(self, name, *, run_id, mode, state, children=(), command="", text=""):
         """造一个 pi run 目录（本视图只读 `status.json` / `recovery-descriptor.json` / session）。"""
@@ -162,10 +165,18 @@ class LanesWatchTest(DisflowTestCase):
         self.assertIn("· 待前置", text, "待前置组：wait 缺 ver1")
 
     def test_all_stage_columns_appear_even_when_the_column_is_empty(self):
-        """四列按配置顺序全出（含空列）——列头与 `disflow board` **逐字符相同**。"""
+        """四列按配置顺序全出（含空列）——列头与 `disflow board` **逐字符相同**。
+
+        默认（只列运行中 + 待完成）空列不铺版面（干净），但表头把四列都报出来（事实不丢）；
+        显式 `only_active=False`（= `--all`）时与看板逐字对齐。
+        """
         self._write_state()
-        headers = [line for line in self._render() if line.startswith("[")]
-        self.assertEqual(headers, ["[req] 0/0", "[design] 0/0", "[dev] 1/4", "[verify] 1/3"])
+        self.assertIn("列（同看板）：req|design|dev|verify", self._render()[2])
+        # `-v` = 展开全部（空列也铺；与看板的 `--all-columns` 同一个意思）
+        verbose = [line for line in self._render(verbose=True) if line.startswith("[")]
+        self.assertEqual(verbose, ["[req] 0/0", "[design] 0/0", "[dev] 1/4", "[verify] 1/3"])
+        # 默认：空列不铺版面（事实在表头「列」摘要里已报）
+        self.assertNotIn("[design] 0/0", self._render())
 
     def test_in_column_indent_reflects_parent_child(self):
         """列内缩进反映父子：`dev1` 在列顶层，`sub`（parent=dev1，同列）缩进一层。"""
@@ -361,6 +372,57 @@ class LanesWatchTest(DisflowTestCase):
         plain = self._cli(["once"])
         self.assertNotIn("▌批次", plain, "默认不许出现派发批次区")
         self.assertIn("派发批次", self._cli(["-v", "once"]), "-v 必须展开批次注解")
+
+    # ── 第 5 条：树 : 看板 = 1:1（默认只给有活的树；`--tree` / `--all-boards`）──────
+
+    def _two_trees(self) -> dict:
+        dead = _tree()
+        for node in dead["nodes"].values():
+            if node["kind"] == "task":
+                node["status"] = "done"          # 一棵全终态的「死树」
+        return {"t": _tree(), "dead": dead}
+
+    def test_default_run_view_shows_only_trees_with_active_work(self):
+        """默认只列「有活的树」（用户 2026-10-11：「树和看板是 1:1 关系」）——不把多棵树叠成一屏。"""
+        self._write_state(self._two_trees())
+        text = self._cli(["once"])                 # main 的默认（非 TTY 一轮）
+        self.assertIn("▌树 t", text)
+        self.assertNotIn("▌树 dead", text, "没有运行中/待办的树默认不占版面")
+        both = self._cli(["once", "--all-boards"])
+        self.assertIn("▌树 t", both)
+        self.assertIn("▌树 dead", both, "--all-boards = 不筛树")
+
+    def test_cli_tree_flag_selects_one_tree(self):
+        """`--tree <slug>` 只看那一棵（argv 解析：带值、缺值不许崩、不许当成刷新间隔）。"""
+        self._write_state(self._two_trees())
+        only_dead = self._cli(["once", "--tree", "dead"])
+        self.assertIn("▌树 dead", only_dead)
+        self.assertNotIn("▌树 t", only_dead)
+        self.assertIn("▌树 t", self._cli(["--tree"]), "缺值按默认走（不崩、不当 mode）")
+
+    def test_no_active_tree_gets_one_summary_line_each(self):
+        """一棵树都没活时**不是空白屏**：每棵一行摘要（说清「没有运行中/待办」）。"""
+        self._write_state({"dead": self._two_trees()["dead"]})
+        text = "\n".join(self._render(active_trees_only=True))
+        self.assertIn("▌树 dead", text)
+        self.assertIn("（没有运行中 / 待办的任务）", text)
+
+    def test_unknown_tree_name_is_stated_not_silently_empty(self):
+        """`--tree` 拼错 ⇒ 明说（宽错比不报错更坏）；并把现有树名报出来。"""
+        self._write_state()
+        text = "\n".join(self._render(tree="nope"))
+        self.assertIn("没有名为", text)
+        self.assertIn("t", text, "报错要带上现有树名")
+
+    def test_run_view_rows_are_the_board_rows_byte_for_byte(self):
+        """同一棵树：运行视图的骨架行 = 看板的行（**逐字符**）—— 不许有第二套缩进/分列。"""
+        self._write_state()
+        board = lanes_watch.dviews.board_lines(_tree(), stages=lanes_watch._stages(),
+                                              tree_name="t", active_only=True, empty_columns=False)
+        run = [line for line in self._render()
+               if not line.lstrip().startswith(("▸", "◈", "⌘", "↳"))]
+        for line in board:
+            self.assertIn(line, run, f"看板行在运行视图里逐字符找不到：{line!r}")
 
 
 if __name__ == "__main__":

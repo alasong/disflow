@@ -250,7 +250,7 @@ disflow 是**语言中立**的（NFR-2：核心层零业务词），而「给哪
 
 | 视图 | 命令 | 数据源 | 它答的问题 |
 | --- | --- | --- | --- |
-| **看板（阶段列）** | `$D board <tree> [--stage S] [--json]` | disflow 自己的事件流（**纯 disflow 事实**） | 谁完成 / 谁在跑 / 谁就绪 / 谁被挡；**列** = 需求→设计→开发→验证（四列全出现，空列显式 `0/0`）；**列内**按树层级缩进（容器 = 结构行 `◦`，任务按 `parent`）+ 按状态分组（运行中/可派/待前置/被在跑挡住/完成/跳过/失败）；`--json` 带 `parent`/`depth`；人读态终态行（`✓ 完成`/`— 跳过`）**不打 goal**，其余行 goal 截断到 80 字（`views.truncate_goal` 唯一实现），**完整 goal 只在 `--json`**。布局只有 `views.board_layout` 一处实现 |
+| **看板（阶段列）** | `$D board <tree> [--stage S] [--all] [--all-columns] [--json]` | disflow 自己的事件流（**纯 disflow 事实**） | 谁完成 / 谁在跑 / 谁就绪 / 谁被挡；**列** = 需求→设计→开发→验证（列定义来自配置；**默认只列「运行中 + 待完成」、空列不铺版面**——事实在表头两行报出：`══ 看板 <tree> ══ <树目标>` / `列 req 0/0 · …` / `状态 …`；`--all` 展开终态、`--all-columns` 铺空列；**`--json` 恒为全量事实**（全列 × 全状态））；**列内**按树层级缩进（容器 = 结构行 `◦`，任务按 `parent`）+ 按状态分组（运行中/可派/待前置/被在跑挡住/完成/跳过/失败）；`--json` 带 `parent`/`depth`；人读态终态行（`✓ 完成`/`— 跳过`）**不打 goal**，其余行 goal 截断到 80 字（`views.truncate_goal` 唯一实现），**完整 goal 只在 `--json`**。布局只有 `views.board_layout` 一处实现 |
 | **运行视图** | `.agents/skills/disflow/lanes_watch.sh` | disflow 投影（**骨架**）+ **宿主（pi）的 run 目录**（实时事实，**join**） | **同一棵树的全部节点**（含 pending/skipped/failed），按**与看板同源的布局**（阶段列 + 列内树层级 + 状态分组）列出；在**在跑**节点上就地显示实时进展（`◈` 目标 / `⌘` 最后命令 / `↳` worker 自报进展）；派发批次降为**次级注解区**（排障用）。可用性（2026-10-11 用户当场提）：终态行（`✓ 完成`/`— 跳过`）**不打 goal**（完整文本在 `board --json`）；默认刷新是**追加式**（每轮一整块、带时间戳头、**保留回滚**），备用屏必须显式 `--screen`（不闪，代价是**无回滚**）；**非 TTY（管道/重定向）零控制序列**；**默认只列「运行中 + 待完成」**（`--full` 显示全部状态，含 `✓/—/✗`）；**派发批次次级区默认不显示**（`-v` 才展开）；无在跑节点时**显式打一句**（进展只对在跑节点显示是设计） |
 
 ⚠ **命名只认上面两个**：`done` **不是看板的列**——它是节点**状态**（「收尾没有」），
@@ -261,8 +261,10 @@ lane）是**运行视图**里的一个**派发批次**，**不许**把它叫「�
 sh .agents/skills/disflow/lanes_watch.sh once          # 快照（非 TTY 重定向也不吐控制序列）
 sh .agents/skills/disflow/lanes_watch.sh               # 常驻 5s：**追加式**（保留回滚、可滞轮）
 sh .agents/skills/disflow/lanes_watch.sh --screen      # 常驻 5s：备用屏（不闪，**代价：无回滚**）
-sh .agents/skills/disflow/lanes_watch.sh once          # 默认：只列运行中 + 待完成
-sh .agents/skills/disflow/lanes_watch.sh once --full   # 全部状态（含 ✓/—/✗）
+sh .agents/skills/disflow/lanes_watch.sh once                 # 默认：只列**有活的树** + 只列运行中/待完成
+sh .agents/skills/disflow/lanes_watch.sh once --tree <tree>   # 只看这一棵树（树 : 看板 = 1:1）
+sh .agents/skills/disflow/lanes_watch.sh once --all-boards    # 不筛树（全部树）
+sh .agents/skills/disflow/lanes_watch.sh once --all           # 展开终态（含 ✓/—/✗）
 sh .agents/skills/disflow/lanes_watch.sh all           # 含已过窗口的历史 lane
 ```
 

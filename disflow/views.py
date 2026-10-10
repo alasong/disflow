@@ -147,7 +147,8 @@ def _status_word(group: str) -> str:
 def board_layout(tree: dict, stage: str | None = None,
                  stages: tuple[str, ...] | None = None, *,
                  closed: set[str] | frozenset[str] = frozenset(),
-                 tree_name: str = "", active_only: bool = False) -> dict:
+                 tree_name: str = "", active_only: bool = False,
+                 empty_columns: bool = True) -> dict:
     """看板布局的**唯一实现**：阶段列 + 列内树层级 + 列内状态分组。
 
     **列定义单一来源**：`stages`（省略取 `spec.STAGES`；CLI 传解析后的 `cfg.stages`，
@@ -181,6 +182,12 @@ def board_layout(tree: dict, stage: str | None = None,
     挡住 + 结构行），隐藏 `✓ 完成` / `— 跳过` / `✗ 失败` / 非规范兜底 —— 「只显示运行中的
     和待完成的」。**默认 False，行为不变**；列头计数照旧是全列的口径（隐藏 ≠ 改写事实）。
 
+    **`empty_columns=False`**：**没有任何任务**的列（通常只有 root 容器）不进版面 —— 干净优先
+    （用户 2026-10-11：「我要的是清晰干净的视图」）。**事实不丢**：CLI 的「列」摘要行照报
+    `design 0/0`（与 b2 「空列这个事实要看得到」的裁决不冲突 —— 那条裁决要的是**别看不出**
+    某阶段为空，不是非要铺一行）。`--stage X` 显式选列时不受影响（选了就一定显示）。
+    默认 `True` = 全部列都铺（向后兼容）；`board --json` 恒为 `True`（机器看事实）。
+
     **纯读**：本函数只读投影 + 只做派生计算（`dispatch.drive` 同样不写状态），不落事件。
     """
     columns = tuple(STAGES if stages is None else stages)
@@ -205,6 +212,8 @@ def board_layout(tree: dict, stage: str | None = None,
     for name in order:
         rows = _column_rows(nodes, root, name)
         task_ids = [nid for nid, _depth in rows if nodes[nid].get("kind") == "task"]
+        if not empty_columns and not task_ids and not stage:
+            continue            # 干净优先：没有任务的列（通常只有 root 容器）不占版面
         done = sum(1 for nid in task_ids
                    if str(nodes[nid].get("status")) in ("done", "skipped"))
         note = "  ⚠ 非规范列（不在配置的 stages 内）" if name not in columns else ""
@@ -237,10 +246,55 @@ def board_layout(tree: dict, stage: str | None = None,
             "columns": columns_out}
 
 
+def _row_line(row: dict, group: dict) -> str:
+    """单行的**渲染文本**（看板与宿主运行视图共用；缩进/标记/目标/理由都只在这一处）。"""
+    head = f"{'  ' * (row['depth'] + 1)}{row['mark']} {row['node']}  "
+    is_root_container = row["kind"] != "task" and not row["parent"]
+    if group["group"] in _GOAL_OMITTED_GROUPS:
+        line = head + f"（{_status_word(group['group'])}）"
+    elif is_root_container:
+        line = head.rstrip()
+    else:
+        line = head + truncate_goal(row["goal"])
+    if row["detail"]:
+        line += f"  （{row['detail']}）"
+    return line
+
+
+def board_rows(tree: dict, stage: str | None = None,
+               stages: tuple[str, ...] | None = None, *,
+               closed: set[str] | frozenset[str] = frozenset(),
+               tree_name: str = "", active_only: bool = False,
+               empty_columns: bool = True) -> list[dict]:
+    """布局 → **带类型**的逐行渲染（`kind = column | group | row`）—— **唯一行序来源**。
+
+    `board_lines` 是它的纯文本投影；宿主运行视图按 `kind` 消费（不再按位置 `next()`）。
+    为何要类型（2026-10-11 实测踩到）：折叠空列/空体列后行数变了，按位置取行的消费方
+    直接 `StopIteration` —— 渲染可以变，消费方不该因此错位。
+    """
+    layout = board_layout(tree, stage, stages, closed=closed, tree_name=tree_name,
+                          active_only=active_only, empty_columns=empty_columns)
+    rows: list[dict] = []
+    for column in layout["columns"]:
+        shown = [g for g in column["groups"] if g["rows"]]
+        if active_only and not shown and not empty_columns:
+            # 自动折叠（默认）：空列 / 只有终态行的列不铺（计数已在表头「列」行）；
+            # `--all-columns`（`empty_columns=True`）是**显式要求铺开**，不受此折叠影响。
+            continue
+        rows.append({"kind": "column", "stage": column["stage"], "text": column["header"]})
+        for group in shown:
+            rows.append({"kind": "group", "group": group["group"], "text": group["label"]})
+            for row in group["rows"]:
+                rows.append({"kind": "row", "node": row["node"], "group": group["group"],
+                             "row": row, "text": _row_line(row, group)})
+    return rows
+
+
 def board_lines(tree: dict, stage: str | None = None,
                 stages: tuple[str, ...] | None = None, *,
                 closed: set[str] | frozenset[str] = frozenset(),
-                tree_name: str = "", active_only: bool = False) -> list[str]:
+                tree_name: str = "", active_only: bool = False,
+                empty_columns: bool = True) -> list[str]:
     """人读态看板：把 `board_layout`（唯一布局实现）渲染成行 —— 与 `board --json` **同源**。
 
     行形状：列头 `[<stage>] done/total` → 组标签（如 `▶ 运行中`）→ 行
@@ -249,25 +303,15 @@ def board_lines(tree: dict, stage: str | None = None,
 
     **终态行（`✓ 完成` / `— 跳过`）默认只给 `标记 + id + 状态`，不打印 goal** ——
     一行几百字会把屏幕冲垮；完整目标在 `--json`。其余行的 goal 走 `truncate_goal`
-    （首行、≤80 字、`…` 结尾）。`active_only` 直接透传给布局（隐藏终态组）。
+    （首行、≤80 字、`…` 结尾）。`active_only` / `empty_columns` 直接透传给布局。
+
+    **root 容器行不打 goal**（2026-10-11）：树目标是**表头**的事，`[req]` 再抄一遍就是
+    同一段长文本在屏幕上出现两次（`--json` 里两个字段都在，不丢）。
     """
     lines: list[str] = []
-    layout = board_layout(tree, stage, stages, closed=closed, tree_name=tree_name,
-                          active_only=active_only)
-    for column in layout["columns"]:
-        lines.append(column["header"])
-        for group in column["groups"]:
-            lines.append(group["label"])
-            for row in group["rows"]:
-                head = (f"{'  ' * (row['depth'] + 1)}{row['mark']} "
-                        f"{row['node']}  ")
-                if group["group"] in _GOAL_OMITTED_GROUPS:
-                    line = head + f"（{_status_word(group['group'])}）"
-                else:
-                    line = head + truncate_goal(row["goal"])
-                if row["detail"]:
-                    line += f"  （{row['detail']}）"
-                lines.append(line)
+    for item in board_rows(tree, stage, stages, closed=closed, tree_name=tree_name,
+                           active_only=active_only, empty_columns=empty_columns):
+        lines.append(item["text"])
     return lines
 
 

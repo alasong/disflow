@@ -105,7 +105,7 @@ d doctor                                        # 自检全绿
 人读态**屏幕维度**的两条：
 
 - **终态行不打 goal**：`✓ 完成` / `— 跳过` 行只给 `标记 + id + 状态`（一行几百字没法扫）；其余行
-goal 截断到 80 字（`views.truncate_goal` **唯一实现**）；**完整 goal 在 `board --json`**。
+goal 截断到 80 字（`views.truncate_goal` **唯一实现**）；**完整 goal 在 `board --json`**。**看板默认只列运行中 + 待完成**（终态与空列在表头两行报数，`--all` / `--all-columns` 展开）；运行视图默认只显示**有活的树**（`--tree <slug>` 指定、`--all-boards` 不筛）。
 - **默认刷新不吐控制序列**：`lanes_watch.sh` 默认是**追加式**（每轮一整块、带时间戳头、
 **保留回滚**——滞轮/scrollback 可用）；备用屏必须显式 `--screen`（不闪，**代价是没回滚**）；
 **非 TTY（管道/重定向）零控制序列**；**默认只列「运行中 + 待完成」**（`--full` 显示全部状态）；派发批次注解区默认不显示（`-v` 展开）；
@@ -222,7 +222,8 @@ python3 -m disflow.cli collect demo a --result '{"status":"ok","summary":"…","
 python3 -m disflow.cli done demo a --decl '{"note":"…"}'   # 跑门；无已落盘 collect ⇒ 拒收（--no-result 显式破例）
 
 # 三种视图（同一投影）
-python3 -m disflow.cli board demo          # 按 stage 列 + 列内树层级（--json 带 parent/depth）
+python3 -m disflow.cli board demo          # 按 stage 列 + 列内树层级（默认只列运行中/待完成；
+                                          #   --all 展开终态 · --all-columns 铺空列 · --json 全量事实）
 python3 -m disflow.cli tree demo           # 按 parent
 python3 -m disflow.cli graph demo [--dot]  # 按边
 
@@ -286,7 +287,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 629 passed（零第三方依赖）——收尾全量，保留可用
+python3 -m unittest discover -s tests -t tests    # 634 passed（零第三方依赖）——收尾全量，保留可用
 python3 scripts/test_changed.py                   # 迭代期：只跑改动相关的子集（带「这不是全量」横幅）
 python3 scripts/mutation_check.py                 # 变异测试：64/64（验证测试真的有牙）
 ```

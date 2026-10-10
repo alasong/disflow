@@ -400,7 +400,7 @@ disflow host-next <tree> [--json]
 同一投影的三种渲染，**不各存一份**：
 
 ```text
-disflow board <tree> [--stage S] [--json]   # 看板：按 stage 分列 × 列内树层级 × 状态分组
+disflow board <tree> [--stage S] [--all] [--all-columns] [--json]   # 看板：按 stage 分列 × 列内树层级 × 状态分组
 disflow tree  <tree>                        # 树：按 parent 缩进
 disflow graph <tree> [--dot]                # 图：requires/relates
 ```
@@ -408,12 +408,14 @@ disflow graph <tree> [--dot]                # 图：requires/relates
 **看板布局只有一处实现**（`views.board_layout`，2026-10-11 用户要求「按阶段列出来 + 按树结构的
 类别分层」）：人读态（`board_lines`）与机器态（`board --json`，带 `parent`/`depth`）都是它的渲染。
 宿主侧**运行视图**（`.agents/skills/disflow/lanes_watch.sh`，2026-10-11 改版）以 `state.json` 的
-**全部节点**为骨架，**逐行复用 `board_lines` 的成品行**（列 / 缩进 / 分组一个字符都不自己写），
+**全部节点**为骨架，**逐行复用看板的成品行**（`views.board_rows` = 唯一行序来源，按 `kind` 消费）（列 / 缩进 / 分组一个字符都不自己写），
 再 join 宿主 pi 运行目录的实时事实（join 键：lane 名 = 节点 id），在**在跑**节点上就地显示
 进展（`◈` 目标 / `⌘` 最后命令 / `↳` 自报进展）；「派发批次」降为**次级注解区**（排障用）。
 **数据源分离、布局同源**：看板 = 纯 disflow 事实；运行视图 = disflow 事实 + pi 运行目录；
 区分两个视图的依据是**数据源与刷新节拍**，不是布局——**任何一侧都不许再写一套分列/缩进**
 （同一判据两份实现 ⇒ 两面分叉）。
+
+**看板重设计 v9（2026-10-11 用户：「树和看板是 1:1 关系」「默认显示 running 和 pending，可以选择是否显示 done」「清晰干净」）**：`board` 默认 `active_only=True`（只列运行中 + 待完成）＋空列不铺版面，但**事实不丢** —— 表头报 `══ 看板 <tree> ══ <树目标>` / `列 <stage> d/t · …` / `状态 <组> n · …`；`--all` 展开终态、`--all-columns` 铺空列、`--json` **恒为全量事实**（全列 × 全状态，不受两个开关影响）；root 容器行只给 `◦ root`（树目标在表头，不重复同一段长文本）。运行视图：默认只显示**有活的树**（`has_active_work`，一棵都没有时每棵一行摘要），`--tree <slug>` 指定、`--all-boards` 不筛 —— 树 : 看板 = 1:1，不把多棵树叠成一屏。
 
 运行视图 **v8（2026-10-11 用户当场提的四条可用性修复）**：
 
