@@ -269,6 +269,84 @@ MUTATIONS: list[Mutation] = [
      'print(f"✗ {\'预演会被拒\' if dry else \'门拒收\'} {args.node}：", file=sys.stderr)',
      'print(f"✗ {\'预演会被拒\' if dry else \'门拒收\'} {args.node}：")',
      "test_cli_lifecycle.py"),
+
+    # ── metrics.py：量化层（纯函数、as-of 截断、未估不进分母）────────────────
+    #   ⚠️ metrics 是**纯函数、零时钟**：数值全靠手搓事件序列钉死。以下针脚逐个打掉
+    #      「as-of 截断 / 未估排除 / 非法点数拒绝 / 起点缺失报告」四道守门，每条都必须让
+    #      `test_metrics.py`（或 `test_deadline.py`）变红——否则读数是真空的。
+    ("metrics._done_as_of 不再按 now_ts 截断（未来完工也算数）", "disflow/metrics.py",
+     "    return ts <= cutoff_ts and _day(ts) <= cutoff_day",
+     "    return True",
+     "test_metrics.py"),
+    ("metrics 未估节点被当成 0 进分母（velocity/eta 被凭空抬高）", "disflow/metrics.py",
+     '    return {node["id"]: float(node["points"])\n'
+     '            for node in tasks if node.get("points") is not None}',
+     '    return {node["id"]: float(node["points"] or 0)\n'
+     '            for node in tasks}',
+     "test_metrics.py"),
+    ("validate_points 不再拒 NaN/\u00b1inf（污染之后全部求和）", "disflow/model.py",
+     "    if not math.isfinite(value):",
+     "    if False:",
+     "test_metrics.py"),
+    ("parse_deadline 放弃规范形校验（20250131 被静默收下）", "disflow/metrics.py",
+     "    if parsed.isoformat() != text:",
+     "    if False:",
+     "test_deadline.py"),
+    ("metrics 无起点时不再报 NO_START_REASON（静默 None）", "disflow/metrics.py",
+     '''    if seen and slug not in seen:
+'''
+     '''        return (f"未知 slug：{slug!r}；该事件流里出现过的 slug："
+'''
+     '''                f"{', '.join(sorted(seen))}")
+'''
+     "    return NO_START_REASON",
+     '''    if seen and slug not in seen:
+'''
+     '''        return (f"未知 slug：{slug!r}；该事件流里出现过的 slug："
+'''
+     '''                f"{', '.join(sorted(seen))}")
+'''
+     "    return None",
+     "test_metrics.py"),
+
+    # ── worktree.py：每节点隔离（reap 纯计划、判据 fail-closed）────────────────
+    #   ⚠️ 本模块历史上所有阻断级缺陷都落在**删除执行**这条线；下面每条针脚都必须让
+    #      `test_worktree.py` 变红，证明那些危险状态真的被测试守住（尤其 reap 无副作用）。
+    ("worktree 分支删除退化为 -D 强删（未合并提交不可达）", "disflow/worktree.py",
+     '    return ["git", "-C", repo, "branch", "-d", branch]',
+     '    return ["git", "-C", repo, "branch", "-D", branch]',
+     "test_worktree.py"),
+    ("worktree 不再把 ignored 文件当拒绝理由（静默丢失）", "disflow/worktree.py",
+     '    for lost in ignored:\n        reasons.append(f"ignored:{lost}")',
+     '    for lost in ignored:\n        pass',
+     "test_worktree.py"),
+    ("worktree safe_to_drop 不再 fail-closed（恒 True）", "disflow/worktree.py",
+     "    safe = not reasons",
+     "    safe = True",
+     "test_worktree.py"),
+    ("worktree residual 绕过 _plan_entry 单一漏斗（判据被架空）", "disflow/worktree.py",
+     '        residual_plan.append(_plan_entry(\n'
+     "            spec, tree, nid, repo,\n"
+     '            path=path_for(spec, tree, nid), branch=res["branch"],\n'
+     '            status=res["status"], remove_cmd=None))',
+     '        residual_plan.append({\n'
+     '            "node": nid, "path": path_for(spec, tree, nid),\n'
+     '            "branch": res["branch"], "status": res["status"],\n'
+     '            "head": res.get("tip"), "reasons": [], "safe_to_drop": True,\n'
+     '            "remove_cmd": None,\n'
+     '            "branch_cmd": _branch_delete_cmd(repo, res["branch"])})',
+     "test_worktree.py"),
+    ("worktree _inspect 对不可判定探针静默放行（不留 unreadable-*）", "disflow/worktree.py",
+     '        if reached is None:\n            reasons.append(f"unreadable-refs:{head[:12]}")',
+     "        if reached is None:\n            pass",
+     "test_worktree.py"),
+    ("worktree reap 混入执行型副作用（真删分支，不再是纯计划）", "disflow/worktree.py",
+     "    entries = leaks_plan + residual_plan",
+     '    for _entry in leaks_plan + residual_plan:\n'
+     '        subprocess.run(["git", "-C", repo, "branch", "-D", _entry["branch"]],\n'
+     "                       capture_output=True, text=True, check=False)\n"
+     "    entries = leaks_plan + residual_plan",
+     "test_worktree.py"),
 ]
 
 
