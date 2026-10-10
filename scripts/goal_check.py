@@ -48,10 +48,28 @@ def _grep(pattern: str, *paths: str) -> tuple[int, str]:
     有 4 行，于是「命中 4 处」—— P 类断言因非空而失败、P8 类因行数够而**真空通过**。
     宽错比不报错更坏：它同时扫出假红与假绿。
     """
+    _reject_unreliable_regex(pattern)
     rc, out = _run(["git", "grep", "-n", "-E", pattern, "--", *paths])
     if rc >= 2:
         raise RuntimeError(f"git grep 自身失败（rc={rc}）：{out.strip()[:200]}")
     return rc, out
+
+
+# 在本机 `git grep -E`（POSIX ERE，BSD regex）下**匹配不到任何东西**的转义。
+# 为何要硬拦：这类转义不报错，只静默返空 —— 而空命中在本脚本里通常意味着「本项通过」。
+# 实测：`\bcontains\b` 在真实已跟踪文件上命中 0（同一批文件用 `contains` 命中 3 个），
+# 且把 `contains` 注入 disflow/core.py 后 P3 依旧 PASS —— 即 p3 曾经是**真空判决**。
+# 这是本会话第四次「通过是空的」，故不靠「下次注意」，靠构造上不可能（写了即报错）。
+_UNRELIABLE_ESCAPES = (r"\b", r"\s", r"\w", r"\d", r"\S", r"\W", r"\D", r"\B")
+
+
+def _reject_unreliable_regex(pattern: str) -> None:
+    """拦下在本环境不可靠的转义 —— 否则会造出「永远通过」的真空判据。"""
+    bad = [esc for esc in _UNRELIABLE_ESCAPES if esc in pattern]
+    if bad:
+        raise RuntimeError(
+            f"判据用了本机不可靠的转义 {bad}（POSIX ERE 不支持，会静默匹配不到 → 真空判据）："
+            f"pattern={pattern!r}。改用字面量或 POSIX 字符类")
 
 
 def _py_sources() -> list[str]:
@@ -93,9 +111,16 @@ def p2_single_machine() -> tuple[bool, str]:
 
 
 def p3_no_contains_edge() -> tuple[bool, str]:
-    """P3 树/图混用：不得有第二套层级表达（contains 边）。"""
-    code, hits = _grep(r"\bcontains\b", *(_py_sources()))
-    return not hits.strip(), f"'contains' 在 disflow/ 命中 {len(hits.splitlines())} 处"
+    """P3 树/图混用：不得有第二套层级表达（contains 边）。
+
+    探针踩过的坑（两道）：① 初版用带词边界的 `contains` 正则 —— 在本机 `git grep -E`（POSIX ERE）下
+    **一条也不命中**，于是长期真空通过（把 contains 注入 core.py 也照样 PASS）；现已由
+    `_reject_unreliable_regex` 在 `_grep` 里硬拦同类转义。② 改成 `contains:` 后又**过宽**——
+    命中了 `gates.py` 里 `acceptance.expect` 的 `contains:` 词表（那是验收匹配器，不是层级边），
+    属假红。故只留**引号字面量**：`contains` 作为边名/字段名时一定带引号。
+    """
+    code, hits = _grep(r"[\"']contains[\"']", *(_py_sources()))
+    return not hits.strip(), f"contains（作边名/字段名）在 disflow/ 命中 {len(hits.splitlines())} 处"
 
 
 def p4_no_daemon() -> tuple[bool, str]:
