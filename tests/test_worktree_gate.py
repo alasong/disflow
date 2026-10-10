@@ -17,8 +17,13 @@
   - **A3**：worktree 里改**并提交** ⇒ 门仍看到（`git status` 为空，靠 `base_sha` 的
     已提交改动并集看见）——覆盖「改了什么」判据必须扩；
   - **A4**：无 worktree 的节点行为逐字节不变（回归）；
-  - **fail-closed**：开工基线不在门目录里（start 时无 worktree、done 时有）⇒ 响亮拒收，
-    报错给出 `disflow reopen …` 补救；
+  - **fail-closed（顺序错）**：开工基线不在门目录里（start 时无 worktree、done 时有）⇒
+    响亮拒收，报错给出 `disflow reopen …` 补救；
+  - **fail-closed（对称化）**：start 记录有 worktree，done 前整个 worktree 被删（reap/手工）⇒
+    也从**记录**判出、响亮拒收——不能从现状反推（现状说「没有 worktree」会把整段检查跳过，
+    门退回主工作区 ⇒ 又一次空洞通过）；
+  - **路径归一**：state_dir 与进程侧符号链接前缀不同形（`/private/var/…` 与 `/var/…`）
+    ⇒ 同一目录，**不得**误拒（假红）；
   - **brief / collect 的 worktree 面**：brief 给绝对路径 + 分支 + 「不是仓根」说明；
     collect 拒收越出 worktree 的自报 changed_files。
 
@@ -27,7 +32,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import tempfile
 import unittest
 
 from base import DisflowTestCase, acceptance, git_repo, touch
@@ -64,6 +71,60 @@ class WorktreeGateTest(DisflowTestCase):
     def _worktree(self, node_id: str) -> str:
         worktree.apply(SPEC, "t", self.repo, nodes=[node_id])
         return worktree.path_for(SPEC, "t", node_id)
+
+    # ── A1′：工作区在 done 之前被删 ⇒ 必须 fail-closed（第一判据对称化）──
+
+    def test_a1_vanished_worktree_is_rejected(self):
+        """start 记录了 worktree，done 前整个 worktree 被删（reap/手工）⇒ done 必须拒收。
+
+        修前：`_gate_cwd` 退回仓根 ⇒ in_worktree=False ⇒ 整段 fail-closed 被跳过；base_sha 也
+        变 None ⇒ 门退回主工作区比对 ⇒ 又一次空洞通过（done exit=0，节点被标记 done）。
+        """
+        self._node("a", acceptance={"cmd": "test -f OLD.txt", "expect": "exit0"},
+                   touch_plan=["OLD.txt"])
+        wpath = self._worktree("a")
+        self.engine.start("t", "a", "w")
+        self.assertTrue(self.engine.tree("t")["nodes"]["a"]["workspace"]["worktree"])
+
+        os.remove(os.path.join(wpath, "OLD.txt"))
+        commit(wpath, "delete OLD.txt")
+        shutil.rmtree(wpath)                       # 整个工作区消失（reap / 手工删）
+
+        with self.assertRaises(EngineError) as ctx:
+            self.engine.done("t", "a")
+        message = str(ctx.exception)
+        self.assertIn("开工工作区已不存在", message)
+        self.assertIn("disflow worktree apply t", message)
+        self.assertIn("disflow reopen t", message)
+        # 拒收 = 不落 node.done：节点仍 running，没被静默标记完成
+        self.assertEqual(self.engine.tree("t")["nodes"]["a"]["status"], "running")
+
+    def test_a1_symlinked_state_dir_text_is_not_a_false_reject(self):
+        """两侧路径**文本不同但 realpath 相同**（state_dir 与进程侧符号链接前缀不同形）
+        ⇒ 同一目录，done 必须**不**误拒（假红）。
+        """
+        self._node("a", acceptance=acceptance("ok"), touch_plan=["README.md"])
+        link_parent = tempfile.mkdtemp(prefix="disflow-link-")
+        self.addCleanup(shutil.rmtree, link_parent, ignore_errors=True)
+        link = os.path.join(link_parent, "state")
+        os.symlink(self.tmp, link)                 # link/… 与 self.tmp/… 是同一目录
+        self.addCleanup(os.environ.__setitem__, "DISFLOW_STATE_DIR", self.tmp)
+
+        os.environ["DISFLOW_STATE_DIR"] = link     # start 走符号链接文本
+        self._worktree("a")
+        self.engine.start("t", "a", "w")
+        recorded = self.engine.tree("t")["nodes"]["a"]["workspace"]["cwd"]
+
+        os.environ["DISFLOW_STATE_DIR"] = self.tmp  # done 走另一文本、同一 realpath
+        now = os.path.join(self.tmp, "worktrees", "t", "a")
+        # 前置：两侧文本确实不同，否则本测试没测到点
+        self.assertNotEqual(recorded, now)
+        self.assertEqual(os.path.realpath(recorded), os.path.realpath(now))
+
+        touch(os.path.join(now, "README.md"), "changed\n")
+        self.engine.done("t", "a")                 # 修前会在此误拒（假红）
+        evidence = self.engine.tree("t")["nodes"]["a"]["evidence"]
+        self.assertEqual(evidence["introduced"], ["README.md"])
 
     # ── A1：反例转正（第一判据）──────────────────────────────────────────
 
