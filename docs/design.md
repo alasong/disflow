@@ -563,6 +563,31 @@ children 声明里直接给，与 `require`/`relate`/`produce`/`consume` 动词�
 > 对作者来说，“作用域门没验到东西”通常意味着**本节点没产生可检测的改动**——
 > 这本身就是个值得看的信号。
 
+### 7.6 看板列的**当口改动**：`stage`
+
+`stage`（看板列）原本只在 `expand` 建节点与 mgt 导入时写一次——建树之后**改不了**。
+这与 §7.2 的 `touch_plan` 是**同一个缺口形状**（建树后不可改，后由 `rescope` 补上）。
+
+**为什么这是真问题**（不只是“不方便”）：
+
+- §4 要求「看板 = 按 stage 分组/过滤**同一棵树**的投影」「三种视图，一份事实源」。
+  当节点的事实列与看板列不符而**没有合法路径**改，人就只能去改 `state.json`——
+  而它是**投影**、会被 `rebuild` 覆盖 ⇒ **违反「事件才是真相」**。
+- 本仓自己的先例把 `E1 收益验证` / `S1 经验沉淀` 放在 **[verify] 列**；树里却只能留 `dev`，
+  于是看板列与事实不符，且无从修正。
+
+`disflow stage <tree> <node> <stage> --reason <why> [--holder H]`：
+
+| 裁剪 | 判据 | 为何 |
+| --- | --- | --- |
+| **写时闭集校验** | 取值必须在配置的 `stages` 内（与 `expand` 的 `stage`/`role` 同一套 `_validate_stage`） | 非法值**响亮拒收**，绝不静默忽略成默认列（静默忽略正是本动词要消灭的“列与事实不符”） |
+| **落事件 + 记理由 + 记谁改的** | `node.stage` 事件；`stage_log` 累进 `{from,to,reason,holder}` | 改列必须可审计、可重放——与 `rescope_log`/`reopen_log` 同形 |
+| **收尾态拒收** | `done`/`skipped`/`failed`（`_STAGE_FROZEN`）不可改 | 与「终态不可重开」一致：收尾记录是历史，改列=改写历史。要改先把节点放回活态（failed 走 `retry`） |
+| **不碰调度** | `ready`/`drive`/波次/`is_stuck` 改前改后**逐字节一致** | `stage` 是**视图列**，不是调度边；否则改列会变成隐形的调度阀门（`tests/test_stage_change.py` 钉住） |
+
+投影只赋值、不校验取值（校验在写时）——与 `tree.deadline` 同一分界：reducer 一依赖配置，
+事件流就不可重放（§9.2 边界二）。不带 `--dry-run`：守卫只做闭集/状态校验，不跑门（§7.3）。
+
 ---
 
 ## 8. 角色与阶段（修 mgt 的 P7）
@@ -570,6 +595,7 @@ children 声明里直接给，与 `require`/`relate`/`produce`/`consume` 动词�
 - **stage** = 看板列（流程位置）：req → design → dev → verify → done。
 - **role** = 负责方（dev/qa/pm）：**与 stage 独立**。
 - **审批/验证是节点**：例如 `stage=verify, role=qa` 的节点消费 `dev` 节点的产出。
+- **改列**：`disflow stage <tree> <node> <stage> --reason <why>`（建树后能改列；写时闭集校验 + 留痕，见 §7.6）。
 
 这样：
 
@@ -601,6 +627,7 @@ disflow relate <tree> <node> <node>                  # 建关系（参考，不�
 disflow unrelate <tree> <node> <node>                # 删关系（与 relate 故意不对称，§7.3）
 disflow produce/consume <tree> <node> <name>
 disflow context <tree> <node> --set '<json>'       # 合并 context（根用声明逃生口）
+disflow stage <tree> <node> <stage> --reason <why> [--holder H]  # 改看板列（写时闭集校验，§7.6）
 disflow rescope <tree> <node> --touch '<json>' --reason <why> [--dry-run]  # 改写面声明（§7.2）
 disflow start <tree> <node> [--holder H] [--ttl N] [--dry-run]
 disflow collect <tree> <node> --result '<json>'    # 校验结果契约，不写 done
@@ -626,7 +653,7 @@ disflow import mgt <path> --tree <T>               # 迁移（§10）
 disflow doctor                                     # 自检
 ```
 
-> 共 34 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
+> 共 36 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
 
 ### 9.1 边界：`apply` 执行、`reap` 只计划
 

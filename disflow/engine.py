@@ -38,6 +38,13 @@ def _make_lease(holder: str, ttl: int) -> dict:
     }
 
 
+# 收尾态：`stage` 不可改（与「终态不可重开」一致）。
+# `failed` 也在此列——`core.TERMINAL` 只含 done/skipped，但 failed 已是**停下的**节点
+# （见 `worktree.RECLAIMABLE` = TERMINAL + ("failed",)），在收尾记录上悄悄改列同样是
+# 改写历史；要改先把节点放回活态（failed 走 `retry`），别在残局上空手改视图。
+_STAGE_FROZEN: tuple[str, ...] = ("done", "skipped", "failed")
+
+
 # 提问纪律（`host-next` 的 brief 片段里写明）：worker 的提问天然走**宿主通道**
 # （pi 里即 `contact_supervisor`），而该通道不进 disflow 的事件流 ⇒ 树上看不到这次提问、
 # 追溯缺一块。故**两条都要做**：走宿主通道提问，**且**在 `collect` 的结果里把 `status` 置
@@ -182,6 +189,18 @@ class Engine:
                            prepare=lambda _: {"deadline": parse_deadline(value)})
 
     # ── 节点与图 ──────────────────────────────────────────────────────────
+
+    def _validate_stage(self, node_id: str, stage: object) -> None:
+        """`stage` 取值校验——**写时**，用解析后的配置（闭集）。
+
+        判据与 `_validate_vocabulary` 对 `stage` 的那一条**同款同形**：取值必须在
+        `cfg.stages` 内，否则响亮拒收并报出允许的取值。`set_stage`（改列）与 `expand`
+        （建节点）必须用同一套判据，否则错别字能绕过改列那道口子（建时拦得住、改时放进来）。
+        """
+        if str(stage) not in self.cfg.stages:
+            raise EngineError(
+                f"{node_id}: stage 取值非法：{stage!r}（允许：{list(self.cfg.stages)}）"
+                "——自定义看板列请写进 disflow.json 的 \"stages\"")
 
     def _validate_vocabulary(self, children: list[dict]) -> None:
         """`stage` / `role` 取值校验——**写时**，用解析后的配置。
@@ -534,6 +553,49 @@ class Engine:
         return self._write("node.context", tree=tree, node=node,
                            guard=lambda t: self._need(t, node),
                            prepare=lambda _: {"context": context})
+
+    def set_stage(self, tree: str, node: str, stage: str, *,
+                  reason: str = "", holder: str = "") -> dict:
+        """改某节点的看板列（`stage`）——与 `rescope` 同形状的「建好之后能改」补口。
+
+        **为何需要**：`stage` 只在建节点（`expand`）与 mgt 导入时写一次，34 个动词里没有
+        改它的。而设计 §4 要求「看板 = 按 stage 分组/过滤**同一棵树**的投影」「三种视图，
+        一份事实源」——当节点的事实列与看板列不符而**没有合法路径**改，人就只能去改
+        `state.json`，而它是投影、会被 `rebuild` 覆盖 ⇒ **违反「事件才是真相」**。形状与
+        当年 `touch_plan` 一样（建树后不可改，后由 `rescope` 补上）。
+
+        **三条裁剪**（缺一就退化成新的机制缺口）：
+
+        - **写时闭集校验**：取值必须在配置的 `stages` 内——与 `expand` 对 `stage`/`role`
+          同一套 `_validate_stage`。非法值**响亮拒收**，绝不静默忽略、也绝不静默改成默认列
+          （静默忽略正是本动词要消灭的那个“看板列与事实不符”）。
+        - **落事件 + 记理由 + 记谁改的**：`node.stage` 是新 kind；理由与 holder 累进
+          `stage_log`。投影只赋值、不校验（校验在写时，保事件流可重放）。
+        - **收尾态拒收**：`done`/`skipped`/`failed`（`_STAGE_FROZEN`）不可改列——与
+          「终态不可重开」一致：收尾记录是历史，改列等于改写历史；要改先把节点放回活态
+          （failed 走 `retry`）。
+        - **不碰调度**：`stage` 是**视图列**，不是调度边。本动词只写 `stage` 一个字段，
+          `ready`/`drive`/波次/`is_stuck` 逐字节不变（`tests/test_stage_change.py` 钉住）。
+
+        不带 `--dry-run`：守卫只做闭集/状态校验，不跑门（与 `require`/`unrequire`/`consume`
+        同款；厂内规则见 `docs/design.md` §7.3）。
+        """
+        if not str(reason or "").strip():
+            raise EngineError("stage 必须给 --reason：为何改列（记入 stage_log，可审计）")
+
+        def guard(t: dict) -> None:
+            item = self._need(t, node)
+            status = str(item.get("status", "pending"))
+            if status in _STAGE_FROZEN:
+                raise EngineError(
+                    f"{node} 状态为 {status}，不可改 stage：终态不可重开"
+                    f"（收尾态 {_STAGE_FROZEN} 是历史记录，改列等于改写历史）。\n"
+                    f"  要改先 reopen：failed 可 `disflow retry {tree} {node}` 放回 pending 再改；"
+                    "done/skipped 无重开路径，确需调整请另起节点。")
+            self._validate_stage(node, stage)
+        return self._write("node.stage", tree=tree, node=node, guard=guard,
+                           prepare=lambda _: {"stage": str(stage), "reason": reason,
+                                              "holder": holder})
 
     def rescope(self, tree: str, node: str, touch: list[str], reason: str,
                 dry_run: bool = False) -> dict:
