@@ -75,8 +75,8 @@ def run_acceptance(acceptance: dict | None, cwd: str,
 def head_sha(cwd: str, cfg: Config = DEFAULTS) -> str | None:
     """当前 HEAD 的 sha；非 git 仓 / 尚无提交 / 命令失败 → None（不抛、不假装）。
 
-    `start` 时记下它，`done` 时据此取「已提交」的改动——worktree 里的 worker 可能已
-    `git commit`，此时只读 `git status` 是空的。"""
+    `start` 时记下它，`done` 时据此取「已提交」的改动——worker（无论在 worktree 里还是
+    原地派发）都可能已 `git commit`，此时只读 `git status` 是空的。"""
     try:
         proc = subprocess.run(["git", "-C", cwd, "rev-parse", "HEAD"],
                               capture_output=True, text=True, timeout=cfg.git_timeout)
@@ -105,9 +105,10 @@ def git_changed_files(cwd: str, cfg: Config = DEFAULTS, *,
                       base_sha: str | None = None) -> list[str] | None:
     """工作区改动文件（含未跟踪）。非 git 仓返回 None（不假装有证据）。
 
-    `base_sha` 给定时并上 `git diff --name-only <sha>`（**已提交**的改动）：worktree 里的
-    worker 可能把活干完就 `git commit`，此时 `git status --porcelain` 是空的——不并这一项
-    ⇒ 提交型 worker 的改动集永远为空 ⇒ 门空洞通过（fail-open）。`base_sha` 是 `start` 记的 HEAD。
+    `base_sha` 给定时并上 `git diff --name-only <sha>`（**已提交**的改动）：worker（无论在
+    worktree 里还是原地派发）都可能把活干完就 `git commit`，此时 `git status --porcelain`
+    是空的——不并这一项 ⇒ 提交型 worker 的改动集永远为空 ⇒ 门空洞通过（fail-open）。
+    `base_sha` 是 `start` 记的 HEAD。
     """
     try:
         probe = subprocess.run(["git", "-C", cwd, "rev-parse", "--is-inside-work-tree"],
