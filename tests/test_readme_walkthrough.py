@@ -94,6 +94,20 @@ class ReadmeWalkthroughTest(DisflowTestCase):
         assert heading is not None
         self.assertLess(heading, 12, "上手一节必须在最前面（前 12 行内出现）")
 
+    def test_host_loop_recipe_carries_start_and_the_commit_rule(self):
+        """README 的宿主循环配方不能漏 `start`，也不能漏「worker 不自己提交」。
+
+        配方漏 start 就没开工基线（门在空基线上跑）；漏提交纪律，worker 自提交后
+        工作区干净 ⇒ 门看不见改动（见 `.agents/skills/disflow/SKILL.md` §3/§5）。
+        """
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertRegex(
+            text,
+            r"drive[^\n]*→[^\n]*brief[^\n]*→[^\n]*start[^\n]*→[^\n]*collect[^\n]*→[^\n]*done",
+            "README 的宿主循环配方必须含 start（drive→brief→start→…→done）")
+        self.assertIn("worker 不许自己 `git commit`", text,
+                      "README 必须同步「worker 不自己提交」这条硬纪律")
+
 
 if __name__ == "__main__":
     unittest.main()

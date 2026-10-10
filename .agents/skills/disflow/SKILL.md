@@ -50,20 +50,21 @@ $D expand <tree> root --children '[
 
 `requires` 是唯一的调度边；`relates` 是信息边；跨树的依赖用 `awaits: ["<别的树>"]`（等那棵树 `closed`）。
 
-## 2 宿主循环（每轮六步）
+## 2 宿主循环（每轮七步）
 
 ```bash
 $D drive <tree> --json        # ① 读 ready_wave / blocked / waves / stuck —— 该派谁
 $D brief <tree> <node>        # ② 这就是要交给 worker 的**全部**输入
-#  ③ 派：subagents_enable 后，用 subagent 工具起一个 worker，
+$D start <tree> <node> --holder <你>   # ③ 领租约 + **拍开工基线**（必须在 worker 动手前）
+#  ④ 派：subagents_enable 后，用 subagent 工具起一个 worker，
 #     task = 上面那份 brief 的 JSON（**原样给**，别自己改写或补背景）
-#  ④ worker 干活：只改 touch_plan 里声明的路径
+#  ⑤ worker 干活：只改 touch_plan 里声明的路径，**不 commit**（宿主统一提交，见 §3）
 $D collect <tree> <node> --result '{"status":"ok","summary":"…","changed_files":["greeting.txt"]}'
-$D done <tree> <node>         # ⑤ 引擎自算证据 + 跑门；拒收会逐条列缺什么
-#  ⑥ 回到 ①
+$D done <tree> <node>         # ⑥ 引擎自算证据 + 跑门；拒收会逐条列缺什么
+#  ⑦ 回到 ①
 ```
 
-**为什么 ③ 必须用 fresh context**：brief 里已经有 goal + 祖先链注入的 `context` + 前置产出摘要。
+**为什么 ④ 必须用 fresh context**：brief 里已经有 goal + 祖先链注入的 `context` + 前置产出摘要。
 worker **不需要**知道整棵树——这是整棵树的上下文继承在替他做减法。把当前会话的历史塞给它，
 等于把 disflow 唯一的收益（每任务干净上下文）扔掉。
 
@@ -85,7 +86,7 @@ worker **不需要**知道整棵树——这是整棵树的上下文继承在替
   "done_cmd":  "disflow done d a --decl '{\"evidence\": …}'" }
 ```
 
-三条要点：
+四条要点：
 
 1. **`collect --result` 是 JSON，三个必填字段**：`status` `summary` `changed_files`。
    `status` 只能是 `ok` / `failed` / **`blocked`**。
@@ -93,6 +94,12 @@ worker **不需要**知道整棵树——这是整棵树的上下文继承在替
    **不要自己拍板改范围**（范围是宿主定的）。宿主读到 `blocked` 后再决定（`rescope` / `unrequire` / 改 goal）。
    `blocked` 不是完成：`collect` **不写 done**。
 3. **`done_cmd` 在 brief 里**——worker 收尾时照抄，不要自己拼。
+4. **worker 不许自己 `git commit`——宿主统一提交。** worker 只管把文件改到工作区（未提交）。
+   实测（原地派发，无 worktree）：worker 自己 commit ⇒ 提交后工作区干净，而门的归因只读
+   `git status`（无 worktree 时 `base_sha=None`，不看已提交改动）⇒ `introduced=[]`、
+   `vacuous=[design_first, size_budget]`、**exit 0**——门彻底看不见改动；对照：不 commit ⇒
+   `introduced=['f.txt']`、`vacuous={}`。worktree 场景虽会记 `head_sha`、看得见已提交改动，
+   但 `size_budget` 仍以 `HEAD` 为基准而空转（实测 `diff_size` 为 0 行）——**别依赖这条兜底**。
 
 ## 4 收尾
 
@@ -118,6 +125,11 @@ $D doctor              # 自检：投影漂移 / 成环 / 悬空引用 / 租约�
   所以「没改任何东西就 done」**不会**被拦——它会 exit 0 并警告。门拦的是**验收不匹配**。
   看到这个警告就别宣称「门都验了」。
 - **`done` 前必须真改 `touch_plan` 里的文件**，否则 `introduced` 为空、规模门空转。
+- **每轮先 `start`，否则就没有开工基线**：`start` 既领租约也拍基线（开工那一刻的脏文件 → 内容指纹），
+  而 `collect`+`done` **不 start 也能跑**——门于是在**空基线**上跑：开工前已脏的文件会被算成
+  本节点引入的改动（实测：先留一个未跟踪的 `old_dirty.txt` ⇒ `done` exit 2，理由
+  「改动超出 touch_plan：['old_dirty.txt']」）；真没改东西时 `introduced=[]` ⇒ `⚠️ 门空洞通过`、exit 0。
+  所以每轮派活前都先 `start`。
 - **`--dry-run`**（`start`/`done`/`close`/`drive`）：门照跑、不落事件。想在派活前确认「能不能过」就用它。
 - `--json` 只在 `drive` / `status` / `metrics` / `worktree` 上有（`trees` 没有）。
 - `--help` 里有 14 个选项没写说明（如 `--result` 要 JSON）——**以本文件为准**。
