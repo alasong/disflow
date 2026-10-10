@@ -254,11 +254,11 @@ def cmd_graph(engine: Engine, args) -> int:
 
 def cmd_import(engine: Engine, args) -> int:
     if args.what != "mgt":
-        print(f"不支持导入源：{args.what}（当前仅 mgt）", file=sys.stderr)
+        print(f"✗ 不支持导入源：{args.what}（当前仅 mgt）", file=sys.stderr)
         return 1
     mgt = load_mgt(args.path)
     if not mgt["todos"]:
-        print(f"未找到 mgt 状态：{args.path}/.fat/**/state.json", file=sys.stderr)
+        print(f"✗ 未找到 mgt 状态：{args.path}/.fat/**/state.json", file=sys.stderr)
         return 1
     stats = apply_import(engine, args.tree, build_import(mgt))
     _dump(stats)
