@@ -8,7 +8,7 @@
 | --- | --- |
 | `docs/requirements.md` | 需求 v0.1：mgt 复盘 + 29 条可验收 FR/NFR |
 | `docs/design.md` | 设计 v0.1：数据模型、`ready()`、分发器、看板、门 |
-| `docs/dev-board.md` | **开发看板**（16/17，仅 PM1 审批未做） |
+| `docs/dev-board.md` | **开发看板**（17/17 完成） |
 | `docs/v0.2-backlog.md` | v0.2 候选**存档**（停放，非承诺：每项写明触发条件） |
 | `docs/design-dispatch-tree-graph.md` | 早期讨论稿（历史） |
 
@@ -90,7 +90,10 @@ scripts/          # seed_dev_board.py
 
 ## 状态
 
-v0.1 完成（16/17，仅 PM1 审批未做）：103 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、五道门（acceptance/design_first/size_budget/tree_closure/**tree_coverage**）、**多块板**（多树作用域隔离 + 跨树 `awaits` 信号）、**租约超时回收 `reap`**、**核心层零业务词**（NFR-2，逆向自检）、**`--dry-run` 预演**（FR-13）、`doctor` 全绿。需求覆盖见 `docs/requirements.md` §7（FR/NFR **全覆盖**）。
+v0.1 完成（**17/17**）：103 测试通过、CLI 端到端、`drive` 确定性、三视图同源、mgt 导入、五道门（acceptance/design_first/size_budget/tree_closure/**tree_coverage**）、**多块板**（多树作用域隔离 + 跨树 `awaits` 信号）、**租约超时回收 `reap`**、**核心层零业务词**（NFR-2，逆向自检）、**`--dry-run` 预演**（FR-13）、`doctor` 全绿。需求覆盖见 `docs/requirements.md` §7（FR/NFR **全覆盖**）。
+
+> `PM1`（最后一个节点）是初始种下的「批准发布」仪式，但本看板只是 dogfooding 演示、无下游消费者。
+> 已如实 `skip`（理由入库），**不假装发生过真实审批**——种子脚本里可复现，不是一次性手工操作。
 
 **二轮独立验证**（5 条 lane，HEAD `46cb2bd`）见 `docs/dev-board.md` §0：V3 抳出一个真缺陷（`close --dry-run` 真关树）已修 + 补 CLI 层回归测试；V5 抳出分层自检偏弱已加固。
 已知局限见 `docs/dev-board.md` §0（V4 用合成 fixture；分层自检非闭集；`diff_size` tracked 分支未覆盖）。

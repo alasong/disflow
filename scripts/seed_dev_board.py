@@ -67,6 +67,10 @@ ENTRY: dict[str, str] = {"E1": "evaluate", "S1": "standardize"}
 DONE_NODES = ["D10", "D20", "D30", "D40", "D50", "D60", "D70", "D80", "D90", "D95",
               "V1", "V2", "V3", "V4", "E1", "S1"]
 
+# 自造仪式节点：如实标记为跳过（不是「批准发生了」，是「这个仪式不需要」）
+SKIPPED_NODES = ["PM1"]
+SKIP_REASON = "自造仪式：本看板是 dogfooding 演示，无下游消费者；不假装发生过真实审批"
+
 # 写面（供波次打包；同波不重叠者才并行）
 TARGETS: dict[str, list[str]] = {
     "D10": ["disflow/store.py"],
@@ -121,6 +125,12 @@ def main() -> int:
 
     result = engine.drive(tree)
     print(f"\n就绪波次：{result['ready_wave']}  卡死：{result['stuck']}")
+
+    # PM1 是**自造的仪式**（无下游消费者）——如实 skip，不假装发生过审批。
+    # 决策要可复现：写进种子脚本，而非只在某个一次性状态目录里手工敲。
+    for node_id in SKIPPED_NODES:
+        engine.skip(tree, node_id, SKIP_REASON)
+        print(f"✓ {node_id} 已 skip（自造仪式，非真实审批）")
 
     try:
         engine.close(tree)
