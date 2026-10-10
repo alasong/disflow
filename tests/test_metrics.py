@@ -17,11 +17,12 @@ import json
 import re
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 from base import DisflowTestCase, acceptance
 
-from disflow import spec, state, store
+from disflow import metrics, spec, state, store
 from disflow.cli import main
 from disflow.engine import Engine
 from disflow.metrics import NO_START_REASON, burndown, summary, tree_start_ts
@@ -381,9 +382,11 @@ class BurndownTest(DisflowTestCase):
         ideal = result["ideal"]
         self.assertIsNotNone(ideal)
         assert ideal is not None
+        # 覆盖 start_day → deadline（两端都含），而不是截在 today（01-04）。
         self.assertEqual([row["day"] for row in ideal],
-                         ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04"])
-        for row, expected in zip(ideal, [5.0, 4.0, 3.0, 2.0], strict=True):
+                         ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04",
+                          "2025-01-05", "2025-01-06"])
+        for row, expected in zip(ideal, [5.0, 4.0, 3.0, 2.0, 1.0, 0.0], strict=True):
             self.assertAlmostEqual(row["ideal"], expected)
 
     def test_deadline_not_after_start_yields_no_ideal(self):
@@ -494,8 +497,9 @@ class NodeCountsBurndownTest(DisflowTestCase):
         self.assertIsNotNone(ideal_nodes)
         assert ideal_nodes is not None
         self.assertEqual([row["day"] for row in ideal_nodes],
-                         ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04"])
-        for row, expected in zip(ideal_nodes, [3.0, 2.4, 1.8, 1.2], strict=True):
+                         ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04",
+                          "2025-01-05", "2025-01-06"])
+        for row, expected in zip(ideal_nodes, [3.0, 2.4, 1.8, 1.2, 0.6, 0.0], strict=True):
             self.assertAlmostEqual(row["ideal_nodes"], expected)
 
     def test_node_ideal_still_exists_when_points_are_undeclared(self):
@@ -506,8 +510,12 @@ class NodeCountsBurndownTest(DisflowTestCase):
                           now_ts=_epoch(2025, 1, 4))
         ideal_nodes = result["ideal_nodes"]
         assert ideal_nodes is not None
-        self.assertEqual([row["ideal_nodes"] for row in ideal_nodes],
-                         [2.0, 1.6, 1.2, 0.8])
+        self.assertEqual([row["day"] for row in ideal_nodes],
+                         ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04",
+                          "2025-01-05", "2025-01-06"])
+        for row, expected in zip(ideal_nodes, [2.0, 1.6, 1.2, 0.8, 0.4, 0.0], strict=True):
+            self.assertAlmostEqual(row["ideal_nodes"], expected)
+        self.assertEqual(ideal_nodes[-1]["ideal_nodes"], 0.0, "末点是精确的 0，不是 0.4 之类")
 
     def test_without_deadline_neither_dimension_gets_an_ideal(self):
         """无 deadline 不构造理想线——两维同一条规矩（保持原行为）。"""
@@ -591,6 +599,114 @@ class CliMetricsDimensionsTest(DisflowTestCase):
                           summary_payload["nodes_left"]), (1, 0, 1))
         self.assertEqual(payload["burndown"]["series"][-1]["remaining_nodes"], 1)
         self.assertIn("ideal_nodes", payload["burndown"])
+
+
+class IdealReachesDeadlineTest(DisflowTestCase):
+    """理想线的 x 轴：**start_day → deadline**（含两端），末点值必须确实为 0。
+
+    为何单独钉这一条：理想线曾复用 `series` 的 days（只到 today），于是 deadline 那端根本
+    不生成，末点落在今天且值 > 0 —— 下游把「末点」读成「归零日」，报出一句假话
+    （树还剩 3 个节点，输出却说「今天归零」）。
+
+    硬边界：`series` **只到今天**，不许把未来画成事实。
+    """
+
+    def _fixture(self) -> tuple[dict, list[dict]]:
+        """当天建树（start == today）、deadline 在两天后——就是报出假话的那个形状。"""
+        tree = _tree(_node("A", points=5), _node("B", points=3), _node("C", points=2),
+                     deadline="2025-01-04")
+        events = [_event("tree.init", _iso(2025, 1, 2))]
+        return tree, events
+
+    def test_ideal_spans_start_through_deadline(self):
+        tree, events = self._fixture()
+        result = burndown(tree, events, slug="t", now_ts=_epoch(2025, 1, 2))
+        ideal = result["ideal"]
+        assert ideal is not None
+        self.assertEqual([row["day"] for row in ideal],
+                         ["2025-01-02", "2025-01-03", "2025-01-04"],
+                         "当天建树也必须含 start 与 deadline 两端")
+        self.assertAlmostEqual(ideal[0]["ideal"], 10.0, msg="起点当天 = 全部点数")
+
+    def test_ideal_nodes_spans_start_through_deadline(self):
+        tree, events = self._fixture()
+        result = burndown(tree, events, slug="t", now_ts=_epoch(2025, 1, 2))
+        ideal_nodes = result["ideal_nodes"]
+        assert ideal_nodes is not None
+        self.assertEqual([row["day"] for row in ideal_nodes],
+                         ["2025-01-02", "2025-01-03", "2025-01-04"])
+        self.assertAlmostEqual(ideal_nodes[0]["ideal_nodes"], 3.0)
+
+    def test_ideal_last_point_is_zero_on_the_deadline_day(self):
+        tree, events = self._fixture()
+        result = burndown(tree, events, slug="t", now_ts=_epoch(2025, 1, 2))
+        for rows, key in ((result["ideal"], "ideal"), (result["ideal_nodes"], "ideal_nodes")):
+            assert rows is not None
+            last = rows[-1]
+            self.assertEqual(last["day"], tree["deadline"], f"{key} 末点日必须是 deadline")
+            self.assertEqual(last[key], 0.0, f"{key} 末点值必须确实为 0")
+
+    def test_series_still_stops_at_today(self):
+        """硬边界：实际读数不许把未来画成事实——`series` 只到 today，理想线是另一条轴。"""
+        tree, events = self._fixture()
+        result = burndown(tree, events, slug="t", now_ts=_epoch(2025, 1, 2))
+        self.assertEqual([row["day"] for row in result["series"]], ["2025-01-02"])
+        ideal = result["ideal"]
+        assert ideal is not None
+        self.assertEqual(len(ideal), 3,
+                         "理想线画到 deadline；与 series 不等长是故意的（两条轴各管一件事）")
+
+
+class CliIdealWordingTest(DisflowTestCase):
+    """CLI 的「归零」措辞：只允许出现在**真归零**那天（末点值 0、日 = deadline）。
+
+    曾被截断在今天的末点冒名成归零日——树还剩 N 个节点，输出却说「今天归零」。
+    """
+
+    def _run(self, argv: list[str]) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def _seed(self, children: list[dict]) -> None:
+        code, _out, err = self._run(["init", "t", "--goal", "ideal-wording"])
+        self.assertEqual(code, 0, err)
+        code, _out, err = self._run(["expand", "t", "root", "--children",
+                                     json.dumps(children, ensure_ascii=False)])
+        self.assertEqual(code, 0, err)
+
+    def test_zero_wording_names_the_deadline_not_today(self):
+        """当天建树 + 未来 deadline：归零必须被说在 deadline 那天，不能是今天。"""
+        today = datetime.now(timezone.utc).date()
+        deadline = (today + timedelta(days=2)).isoformat()
+        self._seed([{"id": "a", "goal": "A", "points": 3, "acceptance": acceptance()}])
+        code, _out, err = self._run(["deadline", "t", deadline])
+        self.assertEqual(code, 0, err)
+        code, out, err = self._run(["metrics", "t"])
+        self.assertEqual(code, 0, err)
+        lines = [line for line in out.splitlines() if "归零" in line]
+        self.assertIn(f"（理想线 → {deadline} 归零）", out,
+                      "当天建树也必须把「归零」说在 deadline 那天")
+        for line in lines:
+            self.assertIn(f"（理想线 → {deadline} 归零）", line,
+                          "「归零」只允许挂在 deadline 那天")
+        self.assertNotIn(f"（理想线 → {today.isoformat()}", out, "今天不是归零日")
+
+    def test_wording_follows_the_value_not_the_position(self):
+        """措辞跟着**值**走：末点值 > 0（线被截断）时不许说「归零」，如实报还剩多少。"""
+        self._seed([{"id": "a", "goal": "A", "points": 3, "acceptance": acceptance()}])
+        truncated = {
+            "series": [{"day": "2026-01-01", "remaining": 3.0, "remaining_nodes": 1}],
+            "ideal": [{"day": "2026-01-01", "ideal": 3.0}],
+            "ideal_nodes": [{"day": "2026-01-01", "ideal_nodes": 1.0}],
+            "ideal_reason": None,
+        }
+        with mock.patch.object(metrics, "burndown", return_value=truncated):
+            code, out, err = self._run(["metrics", "t"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("（理想线 → 2026-01-01 剩 3）", out)
+        self.assertNotIn("归零", out, "末值 > 0 的那天不许说归零")
 
 
 class SlugNotInProjectionTest(DisflowTestCase):

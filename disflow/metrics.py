@@ -277,9 +277,12 @@ def burndown(tree: dict, events: list[dict], *, slug: str, now_ts: float) -> dic
       `{"day", "remaining", "remaining_nodes"}`——`remaining` 是**点数**维度、
       `remaining_nodes` 是**节点数**维度，两个数并列不合并（节点数维度不受 points 是否
       声明影响：没人声明 points 时点数那一列恒为 0，节点数那一列照样逐日下降）；
-    - `ideal` / `ideal_nodes`：分别从 `points_total` / `nodes_total` 直线降到 deadline 那天
-      归零，两维共用一条成因（`ideal_reason`）；**无 deadline 时为 `None`**（两维都是），
-      并在 `ideal_reason` 里说明原因（不伪造一条线——假线比没有线更误导）；
+    - `ideal` / `ideal_nodes`：分别从 `points_total` / `nodes_total` 直线降到 **deadline
+      那天**归零，点覆盖 **start_day → deadline 两端**——末点值恒为 `0`、其 `day` 恒等于
+      `deadline`。故理想线与 `series` 的 x 轴**故意不等长**：理想线画到截止（计划的形状），
+      `series` 只画到今天（实际读数不许把未来画成事实）。两维共用一条成因（`ideal_reason`）；
+      **无 deadline 时为 `None`**（两维都是），并在 `ideal_reason` 里说明原因（不伪造一条线
+      ——假线比没有线更误导）；
     - 无 `tree.init` 时 `series` 为 `[]`，但带显式 `start_reason`（与 `summary` 同一种报告方式）。
     """
     nodes = tree.get("nodes") or {}
@@ -333,9 +336,13 @@ def burndown(tree: dict, events: list[dict], *, slug: str, now_ts: float) -> dic
             ideal_reason = (f"deadline（{normalized}）不晚于起点"
                             f"（{start_day.isoformat()}），无法构造理想线")
         else:
+            # 理想线自己一条 x 轴：start_day → deadline（两端都含）。**不能**复用 `series` 的
+            # `days`（那只到 today）：deadline 那端会根本不生成，末点落在今天且值 > 0 ——
+            # 下游把「末点」读成「归零日」，就会在「今天」说一句假话。
+            plan_days = [start_day + timedelta(days=offset) for offset in range(horizon + 1)]
             ideal = []
             ideal_nodes = []
-            for day in days:
+            for day in plan_days:
                 fraction = (day - start_day).days / horizon
                 ideal.append({"day": day.isoformat(),
                               "ideal": max(0.0, points_total * (1.0 - fraction))})
