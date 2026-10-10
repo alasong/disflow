@@ -246,6 +246,67 @@ class WorktreeTest(DisflowTestCase):
         self.assertTrue(entry["discard_warnings"])
         self.assertTrue(os.path.exists(precious), "reap 不得丢弃未提交工作（它压根不执行）")
 
+    # ── 提示只说真成立的「那一半」（事实 vs 判据）───────────────────
+
+    def test_reap_ignored_warning_matches_git_reality(self):
+        """ignored 文件会丢，但 git **不**因它拒绝删除 ⇒ 提示**不得**断言「git 会拒绝」。
+
+        宿主实测：只含 ignored 文件的 worktree，`git worktree remove`（不带 --force）exit 0。
+        这里是同一读数的可执行版本——**先量现实，再对提示**，两者必须一致。
+        """
+        self._setup_ignored()
+        entry = worktree.reap(SPEC, "t", self.repo)["leaks"][0]
+        self.assertFalse(entry["safe_to_drop"])
+        self.assertEqual(entry["reasons"], ["ignored:debug.log"])
+        warnings = entry["discard_warnings"]
+        self.assertTrue(any("debug.log" in w and "会丢失" in w for w in warnings), warnings)
+        self.assertFalse(any("git 会拒绝" in w for w in warnings),
+                         f"ignored 不该被说成 git 会拒绝：{warnings}")
+        # 量现实：不带 --force 的 remove 对 ignored-only 的 worktree 会**成功**。
+        proc = subprocess.run(["git", "-C", self.repo, "worktree", "remove",
+                               self._path("a")], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_reap_dirty_warning_still_claims_git_refuses(self):
+        """反向对照：dirty（已修改/未跟踪）确实让 git 拒绝 ⇒ 提示**必须**保留「git 会拒绝」。"""
+        self._setup_dirty()
+        warnings = worktree.reap(SPEC, "t", self.repo)["leaks"][0]["discard_warnings"]
+        self.assertTrue(any("git 会拒绝" in w for w in warnings), warnings)
+        proc = subprocess.run(["git", "-C", self.repo, "worktree", "remove",
+                               self._path("a")], capture_output=True, text=True)
+        self.assertNotEqual(proc.returncode, 0, "dirty 的 worktree，不带 --force 应被 git 拒绝")
+
+    # ── 显式 --force：强删命令 + 记账（破例必须留痕）────────────────────
+
+    def test_reap_force_plan_is_explicit_and_records_discarded(self):
+        """`force=True`：`remove_cmd` 才带 `--force`，并把将丢弃的项记进 `discarded`（记账）。"""
+        self._setup_dirty()
+        forced = worktree.reap(SPEC, "t", self.repo, force=True)
+        entry = forced["leaks"][0]
+        self.assertTrue(forced["force"])
+        self.assertEqual(entry["remove_cmd"],
+                         ["git", "worktree", "remove", "--force", self._path("a")])
+        self.assertEqual([item["node"] for item in forced["discarded"]], ["a"])
+        self.assertTrue(any("会丢失" in loss for loss in forced["discarded"][0]["losses"]))
+
+    def test_reap_default_plan_is_byte_identical_without_force(self):
+        """不传 `force`：计划**不新增** `force`/`discarded` 字段，`remove_cmd` 不带 `--force`。"""
+        self._setup_dirty()
+        plan = worktree.reap(SPEC, "t", self.repo)
+        self.assertNotIn("force", plan)
+        self.assertNotIn("discarded", plan)
+        self.assertEqual(plan["leaks"][0]["remove_cmd"],
+                         ["git", "worktree", "remove", self._path("a")])
+
+    def test_reap_force_is_still_plan_only(self):
+        """即便 `force=True`，reap 仍**不执行**：现场逐字不变、文件还在（引擎不替人删数据）。"""
+        self._setup_dirty()
+        precious = os.path.join(self._path("a"), "wip.txt")
+        before = self._snapshot()
+        worktree.reap(SPEC, "t", self.repo, force=True)
+        self.assertEqual(before, self._snapshot(), "reap --force 计划不得改变任何东西")
+        self.assertTrue(os.path.exists(precious))
+
     def test_apply_reap_apply_cycle_keeps_branch(self):
         # reap 是纯计划 → 不删分支；apply 仍幂等。
         self._seed(["a"])

@@ -601,6 +601,7 @@ disflow metrics <tree> [--json]                    # 量化：点数/速度/燃�
 disflow deadline <tree> <YYYY-MM-DD|->             # 迭代边界（声明；逾期不拒任何动词）
 disflow worktree plan|list|apply|reap <tree> [--json]
                                                    # 每节点物理隔离；只有 apply 真跑 git，reap 是纯计划
+disflow worktree reap <tree> [--force] [--json]     # reap 默认安全删；--force 显式强删并记账 discarded
 disflow worktree apply <tree> [--nodes a,b] [--json]  # 波次：只建点名节点（逗号分隔，可重复）；省略=全量
 disflow trees                                      # 列出所有树（● = 已 closed）
 disflow rebuild [--check]
@@ -624,6 +625,8 @@ disflow doctor                                     # 自检
 删除交给宿主跑它打印出来的命令——与 `drive` / `brief` 同形（引擎算，宿主执行）。
 
 **节点子集只对 `apply` 开放**（`--nodes`）：`apply` 一律从 `HEAD` 分叉（`commands(..., base="HEAD")`，§9.1 模块 `commands`），故**波 2 建工作区必须在波 1 合并进 `HEAD` 之后**；没有 `--nodes` 会一次给全部节点建，波 2 的节点就从「还没有波 1 的 `HEAD`」分叉。因此 `--nodes a,b` 让调用方按波次逐个 `apply`。省略 `--nodes` = 全量，行为与不加该参数逐字一致；`plan`/`list`/`reap` 传 `--nodes` 一律响亮拒收（不静默忽略）。
+
+**强删是显式破例（`worktree reap --force`）**：默认计划只给**安全命令**（`remove` 不带 `--force`、分支 `-d`）。确要连脏现场一起丢弃时，显式传 `--force`：`remove_cmd` 才加上 `--force`，且计划额外给出 `discarded`（逐条记下将丢弃什么，CLI 打印为「记账」块）——破例可以，但必须**显式、留痕**，绝不静默通过。`--force` 只对 `reap` 有意义，其余动作传它一律响亮拒收；**不传时计划与命令逐字节不变**。即便传了 `--force`，引擎仍**不执行**删除（`remove_cmd` 仍交给宿主跑）。
 
 判决依据（不是审美）：本模块历史上 **9 条阻断级缺陷里 8 条落在「删」这条线上**（强删丢未提交工作 / `-D` 让提交不可达 / 不查返回码 / ignored 文件被静默销毁 / detached 提交被静默销毁 / 全局 `prune` 毁掉别人的登记 / 守卫短名歧义 fail-open / 残留分支路径绕过守卫），而纯读面连续多轮零阻断；且引擎替人删数据违反 disflow 自身的「只推不跑」契约。
 

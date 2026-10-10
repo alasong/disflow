@@ -660,6 +660,12 @@ def cmd_worktree(engine: Engine, args) -> int:
         # 绝不静默忽略——静默忽略会让 `plan --nodes a` 读成一个看似成功的全量计划。
         raise EngineError(
             f"worktree {action} 不支持 --nodes（节点子集只对 apply 有意义）")
+    force = bool(getattr(args, "force", False))
+    if force and action != "reap":
+        # 同 --nodes 的纪律：不支持的动词响亮拒收，绝不静默忽略——静默忽略会让
+        # `apply --force` 读成一个看似生效的强删。
+        raise EngineError(
+            f"worktree {action} 不支持 --force（显式强删计划只对 reap 有意义）")
     if action == "plan":
         report = _worktree_call(args, lambda: worktree.plan(spec, tree, cwd))
         if args.json:
@@ -714,7 +720,7 @@ def cmd_worktree(engine: Engine, args) -> int:
             return 1
         return 0
     if action == "reap":
-        report = _worktree_call(args, lambda: worktree.reap(spec, tree, cwd))
+        report = _worktree_call(args, lambda: worktree.reap(spec, tree, cwd, force=force))
         if args.json:
             _dump(report)
             return 0
@@ -727,6 +733,15 @@ def cmd_worktree(engine: Engine, args) -> int:
             print("✓ 无可回收的 worktree / 残留分支")
             return 0
         print(f"可回收 {len(entries)} 项（**只推不跑**：引擎不执行删除，下面命令由人跑）")
+        if force:
+            # 破例必须记账：显式 --force 下，逐条先把「将丢弃什么」记进输出，再给强删命令。
+            print("  ⚠ 显式 --force：破例强删，下列将被丢弃（记账，逐条留痕）")
+            ledger = report.get("discarded") or []
+            for item in ledger:
+                for loss in item["losses"]:
+                    print(f"      {item['node']}：{loss}")
+            if not ledger:
+                print("      （无——所有条目判据为空，强删不额外丢东西）")
         if any(entry["remove_cmd"] for _kind, entry in entries):
             print("  顺序要紧：先删工作区、再删分支"
                   "（工作区还在时 git 会拒删它占用的分支）")
@@ -784,7 +799,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     node = add("init", cmd_init)
     node.add_argument("tree")
-    node.add_argument("--goal", required=True)
+    node.add_argument("--goal", required=True,
+                      help="树的总体目标（必填；一句话说清要达成什么）")
 
     node = add("goal", cmd_goal)
     node.add_argument("tree")
@@ -793,7 +809,9 @@ def build_parser() -> argparse.ArgumentParser:
     node = add("expand", cmd_expand)
     node.add_argument("tree")
     node.add_argument("parent")
-    node.add_argument("--children", required=True)
+    node.add_argument("--children", required=True,
+                      help="子节点声明数组（JSON 字符串）：形如 "
+                           "[{\"id\":\"a\",\"goal\":\"…\"}]；每项至少含 id")
     node.add_argument("--holder", default="", help="谁挂的，记入事件（便于事后追溯）")
 
     node = add("require", cmd_require)
@@ -829,25 +847,31 @@ def build_parser() -> argparse.ArgumentParser:
     node = add("start", cmd_start)
     node.add_argument("tree")
     node.add_argument("node")
-    node.add_argument("--holder", default="")
+    node.add_argument("--holder", default="",
+                      help="谁领租约（worker 名/会话 id；记入 lease，逾期可追溯）")
     node.add_argument("--ttl", type=int, default=None, help="租约秒数（默认 900）")
     node.add_argument("--dry-run", action="store_true", help="预演：跑门但不落事件")
 
     node = add("collect", cmd_collect)
     node.add_argument("tree")
     node.add_argument("node")
-    node.add_argument("--result", required=True)
+    node.add_argument("--result", required=True,
+                      help="结果契约（JSON 对象）：必含 status/summary/changed_files；"
+                           "status ∈ {ok,failed,blocked}")
 
     node = add("done", cmd_done)
     node.add_argument("tree")
     node.add_argument("node")
-    node.add_argument("--decl", default="")
+    node.add_argument("--decl", default="",
+                      help="声明（JSON 对象，可选）：只放破例/豁免，如 "
+                           "{\"scope_waiver\":\"…\"}；证据由引擎自算")
     node.add_argument("--dry-run", action="store_true", help="预演：跑全部门但不落事件")
 
     node = add("fail", cmd_fail)
     node.add_argument("tree")
     node.add_argument("node")
-    node.add_argument("--reason", required=True)
+    node.add_argument("--reason", required=True,
+                      help="失败原因（必填；记入事件，便于事后追溯）")
 
     node = add("retry", cmd_retry)
     node.add_argument("tree")
@@ -856,11 +880,13 @@ def build_parser() -> argparse.ArgumentParser:
     node = add("skip", cmd_skip)
     node.add_argument("tree")
     node.add_argument("node")
-    node.add_argument("--reason", default="")
+    node.add_argument("--reason", default="",
+                      help="跳过原因（可选；不填事件也会落，但事后查不到原因）")
 
     node = add("drive", cmd_drive)
     node.add_argument("tree")
-    node.add_argument("--json", action="store_true")
+    node.add_argument("--json", action="store_true",
+                      help="机器可读输出（替代人话版就绪计划）")
     node.add_argument("--dry-run", action="store_true", help="显式只读：确认不落事件（FR-13）")
 
     node = add("brief", cmd_brief)
@@ -876,31 +902,38 @@ def build_parser() -> argparse.ArgumentParser:
 
     node = add("status", cmd_status)
     node.add_argument("tree", nargs="?")
-    node.add_argument("--json", action="store_true")
+    node.add_argument("--json", action="store_true",
+                      help="机器可读输出（不传 tree 时列全部树）")
 
     node = add("rebuild", cmd_rebuild)
-    node.add_argument("--check", action="store_true")
+    node.add_argument("--check", action="store_true",
+                      help="只检查投影与事件是否一致（不写回；不一致退出码 1）")
 
     node = add("board", cmd_board)
     node.add_argument("tree")
-    node.add_argument("--stage", default=None)
+    node.add_argument("--stage", default=None,
+                      help="只显示该阶段列（如 dev）；省略=全部阶段")
 
     node = add("tree", cmd_tree)
     node.add_argument("tree")
 
     node = add("graph", cmd_graph)
     node.add_argument("tree")
-    node.add_argument("--dot", action="store_true")
+    node.add_argument("--dot", action="store_true",
+                      help="输出 Graphviz DOT（省略=人话版依赖图）")
 
     node = add("import", cmd_import)
     node.add_argument("what")
     node.add_argument("path")
-    node.add_argument("--tree", required=True)
+    node.add_argument("--tree", required=True,
+                      help="导入到哪棵树（必填；由 import 建该树，同名已存在会报错）")
 
     node = add("context", cmd_context)
     node.add_argument("tree")
     node.add_argument("node")
-    node.add_argument("--set", required=True)
+    node.add_argument("--set", required=True,
+                      help="并入节点 context 的 JSON 对象（浅合并，同键覆盖），"
+                           "如 {\"k\":\"v\"}")
 
     node = add("rescope", cmd_rescope)
     node.add_argument("tree")
@@ -939,6 +972,9 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("--nodes", action="append", type=_parse_nodes, default=None,
                       metavar="A,B",
                       help="只对这些节点建（逗号分隔，可重复）；省略=全量，仅 apply 支持")
+    node.add_argument("--force", action="store_true",
+                      help="reap 专用：显式破例强删（remove 加 --force）"
+                           "并把将丢弃的项记进输出；仅 reap 接受")
 
     add("trees", cmd_trees)
     add("doctor", cmd_doctor)
