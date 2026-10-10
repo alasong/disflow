@@ -92,8 +92,8 @@ class LanesWatchTest(DisflowTestCase):
         with open(os.path.join(self.tmp, "state.json"), "w", encoding="utf-8") as fh:
             json.dump({"trees": trees if trees is not None else {"t": _tree()}}, fh)
 
-    def _render(self, all_=True) -> list[str]:
-        return lanes_watch.render(all_)
+    def _render(self, all_=True, only_active=True) -> list[str]:
+        return lanes_watch.render(all_, only_active=only_active)
 
     def _fake_run(self, name, *, run_id, mode, state, children=(), command="", text=""):
         """造一个 pi run 目录（本视图只读 `status.json` / `recovery-descriptor.json` / session）。"""
@@ -151,8 +151,9 @@ class LanesWatchTest(DisflowTestCase):
     # ── 骨架 = 全部节点 + 四列（含空列）──────────────────────────────────
 
     def test_skeleton_is_the_tree_and_lists_pending_skipped_failed(self):
+        """`--full`（或 `only_active=False`）时，骨架 = 全部节点（含 pending/skipped/failed）。"""
         self._write_state()
-        text = "\n".join(self._render())
+        text = "\n".join(self._render(only_active=False))
         for node_id in ("dev1", "sub", "wait", "ver1", "skip1", "done1", "fail1"):
             self.assertIn(node_id, text, f"{node_id} 必须出现（含 pending/skipped/failed）")
         self.assertIn("· ver1", text, "pending 节点必须就地出现（不是「只列已派发 lane」）")
@@ -185,7 +186,8 @@ class LanesWatchTest(DisflowTestCase):
         i = lines.index(row)
         annotation = lines[i + 1]
         self.assertIn("▸ lane dev1", annotation, "就地标注哪条 lane")
-        self.assertIn("批次 parent-r", annotation, "就地标注哪个批次")
+        self.assertNotIn("批次", annotation,
+                         "默认不显示派发批次（用户 2026-10-11）——批次详情只在 `-v` 的次级注解区")
         self.assertIn("已跑", annotation)
         self.assertIn("静默", annotation)
         self.assertIn("条消息", annotation)
@@ -201,7 +203,7 @@ class LanesWatchTest(DisflowTestCase):
         """`◈/⌘/↳` 只属于**在跑**节点：全屏恰好一份（pending/done 不许被刷屏）。"""
         self._running_lane()
         self._write_state()
-        lines = self._render()
+        lines = self._render(only_active=False)   # 本用例测「进展贴在哪一行」，不是过滤
         self.assertEqual(sum("◈" in line for line in lines), 1, "只有一个在跑节点")
         self.assertEqual(sum("▸" in line for line in lines), 1, "只有 dev1 有 lane")
         ver = next(line for line in lines if line.lstrip().startswith("· ver1"))
@@ -217,7 +219,7 @@ class LanesWatchTest(DisflowTestCase):
         """lane 名在投影里找不到 ⇒ **明说**（次级注解区点名），绝不猜一个 goal 顶上。"""
         self._running_lane(child_id="ghost-node")
         self._write_state()
-        text = "\n".join(self._render())
+        text = self._cli(["-v", "once"])      # 「无对应节点」这句在次级批次注解区（`-v`）
         self.assertIn("ghost-node", text)
         self.assertIn("没有对应节点", text)
         self.assertNotIn("▸", text, "无对应节点的 lane 不该贴到任何节点行上")
@@ -297,7 +299,7 @@ class LanesWatchTest(DisflowTestCase):
         tree["nodes"]["done1"]["goal"] = long_goal
         tree["nodes"]["skip1"]["goal"] = long_goal
         self._write_state({"t": tree})
-        lines = self._render()
+        lines = self._render(only_active=False)   # 终态行只在 --full 下出现
         done = next(line for line in lines if line.lstrip().startswith("✓ done1"))
         skip = next(line for line in lines if line.lstrip().startswith("— skip1"))
         for line in (done, skip):
@@ -312,7 +314,7 @@ class LanesWatchTest(DisflowTestCase):
     # ── 第 3 条：`--active` 只留运行中 + 待完成 ─────────────────────────
 
     def test_active_flag_hides_done_skipped_and_failed(self):
-        """第 3 条：`--active`／`--open` 只留「运行中 + 待完成」；**默认行为不变**。"""
+        """`--active`／`--open` 只留「运行中 + 待完成」——**现在这就是默认**（用户 2026-10-11）。"""
         self._write_state()
         for flag in ("--active", "--open"):
             with self.subTest(flag=flag):
@@ -324,8 +326,12 @@ class LanesWatchTest(DisflowTestCase):
                 for label in ("✓ 完成", "— 跳过", "✗ 失败"):
                     self.assertNotIn(label, active)
         default = self._cli(["once"])
+        for hidden in ("done1", "skip1", "fail1"):
+            self.assertNotIn(hidden, default,
+                             "默认（= --active 行为）必须隐藏终态节点；要全看用 --full")
+        full = self._cli(["--full", "once"])
         for shown in ("done1", "skip1", "fail1"):
-            self.assertIn(shown, default, "默认行为不变：终态照旧出现")
+            self.assertIn(shown, full, "--full 必须恢复显示全部状态")
 
     # ── 第 4 条：无在跑节点时明说 ──────────────────────────────────────────
 
@@ -337,6 +343,24 @@ class LanesWatchTest(DisflowTestCase):
         self.assertIn("只对在跑节点显示", text)
         self._running_lane()                # 有在跑节点时这句不许出现（否则是噪声）
         self.assertNotIn("当前无在跑节点", "\n".join(self._render()))
+
+    def test_default_hides_terminal_nodes_and_full_restores_them(self):
+        """默认只列「运行中 + 待完成」（用户 2026-10-11：已完成的不必看）；`--full` 恢复全部状态。"""
+        self._write_state()
+        default = "\n".join(self._render())
+        for hidden in ("done1", "skip1", "fail1"):
+            self.assertNotIn(hidden, default, f"默认必须隐藏终态节点 {hidden}")
+        full = "\n".join(self._render(only_active=False))
+        for shown in ("done1", "skip1", "fail1"):
+            self.assertIn(shown, full, f"--full 必须显示 {shown}")
+
+    def test_default_has_no_batch_section_but_verbose_does(self):
+        """次级「派发批次」区默认不显示（用户 2026-10-11）；`-v` 才展开。"""
+        self._write_state()
+        self._running_lane()
+        plain = self._cli(["once"])
+        self.assertNotIn("▌批次", plain, "默认不许出现派发批次区")
+        self.assertIn("派发批次", self._cli(["-v", "once"]), "-v 必须展开批次注解")
 
 
 if __name__ == "__main__":

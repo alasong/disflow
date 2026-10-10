@@ -108,7 +108,7 @@ d doctor                                        # 自检全绿
 goal 截断到 80 字（`views.truncate_goal` **唯一实现**）；**完整 goal 在 `board --json`**。
 - **默认刷新不吐控制序列**：`lanes_watch.sh` 默认是**追加式**（每轮一整块、带时间戳头、
 **保留回滚**——滞轮/scrollback 可用）；备用屏必须显式 `--screen`（不闪，**代价是没回滚**）；
-**非 TTY（管道/重定向）零控制序列**；`--active`（别名 `--open`）只看「运行中 + 待完成」；
+**非 TTY（管道/重定向）零控制序列**；**默认只列「运行中 + 待完成」**（`--full` 显示全部状态）；派发批次注解区默认不显示（`-v` 展开）；
 无在跑节点时显式打一句（进展只对在跑节点显示是设计）。
 
 第 ④ 步的真实输出：
@@ -286,7 +286,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 627 passed（零第三方依赖）——收尾全量，保留可用
+python3 -m unittest discover -s tests -t tests    # 629 passed（零第三方依赖）——收尾全量，保留可用
 python3 scripts/test_changed.py                   # 迭代期：只跑改动相关的子集（带「这不是全量」横幅）
 python3 scripts/mutation_check.py                 # 变异测试：64/64（验证测试真的有牙）
 ```

@@ -25,8 +25,9 @@ join 键：lane 名（父 run 的 `workflowChildren.children[].childId`）== dis
    只打一轮快照就退。
 2. **终态行不再打整段 goal**：`✓ 完成` / `— 跳过` 行只给 `标记 + id + 状态`，
    其余行 goal 走 `views.truncate_goal`（首行、≤80 字）；完整 goal 留给 `board --json`。
-3. **`--active`（别名 `--open`）**：只显示「运行中 + 待完成（可派/待前置/被在跑挡住）」，
-   隐含 `✓/—/✗` 与非规范兜底组；**默认行为不变**，`once|all|N|-v` 一个都没动。
+3. **默认只显示「运行中 + 待完成（可派/待前置/被在跑挡住）」**（用户 2026-10-11：显示太多、
+   已完成的不必看）；`--full` 显示全部状态（含 `✓/—/✗` 与非规范兜底组）；
+   `--active`／`--open` 保留为显式写法（现在等于默认）；`once|all|N|-v` 一个都没动。
 4. **无在跑节点时明说**：`◈/⌘/↳` 只对在跑节点显示是设计；但没有在跑节点时屏幕上不能一片
    空白，否则读者以为功能没了——显式打一句「当前无在跑节点 ⇒ 无实时进展」。
 
@@ -49,7 +50,7 @@ v4 错：屏闪（clear）；「进展」从日志猜，抓到的是它读的文
   sh .agents/skills/disflow/lanes_watch.sh          # 持续 5s 追加式（保留回滚）
   sh .agents/skills/disflow/lanes_watch.sh 2
   sh .agents/skills/disflow/lanes_watch.sh --screen # 持续 5s 用备用屏（不闪、无回滚）
-  sh .agents/skills/disflow/lanes_watch.sh --active once   # 只看运行中 + 待完成
+  sh .agents/skills/disflow/lanes_watch.sh once --full   # 全部状态（含 ✓/—/✗）；默认只看运行中 + 待完成
   sh .agents/skills/disflow/lanes_watch.sh all      # 含全部历史 lane
   sh .agents/skills/disflow/lanes_watch.sh once -v  # 每个 lane 多给几行
   DISFLOW_STATE_DIR=<树的状态目录> sh .agents/skills/disflow/lanes_watch.sh once
@@ -284,9 +285,12 @@ def is_running(node, lane):
 
 
 def node_annotation(lane):
-    """一行**就地标注**运行事实：哪条 lane / 哪个批次 / run 状态 / 已跑 / 静默 / 消息数。"""
-    c, p, r = lane["child"], lane["parent"], lane["run"]
-    facts = [f"lane {c.get('childId') or '?'}", f"批次 {(p.get('short') or '?')}"]
+    """一行**就地标注**运行事实：哪条 lane / run 状态 / 已跑 / 静默 / 消息数。
+
+    **默认不显示批次号**（用户 2026-10-11：派发批次不用显示）——批次详情在 `-v` 的次级注解区。
+    """
+    c, _p, r = lane["child"], lane["parent"], lane["run"]
+    facts = [f"lane {c.get('childId') or '?'}"]
     if r is None:
         facts.append(f"{c.get('state') or '?'}（run 目录已过窗口）")
         return "  ▸ " + " · ".join(facts)
@@ -395,7 +399,8 @@ def batch_section(runs, keep, parents, node_meta, verbose):
 def render(all_, verbose=False, only_active=False):
     """一轮的**完整块**（自带时间戳头，不依赖上一轮）——追加式刷新直接照打。
 
-    `only_active`（`--active`）：只列「运行中 + 待完成」的组（终态组整组隐藏，与看板同源）。
+    `only_active`（**默认 True**；`--full` 关掉它）：只列「运行中 + 待完成」的组（终态组整组隐藏，
+    与看板同源）。次级「派发批次」区默认不显示，`-v` 才展开。
     """
     proj = load_projection()
     runs = [r for r in (load(d) for d in glob.glob(PAT)) if r]
@@ -428,7 +433,8 @@ def render(all_, verbose=False, only_active=False):
            "数据源：disflow 投影（骨架 = 全部节点，布局同看板） + pi 运行目录（实时事实）",
            f"树 {len(trees)} 棵：{', '.join(sorted(trees)) if trees else '（读不到 state.json）'}"
            f" · 列（同看板）：{'|'.join(cols)}"
-           + (" · --active：只列运行中 + 待完成" if only_active else ""),
+             + (" · 默认：只列运行中 + 待完成（--full 看全部状态）" if only_active
+                else " · --full：显示全部状态"),
            f"在跑 lane {nrunning} 路 · 窗口内 lane {len(keep)} 路 · 静默阈值 10 分钟"
            f" · state dir {state_dir()}"]
     if running_nodes == 0:
@@ -450,7 +456,8 @@ def render(all_, verbose=False, only_active=False):
         out.append("")
         out.append(f"▌树 {slug}  {goal}")
         out.extend(tree_block(slug, tree, lanes, closed, verbose, only_active))
-    out.extend(batch_section(runs, keep, parents, node_meta, verbose))
+    if verbose:            # 次级「派发批次」区：默认不显示（用户 2026-10-11），`-v` 才展开
+        out.extend(batch_section(runs, keep, parents, node_meta, verbose))
     return out
 
 
@@ -508,14 +515,16 @@ def screen_loop(iv, verbose, only_active):
     return 0
 
 
-_FLAGS = ("-v", "--screen", "--active", "--open")
+_FLAGS = ("-v", "--screen", "--active", "--open", "--full")
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     verbose = "-v" in argv
     screen = "--screen" in argv
-    only_active = "--active" in argv or "--open" in argv
+    # 默认只列「运行中 + 待完成」——用户 2026-10-11：显示太多、已完成的不必看。
+    # `--full` 恢复「显示全部状态」；`--active/--open` 保留为显式写法（现在等于默认）。
+    only_active = "--full" not in argv
     rest = [a for a in argv if a not in _FLAGS]
     mode = rest[0] if rest else "5"
     if mode in ("once", "all"):
