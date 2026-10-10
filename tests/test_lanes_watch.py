@@ -22,6 +22,7 @@ import pathlib
 import shutil
 import tempfile
 import unittest
+import unittest.mock
 from typing import Any
 
 from base import DisflowTestCase
@@ -56,6 +57,13 @@ def _tree(name: str = "t") -> dict:
         "ver1": task("ver1", "root", "verify", "验证一"),
         "skip1": task("skip1", "root", "verify", "跳过", status="skipped"),
     }}
+
+
+class _FakeTTY(io.StringIO):
+    """`isatty()` 为真的假 stdout：让 `main` 走常驻（top 式刷新）分支而不碰真终端。"""
+
+    def isatty(self) -> bool:
+        return True
 
 
 class LanesWatchTest(DisflowTestCase):
@@ -216,6 +224,22 @@ class LanesWatchTest(DisflowTestCase):
         self._write_state()
         self.assertIn("gone", self._once(["--all"]))
         self.assertNotIn("gone", self._once([]))
+
+    def test_refresh_mode_clears_the_screen_like_top(self):
+        """默认刷新 = **清屏再画**（用户 2026-10-11：「直接 clear 再显示，像 top 那样」）：
+        先 `\\033[H\\033[2J` 再画，且只画一份（不追加、不叠屏）。"""
+        self._write_state()
+        buf = _FakeTTY()
+        with unittest.mock.patch.object(lanes_watch.time, "sleep",
+                                        side_effect=KeyboardInterrupt), \
+                contextlib.redirect_stdout(buf):
+            code = lanes_watch.main([])
+        out = buf.getvalue()
+        self.assertEqual(code, 0, "Ctrl-C 干净退出（0）")
+        self.assertEqual(out.count("\033[H\033[2J"), 1, "一轮 = 清屏一次")
+        self.assertLess(out.index("\033[H\033[2J"), out.index("看板运行视图"),
+                        "先清屏，再画")
+        self.assertIn("\033[J", out, "擦掉上一轮更长的尾巴")
 
 
 if __name__ == "__main__":

@@ -16,12 +16,17 @@ join 键：lane 名（父 run 的 `workflowChildren.children[].childId`）== dis
 所以本文件**不做** `board` 那套分组，也不假装同源（同源的是阶段列名与 goal 截断：读配置 / `views.truncate_goal`）。
 
 用法（建议先 `cd` 到 disflow 仓根）:
-  sh .agents/skills/disflow/lanes_watch.sh            # 默认：每 5s 追加一块（保留回滚）；Ctrl-C 退出
-  sh .agents/skills/disflow/lanes_watch.sh once       # 打一轮就退（非 TTY / 管道自动走这条）
+  sh .agents/skills/disflow/lanes_watch.sh            # 默认：**top 式整屏重绘**（清屏再画）；Ctrl-C 退出
+  sh .agents/skills/disflow/lanes_watch.sh once       # 打一轮就退（非 TTY / 管道自动走这条；无控制序列）
   sh .agents/skills/disflow/lanes_watch.sh once --all # 连 ✓ 完成 / — 跳过 也列（默认只列运行中 + 待完成）
   sh .agents/skills/disflow/lanes_watch.sh once -v    # 每个在跑 lane 多几行（最后命令 + 自报进展）
   sh .agents/skills/disflow/lanes_watch.sh 2          # 每 2s 刷新
   DISFLOW_STATE_DIR=<状态目录> sh .agents/skills/disflow/lanes_watch.sh once
+
+刷新模式（2026-10-11 用户：「直接 clear 再显示，像 top 那样」）:
+  · 默认 = 每轮 `\033[H\033[2J` 清屏 + 整屏重绘 ⇒ 屏幕**只有一份**，像 top。
+  · 代价：**没有回滚**（清屏把 scrollback 吃了）——要看历史用 `once`（可重定向、零控制序列）。
+  · `once` / 非 TTY（管道 / 重定向）：**零控制序列**，可直接 `> file`。
 """
 import glob
 import json
@@ -349,16 +354,23 @@ def render(show_all=False, verbose=False):
 
 def footer(iv):
     return (f"（Ctrl-C 退出 · {iv:g}s 刷新 · 状态=status.json.state"
-            " · 列=配置的 stages · 追加式：每轮一整块、保留回滚）")
+            " · 列=配置的 stages · top 式：清屏重绘、屏幕只一份、无回滚）")
+
+
+CLEAR = "\033[H\033[2J"      # 光标归位 + 清屏（top 式整屏重绘）；`\033[J` 擦掉本轮多余的尾巴
 
 
 def loop(iv, verbose, show_all):
+    """top 式刷新：每轮**清屏再画**（屏幕只有一份；代价是无回滚 —— 看历史用 `once`）。"""
     try:
         while True:
-            sys.stdout.write("\n".join(render(show_all, verbose) + [footer(iv)]) + "\n")
+            sys.stdout.write(CLEAR + "\n".join(render(show_all, verbose))
+                             + "\n" + footer(iv) + "\033[J")
             sys.stdout.flush()
             time.sleep(iv)
     except KeyboardInterrupt:
+        sys.stdout.write("\n")      # 干净退出：光标换行，不留下半行
+        sys.stdout.flush()
         return 0
 
 
