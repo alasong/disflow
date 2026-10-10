@@ -343,17 +343,40 @@ class Engine:
             # 门的**所有** IO 统一走同一个目录（有真 worktree 就在 worktree 里，否则 self.cwd）。
             cwd = self._gate_cwd(tree, node)
             workspace = item.get("workspace") or {}
-            in_worktree = cwd != self.cwd
-            # fail-closed（第一判据）：本节点有 worktree，但开工基线不是在它里面取的
-            # （`start` 时还没 apply / 取了别的目录）⇒ 门会空洞通过，响亮拒收而不放行。
-            if workspace and in_worktree and workspace.get("cwd") != cwd:
-                raise EngineError(
-                    f"{node} 的开工基线取自 {workspace.get('cwd')!r}，而本节点现有 worktree "
-                    f"{cwd!r}——基线不在门的目录里，门会空洞通过。\n"
-                    f"  补救：disflow reopen {tree} --reason '<为何重开>' 后重新 start"
-                    f"（先 disflow retry {tree} {node} 把该节点放回 pending）。")
+            now_worktree = cwd != self.cwd
+            # fail-closed（第一判据，**对称**）：以 `start` 记录的 `workspace` 为**权威**，与
+            # 「现在解析出的工作区」比对，任一方向不一致 ⇒ 响亮拒收而不放行。
+            # 判据必须取自**记录**而非从现状反推：worktree 在 `done` 之前被删时 `_gate_cwd`
+            # 退回 `self.cwd`，从现状反推会得出「没有 worktree」从而整段跳过——门退回主工作区、
+            # base_sha=None，又一次空洞通过（fail-open）。无 `workspace` 的旧事件不校验。
+            if workspace:
+                recorded_worktree = bool(workspace.get("worktree"))
+                recorded_cwd = str(workspace.get("cwd") or "")
+
+                def baseline_elsewhere() -> EngineError:
+                    return EngineError(
+                        f"{node} 的开工基线取自 {recorded_cwd!r}，而本节点现有 worktree "
+                        f"{cwd!r}——基线不在门的目录里，门会空洞通过。\n"
+                        f"  补救：disflow reopen {tree} --reason '<为何重开>' 后重新 start"
+                        f"（先 disflow retry {tree} {node} 把该节点放回 pending）。")
+
+                if recorded_worktree and not now_worktree:
+                    raise EngineError(
+                        f"{node} 的开工工作区已不存在：`start` 记下 worktree=True，而此刻解析不到"
+                        f"真 worktree（门的目录退回主工作区 {self.cwd!r}）——门会在主工作区上跑，"
+                        f"看不见该节点 worktree 里的改动，从而空洞通过。\n"
+                        f"  补救：重建该节点 worktree（disflow worktree apply {tree}）后重新 start；"
+                        f"或 disflow reopen {tree} --reason '<为何重开>' 后 retry + start。")
+                if not recorded_worktree and now_worktree:
+                    raise baseline_elsewhere()
+                if recorded_worktree and now_worktree and (
+                        not recorded_cwd
+                        # 两侧都经 realpath 归一：`self.cwd` 与 state_dir 的符号链接前缀可能
+                        # 不同形（/private/var/… 与 /var/…），裸字符串比对会**误拒**（假红）。
+                        or os.path.realpath(recorded_cwd) != os.path.realpath(cwd)):
+                    raise baseline_elsewhere()
             # 只有 worktree 场景才用 head_sha 并已提交改动：无 worktree 的节点行为逐字节不变（回归）。
-            base_sha = workspace.get("head_sha") if in_worktree else None
+            base_sha = workspace.get("head_sha") if now_worktree else None
             ok, why, evidence = gates.evidence_meta(item.get("acceptance"), cwd,
                                                    self.cfg, base_sha=base_sha)
             baseline = item.get("baseline") or {}
