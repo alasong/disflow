@@ -30,6 +30,9 @@
     collect 拒收越出 worktree 的自报 changed_files；
   - **B（规模读数）**：`size_budget` 对**已提交**改动不再恒真空（复用 `start` 记的
     `head_sha`）；未提交场景行数逐字节不变；
+  - **R（rescope 守卫）**：worktree 里先越界改并提交，再 `rescope` 补进声明 ⇒ 守卫必须
+    与 `done` 的门**同一目录源**（`_gate_cwd`）与**同一基线**（`start` 记的 `head_sha`）
+    拒收；只改目录、不改基线仍会漏掉已提交的越界改动；
   - **E（宿主循环契约）**：无已落盘 collect 的 `done` 在 **CLI 层**拒收（exit 1，报文
     给出 `collect` 命令），`--no-result "<理由>"` 显式破例且理由落进事件；**引擎层**不拒收
     （直干型组合合法），但每次 `node.done` 都记 `evidence.result_collected`。
@@ -226,6 +229,30 @@ class WorktreeGateTest(DisflowTestCase):
         self.assertIn("README.md", evidence["changed_files"])
         self.assertNotIn("design_first", evidence["vacuous"])
         self.assertEqual(self.engine.tree("t")["nodes"]["a"]["status"], "done")
+
+    # ── R：rescope 的守卫与 done 的门同一目录源（不是 self.cwd）─────────
+
+    def test_rescope_guard_follows_worktree_and_sees_committed_change(self):
+        """worktree 里先越界改并提交，再 rescope 把该路径补进声明 ⇒ 守卫必须拒收。
+
+        修前：守卫用 `self.cwd`（进程 cwd = 仓根）调 `gates.newly_changed`，而 worktree
+        派发时改动落在 `<state>/worktrees/<tree>/<node>`，两者不相交 ⇒ 守卫在主工作区上看到
+        干净 ⇒ 放行「先改后补计划」，`scope` 门变成装饰（改完 → rescope → done 无违规，
+        违规记录消失；合法出口 `done --decl '{"scope_waiver": …}'` 被绕过而不留痕）。
+        """
+        self._node("a", acceptance=acceptance("ok"), touch_plan=["README.md"])
+        wpath = self._worktree("a")
+        self.engine.start("t", "a", "w")
+
+        touch(os.path.join(wpath, "B.txt"), "b\n")   # 越界：B.txt 不在 touch_plan 里
+        commit(wpath, "out-of-scope change")          # 提交型 worker：`git status` 为空
+
+        with self.assertRaises(EngineError) as ctx:
+            self.engine.rescope("t", "a", ["README.md", "B.txt"], "事后补声明")
+        self.assertIn("已经改过", str(ctx.exception))
+        self.assertIn("scope_waiver", str(ctx.exception))    # 拒收必须给出替代路径
+        self.assertEqual(self.engine.tree("t")["nodes"]["a"]["touch_plan"],
+                         ["README.md"])
 
     def test_a4_without_worktree_no_change_still_vacuous(self):
         """无 worktree、无改动：与旧行为一致 —— introduced 为空且空洞警告照旧。"""

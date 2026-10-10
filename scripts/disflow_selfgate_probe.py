@@ -6,7 +6,7 @@
 （`acceptance.exit` / `introduced` / `vacuous`）。被测实现被改坏时它必须变红——「绿不是
 证据、能红才是」（与 `scripts/independent_checks.py` 同一立场的第二条独立入口）。
 
-四个情形各自测的机制：
+五个情形各自测的机制：
 
   1. **顺序错（start 在 apply 之前）⇒ done 必须 fail-closed 拒收**。
      `start` 把开工基线记在仓根；之后才建 worktree ⇒ `done` 时门的目录已变。若实现不比对
@@ -26,13 +26,21 @@
      现状解析不出 worktree 时，若从现状反推「没有 worktree」就会跳过整段检查、门退回仓根
      （又一次空洞通过）。本情形钉住「以 `start`**记录**为准」的对称化 fail-closed。
 
+  5. **worktree 里先越界改并提交，再 rescope 把该路径补进声明 ⇒ 守卫必须拒收**。
+     `Engine.rescope` 的守卫若吃 `self.cwd`（进程 cwd = 仓根），worktree 派发时改动落在
+     `<state>/worktrees/<tree>/<node>`，两者不相交 ⇒ 守卫在主工作区上看到干净 ⇒ 放行
+     「先改后补计划」，`scope` 门变成装饰：改完 → rescope → done 无违规，合法出口
+     （`done --decl '{"scope_waiver": …}'`，显式破例 + 记违规）被绕过而不留痕。
+     本情形断言 `rescope` 响亮拒收（报文点名替代路径）、`touch_plan` 不变、节点留在
+     running，且对照 `done` 仍因越界拒收（`scope` 门没被这次补声明放行）。
+
 用法：
 
     python3 scripts/disflow_selfgate_probe.py [<disflow 仓根>]
 
 第一个位置参数缺省时取 `os.path.abspath(os.getcwd())`——**绝不用相对路径**：本探针把仓根塞进
 子进程的 `PYTHONPATH`，而子进程的 cwd 是临时仓；相对路径会按子进程 cwd 解析、`import disflow`
-静默失效（宿主踩过这个坑）。退出码：`0` = 四情形全过；`1` = 有未过（含用法错误）。
+静默失效（宿主踩过这个坑）。退出码：`0` = 五情形全过；`1` = 有未过（含用法错误）。
 
 隔离：每个情形自建 `tempfile.mkdtemp` 临时仓 + 仓**外** state dir，失败不中断后续情形，
 且逐条打印**原始读数**供人判断是不是「真空的绿」。绝不写入本仓。
@@ -301,11 +309,60 @@ def scen_worktree_deleted() -> dict[str, Any]:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def scen_rescope_guard_follows_worktree() -> dict[str, Any]:
+    """情形 5：worktree 里先越界改并提交，再 rescope 补进声明 ⇒ 守卫必须拒收。
+
+    根因形状（宿主探针实测的绕过路径，属**假绿**级）：`Engine.rescope` 的守卫若吃
+    `self.cwd`（进程 cwd = 仓根），worktree 派发时改动落在 `<state>/worktrees/<tree>/<node>`，
+    两者不相交 ⇒ 守卫在主工作区上看到干净 ⇒ 放行「先改后补计划」，`scope` 门变成装饰。
+    """
+    root, repo, state = _make_repo("rescope")
+    try:
+        _seed(repo, state, {"acceptance": {"cmd": "test -f OLD.txt", "expect": "exit0"},
+                            "touch_plan": ["OLD.txt"]})
+        _ok(_cli(repo, state, "worktree", "apply", TREE, "--nodes", NODE),
+            "worktree apply")
+        _ok(_cli(repo, state, "start", TREE, NODE, "--holder", "probe"), "start")
+        wt = _worktree_path(state)
+        if not os.path.isdir(wt):
+            raise RuntimeError(f"worktree 没建出来：{wt}")
+        # 越界改动：B.txt 不在 touch_plan（只有 OLD.txt）里，且提交 —— 提交型 worker 的常态。
+        _write(os.path.join(wt, "B.txt"), "b\n")
+        _git(wt, "add", "-A")
+        _git(wt, "-c", "user.name=probe", "-c", "user.email=probe@selfgate",
+             "commit", "-qm", "out-of-scope change")
+        _collect(repo, state)
+        rescope = _cli(repo, state, "rescope", TREE, NODE,
+                       "--touch", json.dumps(["OLD.txt", "B.txt"]),
+                       "--reason", "探针：事后补计划")
+        reasons: list[str] = []
+        if rescope.returncode == 0:
+            reasons.append("rescope 竟然放行（守卫没跟随 worktree ⇒ 计划可被改成“刚改过的东西”）")
+        if "已经改过" not in rescope.stderr:
+            reasons.append("拒收理由未点名「已经改过」")
+        if "scope_waiver" not in rescope.stderr:
+            reasons.append("拒收未给出替代路径（scope_waiver）——拒收必须给出路")
+        if _node_item(state).get("touch_plan") != ["OLD.txt"]:
+            reasons.append(f"touch_plan 被改了：{_node_item(state).get('touch_plan')!r}"
+                           "（应保持 ['OLD.txt']）")
+        if _status(state) != "running":
+            reasons.append(f"节点状态={_status(state)!r}（应留在 running）")
+        return {"case": "5 · worktree 里越界提交后 rescope ⇒ 守卫拒收",
+                "passed": not reasons, "why": reasons,
+                "observed": {"rescope.rc": rescope.returncode,
+                             "node.status": _status(state),
+                             "touch_plan": _node_item(state).get("touch_plan"),
+                             "rescope.stderr": _stderr_lines(rescope)}}
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 SCENARIOS: list[tuple[str, Callable[[], dict[str, Any]]]] = [
     ("1", scen_start_before_apply),
     ("2", scen_sees_committed_change),
     ("3", scen_acceptance_rejects),
     ("4", scen_worktree_deleted),
+    ("5", scen_rescope_guard_follows_worktree),
 ]
 
 

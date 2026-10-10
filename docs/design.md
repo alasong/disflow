@@ -460,6 +460,15 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
   且每次变更（`from` / `to` / `reason`）累进 `node.rescope_log`——否则“计划先于改动”
   这个前提交代不清，事后无法审计。
 - 已碰过的路径被拒时，报错会**点名替代路径**（走 `scope_waiver`）——拒收必须给出路。
+- **守卫与 `done` 的门同一目录源**：判据取 `_gate_cwd(tree, node)`（该节点有真 worktree
+  就是 worktree）与 `start` 记的 `head_sha`，**不是** `self.cwd`（进程 cwd = 仓根）。**已修缺陷**：
+  守卫曾吃 `self.cwd`，worktree 派发时改动落在 `<state>/worktrees/<tree>/<node>`，两者不相交
+  ⇒ 守卫在主工作区上看到干净 ⇒ `rescope` 放行「先改后补计划」，`scope` 门变成装饰（改完 →
+  rescope → done 无违规，合法出口 `scope_waiver` 被绕过而不留痕）。原始读数
+  （`python3 /tmp/disflow_rescope_guard_probe.py`，修前）：越界改 `B.txt` 并提交后
+  `rescope exit=0`、报文 `✓ a 写面声明已更新：['A.txt', 'B.txt']`；修后同一序列
+  `rescope exit=1`、报文点名 `已经改过`。已固化为 `scripts/disflow_selfgate_probe.py` 情形 5
+  + `tests/test_rescope.py` / `tests/test_worktree_gate.py` 的对应测试。
 - 两个破例口（`scope_waiver` / `size_waiver`）都**记入证据**：破例可以，装没发生不行。
 
 对应对称：`rescope` ≈ `node.context.size_budget` 覆盖（改声明），

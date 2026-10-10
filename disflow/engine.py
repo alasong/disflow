@@ -546,6 +546,11 @@ class Engine:
         - 已经碰过才想补声明 → 必须走 `done --decl '{"scope_waiver": "<理由>"}'` 破例，
           那会留下**违规记录**（显式、可审计），而不是把计划偷偷改宽。
 
+       守卫的判据与 `done` 的其它门**同一目录源 + 同一基线**：目录取 `_gate_cwd`（该节点
+       有真 worktree 就是 worktree），基线取 `start` 记的 `baseline` + `head_sha`。任一处
+       仍吃 `self.cwd`，worktree 派发时守卫就在主工作区上看到干净 ⇒ 放行「改完再补计划」。
+       "
+
        对应对称性：`rescope` ≈ `size_budget` 的 `node.context` 覆盖（改声明）；
        `scope_waiver` ≈ `size_waiver`（破例）。
        """
@@ -564,7 +569,15 @@ class Engine:
             added = [path for path in touch if path not in old]
             if not added:
                 raise EngineError(f"新声明未增加任何路径（现有 {sorted(old)}），不必 rescope")
-            touched = set(gates.newly_changed(self.cwd, item.get("baseline"), self.cfg) or [])
+            # 门的**唯一目录源**（不是 `self.cwd`：worktree 派发时改动落在
+            # `<state>/worktrees/<tree>/<node>`，用进程 cwd 的守卫在主工作区上看到干净 ⇒
+            # 放行「先改后补计划」，`scope` 门变成装饰）。
+            cwd = self._gate_cwd(tree, node)
+            # 基线同源：`start` 记的 `head_sha` 是「开工时 HEAD」——不并它，提交型 worker
+            # 的 `git status` 是空的、守卫看不见已提交的越界改动（与 `done` 的失败形状相同）。
+            base_sha = (item.get("workspace") or {}).get("head_sha")
+            touched = set(gates.newly_changed(cwd, item.get("baseline"), self.cfg,
+                                              base_sha=base_sha) or [])
             dirty = sorted(set(added) & touched)
             if dirty:
                 raise EngineError(

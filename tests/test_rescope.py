@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import unittest
 
 from base import DisflowTestCase, acceptance, git_repo, touch
@@ -94,6 +95,22 @@ class RescopeTest(DisflowTestCase):
             engine.rescope("t", "n", ["src_a.py", "other.py"], "事后补声明")
         self.assertIn("已经改过", str(ctx.exception))
         self.assertIn("scope_waiver", str(ctx.exception))          # 报错要点名替代路径
+        self.assertEqual(self._node(engine)["touch_plan"], ["src_a.py"])
+
+    def test_rescope_rejects_a_path_this_node_committed(self):
+        """提交型 worker（`git status` 为空）也不能把越界改动说成“没碰过”。
+
+        判据必须复用 `start` 记的 `head_sha`：只看未提交改动时，越界改 → `git commit` →
+        rescope 即可把「刚改过的东西」补进计划（就地派发一样能绕过，不只是 worktree）。
+        """
+        engine, repo = self._running(commit=True)
+        touch(os.path.join(repo, "other.py"), "o = 2\n")
+        subprocess.run(["git", "-C", repo, "add", "-A"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-qm", "out-of-scope"], check=True, capture_output=True)
+        with self.assertRaises(EngineError) as ctx:
+            engine.rescope("t", "n", ["src_a.py", "other.py"], "事后补声明")
+        self.assertIn("已经改过", str(ctx.exception))
         self.assertEqual(self._node(engine)["touch_plan"], ["src_a.py"])
 
     def test_rescope_requires_a_reason(self):
