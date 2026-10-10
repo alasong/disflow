@@ -266,6 +266,26 @@ _DOCTOR_ADVISORY_FOOTNOTE = (
 )
 
 
+def _state_dir_inside_repo(engine: Engine) -> tuple[str, str] | None:
+    """state dir 解析后（realpath，逐层绕过符号链接）是否落在 repo 内部。
+
+    落在内部时返回 `(state_dir 真实路径, repo 真实路径)`，否则返回 `None`。
+    判据与 `worktree._reject_if_inside` **同源**：worktree 落点 `<state_dir>/worktrees`
+    派生自 state dir，故「state dir 在仓内」⇔「worktree 根在仓内」⇔ `worktree apply` 必被拒收。
+    这里**主动**算这条（而非等 `worktree` 动词报错），doctor 才能在本环节提前说出
+    「已交付的 worktree 功能在当前 state dir 配置下不可用」。
+    相对 state dir 一律以 `repo`（= `engine.cwd`，与 worktree 模块的 `repo` 同一来源）为基准解析，
+    两个 cwd 下判定必须一致。
+    """
+    raw = store.state_dir(engine.spec)
+    repo = os.path.realpath(engine.cwd)
+    path = raw if os.path.isabs(raw) else os.path.join(engine.cwd, raw)
+    resolved = os.path.realpath(path)
+    if resolved == repo or resolved.startswith(repo + os.sep):
+        return resolved, repo
+    return None
+
+
 def cmd_doctor(engine: Engine, args) -> int:
     problems: list[str] = []
     advisories: list[str] = []
@@ -274,6 +294,19 @@ def cmd_doctor(engine: Engine, args) -> int:
         problems.extend(f"投影漂移：{d}" for d in diffs)
         # 报告要带修法：漂移是投影函数变了/被手改，事件才是真相
         problems.append("修法：`disflow rebuild` 从事件重算投影（投影是派生的，事件是真相）")
+    # 「已交付的 worktree 功能在当前 state dir 配置下不可用」——**主动发现**，不等 worktree 动词报错。
+    # 这一条是**需人判断**（不是故障，不计入退出码）：仓内 state dir 是**出厂默认**（`spec.py` 的
+    # `state.dir = ".disflow"`），不是误配；它只限制一项**可选功能**（worktree）的可用性，其余功能正常。
+    # 判成故障会因默认布局把所有人假红（假红比不报更坏）——但也不能静默：单独一条、单独一行报出来，
+    # 才兑现「提前可见」这个收益。
+    worktree_advisory: str | None = None
+    inside_repo = _state_dir_inside_repo(engine)
+    if inside_repo is not None:
+        state_real, repo_real = inside_repo
+        worktree_advisory = (
+            f"worktree 功能不可用：state dir 落在 repo 内部（{state_real}，repo={repo_real}）"
+            "——已交付功能（worktree）在当前 state dir 配置下的可用性限制，其余功能正常；"
+            "修法：把 [state].dir 或 DISFLOW_STATE_DIR 配到仓外")
     state = engine.load()
     now_ts = time.time()
     for name, tree in sorted(state.get("trees", {}).items()):
@@ -309,7 +342,7 @@ def cmd_doctor(engine: Engine, args) -> int:
         print(f"✗ doctor 发现（配置：{config.config_path(engine.cwd)}）：", file=sys.stderr)
         for item in problems:
             print(f"  - {item}", file=sys.stderr)
-        if advisories:
+        if advisories or worktree_advisory is not None:
             print("  （另有需人判断项，因本轮已有故障而不单独报；见 exit 0 时的输出）",
                   file=sys.stderr)
         return 1
@@ -318,13 +351,17 @@ def cmd_doctor(engine: Engine, args) -> int:
     print(f"配置：{cfg_path}" + ("（存在）" if os.path.isfile(cfg_path) else "（无 → 全用内建默认）"))
     for key, value, _source in config.describe(engine.cfg, engine.cwd):
         print(f"  {key} = {value}")
-    if advisories:
-        # **不计入退出码**，也不叫“故障”：doctor 无法知道这是“worker 崩了”还是
-        # “人在正常干活”——那就不能假装知道，而要给事实（过期多久）+ 两种读法。
+    if worktree_advisory is not None or advisories:
+        # **不计入退出码**，也不叫“故障”：——租约条目是「worker 崩了」还是「人在正常干活」
+        # doctor 分不出；worktree 条目是出厂默认布局下的功能可用性限制。两条都不假装知道，
+        # 只给事实 + 修法/两种读法。worktree 条目置顶且自成一行（不与别的检查拼在一行）。
         print("⚠ 需人判断（不是故障，不计入退出码）：")
+        if worktree_advisory is not None:
+            print(f"  - {worktree_advisory}")
         for item in advisories:
             print(f"  - {item}")
-        print(_DOCTOR_ADVISORY_FOOTNOTE)
+        if advisories:                 # 脚注只讲租约过期：没有租约项就不印
+            print(_DOCTOR_ADVISORY_FOOTNOTE)
     print("✓ doctor 全绿")
     return 0
 

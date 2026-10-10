@@ -194,6 +194,7 @@ blocked_by(n) := [ d ∈ requires(n) : status(d) ∉ TERMINAL ]
 | `ready` 不看时钟 | ✅ | 保持纯函数；过期**不会自动放行**，靠显式 `reap` |
 | 租约过期 ⇒ 不能 `done` | ❌ **不是** | 见下 |
 | 租约过期 ⇒ `doctor` 报“故障” | ❌ **不是**（仅提醒） | 见下 |
+| state dir 在 repo 内 ⇒ `worktree` 功能不可用 ⇒ `doctor` 报“故障” | ❌ **不是**（需人判断） | 见下 |
 
 **租约防的是并发，不是“收工晚了”。** 两个 worker 同时干同一节点才是要防的事；
 一个人干得慢不是。所以 **`done` 不要求 `running`、也不要求租约未过期**——
@@ -211,6 +212,18 @@ blocked_by(n) := [ d ∈ requires(n) : status(d) ∉ TERMINAL ]
 既然分不出，就不能假装分得出：报告给的是**事实**（过期多久 + `holder`）+ **两种读法**
 及其各自正确做法。旧措辞是「租约超时未回收（可 `disflow reap`）」——
 把两种病因说成一种，并把一个**对其中一种是错的**修法当成唯一答案。
+
+**`doctor` 对“state dir 落在 repo 内部”只报「需人判断」（不计入退出码）。** `worktree`
+模块硬拒落在 repo 内的落点（在仓内会污染 `git status`，且一次 `git clean -xdf` 会把状态
+目录连同全部 worktree 一起删掉），故该配置下「已交付的 `worktree` 功能不可用」。但仓内
+state dir 是**出厂默认**（`spec.py` 的 `state.dir = ".disflow"`），它只限制这一项**可选功能**
+的可用性、其余功能正常——判成故障会因默认布局把所有人**假红**（假红比不报更坏）。所以
+`doctor` **主动**算出这条（不等真跑 `worktree apply` 才炸），单独一条、单独一行报出：事实
+（state dir 的真实路径 vs `repo`，**经 `realpath` 归一**——文本在仓外但符号链接指进仓内同样
+算仓内）+ 修法（把 `[state].dir` 或 `DISFLOW_STATE_DIR` 配到仓外）。仓外配置**不报**。
+判据与 `worktree._reject_if_inside` 同源（`cli.py` 的 `_state_dir_inside_repo`）：worktree 落点
+`<state_dir>/worktrees` 派生自 state dir，故「state dir 在仓内」⇔「worktree 根在仓内」⇔
+`worktree apply` 必被拒收。测试：`tests/test_doctor_worktree.py`（仓内/仓外两侧 + 符号链接两向）。
 
 **波次 `wave`**：
 
