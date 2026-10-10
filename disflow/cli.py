@@ -471,6 +471,13 @@ def cmd_context(engine: Engine, args) -> int:
     return 0
 
 
+def cmd_stage(engine: Engine, args) -> int:
+    engine.set_stage(args.tree, args.node, args.stage,
+                     reason=args.reason, holder=getattr(args, "holder", "") or "")
+    print(f"✓ {args.node} stage → {args.stage}")
+    return 0
+
+
 def cmd_rescope(engine: Engine, args) -> int:
     touch = _loads(args.touch)
     dry = bool(getattr(args, "dry_run", False))
@@ -992,6 +999,15 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("--set", required=True,
                       help="并入节点 context 的 JSON 对象（浅合并，同键覆盖），"
                            "如 {\"k\":\"v\"}")
+
+    node = add("stage", cmd_stage)
+    node.add_argument("tree")
+    node.add_argument("node")
+    node.add_argument("stage", help="新的看板列（必须在配置的 stages 闭集内）")
+    node.add_argument("--reason", required=True,
+                      help="为何改列（必填；记入 stage_log，可审计）")
+    node.add_argument("--holder", default="",
+                      help="谁改的（记入 stage_log，便于追溯）")
 
     node = add("rescope", cmd_rescope)
     node.add_argument("tree")

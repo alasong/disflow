@@ -318,6 +318,28 @@ def _on_node_rescope(state: dict, event: dict) -> None:
     })
 
 
+def _on_node_stage(state: dict, event: dict) -> None:
+    """改节点的看板列（`stage`）：换值 + 把**变更历史**留在 `stage_log`。
+
+    历史必须留（与 `rescope_log` / `reopen_log` 同一理由）：看板列是给人看的投影，
+    事后要能回答「这列是谁、什么时候、为什么改的」——否则改列成了无痕的历史改写。
+    `holder`（谁改的）也一并记：`rescope` 没有这条，是因为它没有 holder 入参；
+    stage 有，就不能把「谁改的」丢掉。
+
+    reducer 只赋值、**不校验**取值：校验在写时（`Engine._validate_stage`），否则重放历史里
+    已有的（来自别版本/别配置的）列值会炸——与 `_on_tree_deadline` 同一分界。
+    """
+    node = _node(state, event["slug"], event["node"])
+    old = node.get("stage")
+    new = event.get("stage")
+    node["stage"] = new
+    node.setdefault("stage_log", []).append({
+        "from": old, "to": new,
+        "reason": event.get("reason") or "",
+        "holder": event.get("holder") or "",
+    })
+
+
 def _on_tree_close(state: dict, event: dict) -> None:
     state["trees"][event["slug"]]["closed"] = True
 
@@ -365,6 +387,7 @@ _HANDLERS = {
     "node.skip": _on_node_skip,
     "node.import": _on_node_import,
     "node.context": _on_node_context,
+    "node.stage": _on_node_stage,
     "node.rescope": _on_node_rescope,
     "tree.close": _on_tree_close,
     "tree.reopen": _on_tree_reopen,
