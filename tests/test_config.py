@@ -20,11 +20,11 @@ import os
 import shutil
 import unittest
 
-from base import DisflowTestCase, acceptance
+from base import DisflowTestCase, acceptance, git_repo, touch
 
 from disflow import config, gates, store, views
 from disflow.config import Config, ConfigError
-from disflow.engine import Engine, EngineError
+from disflow.engine import Engine, EngineError, GateReject
 from disflow.spec import ROLES, SIZE_BUDGET_DEFAULT, STAGES
 from disflow.state import project
 
@@ -236,6 +236,52 @@ class ConfigAffectsBehaviourTest(DisflowTestCase):
         lease2 = engine.load()["trees"]["t"]["nodes"]["n2"]["lease"]
         expires2 = datetime.fromisoformat(lease2["expires_at"]).timestamp()
         self.assertGreater(expires2, expires + 90000, "显式 --ttl 必须压过项目默认")
+
+
+class ConfigPlacementOrderTest(DisflowTestCase):
+    """配置文件与 `start` 的**先后顺序**：今天只靠 README 那句“在 start 之前就位”保证，
+    而文档会漂。这里把它钉成行为。
+
+    根因：`disflow.json` 就是一个**普通文件**——引擎不特殊对待它（那是故意的：
+    配置变更有时真是节点干的活，那就该进 touch_plan）。所以：
+      - 在 `start` 之前就位（或提交进仓）⇒ 进基线，不算本节点的改动；
+      - 在 `start` 之后才出现 ⇒ 被作用域门当成“本节点引入的改动”。
+    两个分支都要钉：只钉前者的话，README 把配置挪到 run 块里没人会发现。
+    """
+
+    def _tree_with_one_node(self, engine: Engine, tree: str = "t") -> None:
+        engine.init_tree(tree, "g")
+        engine.expand(tree, "root", [{
+            "id": "n1", "goal": "g", "touch_plan": ["src/"],
+            "acceptance": acceptance()}])
+
+    def test_config_in_place_before_start_counts_as_baseline(self):
+        # `commit=True`：初始文件已跟踪且干净（脏树会在 `git status` 里把未跟踪目录
+        # 折叠成 `src/` 一条，断言就精确不到文件了）
+        engine, repo = git_repo(self, {"src/a.py": "x = 1\n",
+                                       config.CONFIG_BASENAME: '{"size_budget": 50}'},
+                                commit=True)
+        self.assertEqual(engine.cfg.size_budget, 50)
+        self._tree_with_one_node(engine)
+        engine.start("t", "n1", holder="h")
+        touch(os.path.join(repo, "src", "b.py"), "y = 2\n")
+        engine.done("t", "n1", declarations={"approver": "me"})
+        evidence = engine.load()["trees"]["t"]["nodes"]["n1"]["evidence"]
+        self.assertEqual(evidence["introduced"], ["src/b.py"],
+                         "开工前就位的配置属于基线，不该算本节点引入")
+        self.assertNotIn(config.CONFIG_BASENAME, evidence["introduced"])
+
+    def test_config_appearing_after_start_is_flagged_and_the_error_names_it(self):
+        engine, repo = git_repo(self, {"src/a.py": "x = 1\n"}, commit=True)
+        self._tree_with_one_node(engine)
+        engine.start("t", "n1", holder="h")
+        touch(os.path.join(repo, config.CONFIG_BASENAME), '{"size_budget": 50}')
+        touch(os.path.join(repo, "src", "b.py"), "y = 2\n")
+        with self.assertRaises(GateReject) as ctx:
+            engine.done("t", "n1", declarations={"approver": "me"})
+        message = "；".join(ctx.exception.missing)
+        self.assertIn(config.CONFIG_BASENAME, message, "报错要点名是哪个文件")
+        self.assertIn("rescope", message, "报错要给出修法")
 
 
 class VocabularyValidationTest(DisflowTestCase):

@@ -64,6 +64,13 @@ class ReadmeWalkthroughTest(DisflowTestCase):
         self.assertIn("✓ A done", run.stdout, "⑤ 真完成后应落盘")
         self.assertIn("已关闭", combined, "关树应成功（逃生口给了理由）")
 
+        # ── 配置：独立文件，且**在 start 之前**就位（否则会被算成本节点的改动）──
+        # 这一行能成立，说明 prepare 真的把 disflow.json 放在首次 start 之前；
+        # 若把它挪到 run 里（start 之后），⑤ 的 done 会被作用域门拒收。
+        self.assertIn("acceptance_timeout = 300", run.stdout,
+                      "⑧ doctor 应报出配置文件里的取值（不是出厂默认 120）")
+        self.assertIn("disflow.json", run.stdout, "⑧ 应报出配置文件路径与来源")
+
         # ── 声明的证据形状（README 展示的那三行）──────────────────────────
         state = json.loads(
             pathlib.Path(env["DISFLOW_STATE_DIR"], "state.json").read_text(encoding="utf-8"))
@@ -76,6 +83,8 @@ class ReadmeWalkthroughTest(DisflowTestCase):
         self.assertEqual(evidence["size"]["total"], 1)
         self.assertEqual(evidence["vacuous"], {}, "README 声明的两道门真验到了东西")
         self.assertEqual(evidence["acceptance"]["exit"], 0)
+        self.assertEqual(evidence["acceptance"]["timeout"], 300,
+                         "验收超时必须真的用配置文件里的值（此前是代码里的常量）")
 
     def test_readme_walkthrough_is_mentioned_from_the_top(self):
         """上手路径不能埋在文档深处（本次修的就是“新读者要读 555 行才敢动手”）。"""

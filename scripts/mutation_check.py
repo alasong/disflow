@@ -183,6 +183,16 @@ MUTATIONS: list[Mutation] = [
      '            "timeout": timeout, "output_tail": output[-cfg.output_tail:]}',
      '            "timeout": timeout, "output_tail": output[-2000:]}',
      "test_config.py"),
+    ("验收超时不再进证据（配置生效与否看不出来）", "disflow/gates.py",
+     '    meta = {"cmd": cmd, "expect": expect, "exit": proc.returncode,\n'
+     '            "timeout": timeout, "output_tail": output[-cfg.output_tail:]}',
+     '    meta = {"cmd": cmd, "expect": expect, "exit": proc.returncode,\n'
+     '            "output_tail": output[-cfg.output_tail:]}',
+     "test_readme_walkthrough.py"),
+    ("作用域门对所有路径都放行（配置的顺序要求消失）", "disflow/gates.py",
+     'def _covered(path: str, touch_plan: list[str]) -> bool:\n    for entry in touch_plan:',
+     'def _covered(path: str, touch_plan: list[str]) -> bool:\n    return True\n    for entry in touch_plan:',
+     "test_config.py"),
 
     # ── 空洞通过：记录与报出 ────────────────────────────────────────────
     ("空洞检测失效（永远返回空）", "disflow/gates.py",

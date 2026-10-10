@@ -12,14 +12,26 @@ export PYTHONPATH=/改成你 clone 的 disflow 路径
 export DISFLOW_STATE_DIR="$PWD/.disflow"
 ```
 
-**准备**——注意 `.gitignore`：状态目录必须被忽略，否则它会以「未跟踪目录」的身份
-被改动归因当成“本节点引入的改动”。
+**准备**——注意两点：`.gitignore` 与**配置文件**。状态目录必须被忽略，否则它会以
+「未跟踪目录」的身份被改动归因当成“本节点引入的改动”。配置文件（可选）必须
+**在第一次 `start` 之前**就位（或提交进仓库）——`start` 会拍下基线快照，
+之后才出现的文件会被作用域门算成“本节点引入的改动”（实测：会报
+`改动超出 touch_plan：['disflow.json']`）。
 
 ```bash
 # disflow-walkthrough:prepare
 git init -q .
 printf '.disflow/\n' > .gitignore
 printf 'Hello\n' > greeting.txt
+
+# 配置是**独立文件**（不在 .disflow/ 里）：策略该进版本库、可 review，
+# 而状态目录删掉重置是合法动作——配置不该被那个动作带走。
+cat > disflow.json <<'JSON'
+{
+  "acceptance_timeout": 300,
+  "stages": ["req", "design", "dev", "verify", "done"]
+}
+JSON
 ```
 
 **跑一遍**（下面的输出都是**真实输出**，照抄就能得到同样的结果）：
@@ -78,6 +90,7 @@ d doctor                                        # 自检全绿
 | **门会拒收假的完成**：没改任何东西就 `done` → 退出码 2，理由逐条列出 | ④ |
 | **证据引擎自算**：`done` 后 `introduced` / `size` / `acceptance` 由引擎采集，不是手抄 | ⑤ |
 | **看板/树/图不是第二份存储**：它们都读同一份投影 | ⑦ |
+| **配置是独立文件且看得见**：`doctor` 报出实际取值与配置文件路径 | ⑧ |
 
 第 ④ 步的真实输出：
 
@@ -175,6 +188,12 @@ python3 -m disflow.cli doctor
 （人写、要版本化、要 review），状态是**派生**（可从事件重建）——放一起的话，
 「删掉 `.disflow/` 重置」这个合法动作会**静默带走策略**。
 
+**先后顺序（会撞上）**：`disflow.json` 就是一个**普通文件**，引擎不特殊对待它。
+`start` 会拍下基线快照，所以它得**在第一次 `start` 之前**就位（或提交进仓）——
+否则作用域门会把它算成“这个节点引入的改动”（实测：`改动超出 touch_plan：['disflow.json']`）。
+之所以不把它列入白名单：配置变更有时**真是**节点干的活，那就该进 `touch_plan`；
+白名单会默默藏掉那种情况。
+
 `disflow doctor` 会把 8 个键的实际取值与来源列出来（改了行为就变，那就得看得见）：
 
 ```text
@@ -195,8 +214,8 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 274 passed（零第三方依赖）
-python3 scripts/mutation_check.py                 # 变异测试：37/37（验证测试真的有牙）
+python3 -m unittest discover -s tests -t tests    # 276 passed（零第三方依赖）
+python3 scripts/mutation_check.py                 # 变异测试：39/39（验证测试真的有牙）
 ```
 
 > 上面那段「5 分钟上手」本身也被测试盯着：`tests/test_readme_walkthrough.py` 会

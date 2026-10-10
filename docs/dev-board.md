@@ -13,7 +13,7 @@
 | R1 复用决策 | ✅ 只 vendor `flowcore/store.py`（`disflow/store.py`），其余重写 |
 | R2 设计定稿 | ✅ `docs/design.md` |
 | 实现 | D10–D95 + D100 全绿 |
-| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 274 tests, OK** |
+| 测试 | `python3 -m unittest discover -s tests -t tests` → **Ran 276 tests, OK** |
 | 端到端 | `drive` 确定性、`rebuild --check` 一致、`doctor` 全绿 |
 | 门验证 | acceptance 缺失/失败、超 `touch_plan`、超 `size_budget`、缺 evaluate/sediment → **全部拒收** |
 | 树终止 | `close` 跑 `tree_closure`，本看板树已关闭 |
@@ -177,7 +177,7 @@ disflow 决定，**无硬编码列表**。
 
 **变异测试抳出 2 个「测试自身的洞」**（已补：`test_declared_dangling_relates_is_rejected`、
 `test_per_file_agrees_with_total`）——详见 backlog §B3/B4 已结节。
-可复跑回归口：`python3 scripts/mutation_check.py`（**37/37**，有漏抓则退出码 1）。
+可复跑回归口：`python3 scripts/mutation_check.py`（**39/39**，有漏抓则退出码 1）。
 
 ### 0.7 python-expert 12 类审查（按“该配置化却硬编码”切入）
 
@@ -255,6 +255,26 @@ harness 却把它们报成**「漏抓」**——凭空多出 3 个根本不存�
 - 真漏抓 → exit 1。
 新增 `tests/test_mutation_harness.py`：除了测这个区分，还有一条
 **全量断言所有针脚的 `old` 都能在当前代码里找到**（把“改了实现不更新针脚”变成即时报错）。
+
+### 0.10 配置文件的**先后顺序**（写进上手流程）
+
+写 README 时实测出来的坑：`disflow.json` 在 **`start` 之后**才创建 ⇒ 作用域门拒收
+`改动超出 touch_plan：['disflow.json']`；**提交后或开工前就位** ⇒ 通过。
+
+| | |
+| --- | --- |
+| 根因 | `disflow.json` 就是一个**普通文件**，引擎不特殊对待 |
+| 为何**不**列白名单 | 配置变更有时**真是**节点干的活（如“加一个看板列”），那就该进 `touch_plan`；白名单会默默藏掉那种情况 |
+| 报错好不好懂 | **好懂**——它点名了文件，也给了修法（rescope / scope_waiver）。这条的价值是**别撞上**，不是修不透明的失败 |
+
+已做：① README 的 `prepare` 块里创建配置（在 `start` 之前，带注释说明为何要这个顺序）
+② 第 ⑧ 步 `d doctor` 现在会报出配置取值与来源，上手测试断言
+`acceptance_timeout = 300` 且证据里 `acceptance.timeout == 300`
+（此前这个超时是代码里的常量，配置根本到不了证据）
+③ `test_config.py` 新增 `ConfigPlacementOrderTest`：**两个分支都钉住**——
+开工前就位不进 `introduced`；开工后出现则被拒且报错点名到文件。
+
+> 只钉前者是不够的：那样的话把 README 的配置挪到 `run` 块里**不会有人发现**。
 
 ### 0.3 随后修掉的 C4.2 与顺手补的两个可执行检查
 
