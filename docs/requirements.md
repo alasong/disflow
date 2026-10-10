@@ -179,3 +179,31 @@ disflow 是一个**任务分发流引擎**：用**树**提供上下文继承、�
 | 波次 Wave | 同一时刻全部就绪、且写面互不冲突的节点集合 |
 | 门 Gate | 节点 `done` 的验收判据 |
 | 分发器 Dispatcher | 只算不跑的调度者（`drive`） |
+
+---
+
+## 7. 实现覆盖审计（2026-10-10）
+
+逐条核对 FR 与实现（证据 = 命令/测试文件，非自述）：
+
+| FR | 状态 | 证据 |
+| --- | --- | --- |
+| FR-1/2/3 单一事实源 | ✅ | 事件流 + 原子投影 + flock；`tests/test_store.py`、`rebuild --check` |
+| FR-4/5/6/7 树 | ✅ | `parent` 唯一、无 `contains`；`tests/test_core.py`、`test_import_mgt.py` |
+| FR-8/9/10 图 | ✅ | 写时拒环；`consumes` 未登记即拒；`tests/test_engine.py` |
+| FR-11/12 就绪 | ✅ | 唯一 `ready()`；`tests/test_core.py`、`test_multitree.py` |
+| FR-13 就绪快照 | ◐ | `drive --json` 已提供，但无独立 `--dry-run` 旗标 |
+| FR-14/15/16/17 分发 | ✅ | 只推不跑；brief/collect；无 spawn；无常驻；`tests/test_e2e.py` |
+| FR-18/19/20 门与证据 | ✅ | 验收门 + 证据自算 + 缺项契约；`tests/test_engine.py`、`test_gates.py` |
+| FR-21/22/23 看板 | ✅ | 三视图同源；多树隔离；`awaits` 信号；`tests/test_views.py`、`test_multitree.py` |
+| FR-24/25 上下文与写面 | ✅ | `brief` 祖先链注入；`pack_waves` 冲突排队；`tests/test_core.py` |
+| **FR-26 租约** | ✅ | 带 `expires_at`；`reap` 显式回收；`tests/test_lease.py`（**本轮补齐**） |
+| FR-27 卡死 | ✅ | `is_stuck`；`tests/test_core.py` |
+| FR-28/29 迁移 | ✅ | `import mgt`；`design.md` §10/§10.1；`tests/test_import_mgt.py` |
+| NFR-1 零依赖 | ✅ | 仅标准库 |
+| NFR-2 语言中立 | ◐ | 核心基本中立；`ready` 仍 import `spec.TERMINAL` |
+| NFR-3/4/5 文件式·可测·可重建 | ✅ | — |
+| NFR-6 规模预算 | ✅ | `size_budget` 门；`tests/test_gates.py` |
+| NFR-7 不静默降级 | ✅ | 坏行/写失败报错；`tests/test_store.py`、`test_cli.py` |
+
+**未覆盖（◐）**：FR-13 的 `--dry-run` 旗标、NFR-2 的业务常量下沉。均列入 v0.2。

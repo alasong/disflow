@@ -7,10 +7,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 
 from . import graph, store, views
 from .engine import Engine, EngineError, GateReject
 from .import_mgt import apply_import, build_import, load_mgt
+from .ready import lease_expired
 from .state import project
 
 
@@ -70,7 +72,7 @@ def cmd_consume(engine: Engine, args) -> int:
 
 
 def cmd_start(engine: Engine, args) -> int:
-    engine.start(args.tree, args.node, args.holder or "")
+    engine.start(args.tree, args.node, args.holder or "", ttl=args.ttl)
     print(f"✓ {args.node} 开工（holder={args.holder or 'unknown'}）")
     return 0
 
@@ -198,11 +200,14 @@ def cmd_doctor(engine: Engine, args) -> int:
     if not matched:
         problems.extend(f"投影漂移：{d}" for d in diffs)
     state = engine.load()
+    now_ts = time.time()
     for name, tree in sorted(state.get("trees", {}).items()):
         cycles = graph.find_cycles(tree["nodes"])
         if cycles:
             problems.append(f"{name}: requires 成环 {cycles}")
         for node_id, node in tree["nodes"].items():
+            if node.get("status") == "running" and lease_expired(node.get("lease"), now_ts):
+                problems.append(f"{name}/{node_id}: 租约超时未回收（可 `disflow reap {name}`）")
             for dep in node.get("requires") or []:
                 if dep not in tree["nodes"]:
                     problems.append(f"{name}/{node_id}: requires 悬空 {dep}")
@@ -269,6 +274,15 @@ def cmd_close(engine: Engine, args) -> int:
     return 0
 
 
+def cmd_reap(engine: Engine, args) -> int:
+    reclaimed = engine.reap(args.tree)
+    if not reclaimed:
+        print("✓ 无过期租约")
+        return 0
+    print(f"✓ 回收 {len(reclaimed)} 个过期租约：{' '.join(reclaimed)}")
+    return 0
+
+
 def cmd_trees(engine: Engine, args) -> int:
     names = engine.trees()
     if not names:
@@ -329,6 +343,7 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("tree")
     node.add_argument("node")
     node.add_argument("--holder", default="")
+    node.add_argument("--ttl", type=int, default=None, help="租约秒数（默认 900）")
 
     node = add("collect", cmd_collect)
     node.add_argument("tree")
@@ -394,6 +409,9 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("--set", required=True)
 
     node = add("close", cmd_close)
+    node.add_argument("tree")
+
+    node = add("reap", cmd_reap)
     node.add_argument("tree")
 
     add("trees", cmd_trees)

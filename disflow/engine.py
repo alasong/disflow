@@ -6,15 +6,33 @@
 from __future__ import annotations
 
 import os
+import time
+from datetime import datetime, timedelta, timezone
 
 from . import gates, graph, store
 from .dispatch import dispatch_plan
 from .dispatch import drive as run_drive
 from .dispatch import handoff_brief, result_contract, validate_result
-from .ready import blocked_by, is_stuck, progress, ready_tasks, running_tasks
-from .spec import SPEC
+from .ready import (
+    blocked_by,
+    is_stuck,
+    lease_expired,
+    progress,
+    ready_tasks,
+    running_tasks,
+)
+from .spec import LEASE_TTL_SECONDS, SPEC
 from .state import project
-from .store import now_iso
+
+
+def _make_lease(holder: str, ttl: int = LEASE_TTL_SECONDS) -> dict:
+    """带有效期的工作租约（`reap` 据此判过期）。"""
+    now = datetime.now(timezone.utc)
+    return {
+        "holder": holder or "unknown",
+        "at": now.isoformat(timespec="microseconds"),
+        "expires_at": (now + timedelta(seconds=ttl)).isoformat(timespec="microseconds"),
+    }
 
 
 class EngineError(Exception):
@@ -141,7 +159,10 @@ class Engine:
 
     # ── 生命周期 ──────────────────────────────────────────────────────────
 
-    def start(self, tree: str, node: str, holder: str = "") -> dict:
+    def start(self, tree: str, node: str, holder: str = "",
+              ttl: int | None = None) -> dict:
+        lease = _make_lease(holder, LEASE_TTL_SECONDS if ttl is None else ttl)
+
         def guard(t: dict, state: dict) -> None:
             item = self._need(t, node)
             if item.get("kind") != "task":
@@ -152,8 +173,7 @@ class Engine:
             if blockers:
                 raise EngineError(f"{node} 未就绪，被阻塞：{blockers}")
         return self._write("node.start", tree=tree, node=node, guard_state=guard,
-                           prepare=lambda _: {"lease": {"holder": holder or "unknown",
-                                                        "at": now_iso()},
+                           prepare=lambda _: {"lease": lease,
                                               "baseline": gates.git_changed_files(self.cwd) or []})
 
     def collect(self, tree: str, node: str, result: dict) -> dict:
@@ -211,6 +231,25 @@ class Engine:
         return self._write("node.skip", tree=tree, node=node,
                            guard=lambda t: self._need(t, node),
                            prepare=lambda _: {"reason": reason})
+
+    def reap(self, tree: str) -> list[str]:
+        """回收**过期**租约（显式事件，不改 `ready()` 的纯度）。返回被回收的节点 id。
+
+        worker 崩溃留下的 `running` 节点会一直占着节点；`reap` 把它放回 pending，
+        并记下回收原因（可审计）。“过期”依据租约自带的 `expires_at`。
+        """
+        now_ts = time.time()
+        target = self.tree(tree)
+        stale = sorted(
+            node_id for node_id, node in target["nodes"].items()
+            if node.get("status") == "running"
+            and lease_expired(node.get("lease"), now_ts))
+        for node_id in stale:
+            holder = (target["nodes"][node_id].get("lease") or {}).get("holder", "")
+            extra = {"reason": f"租约超时（holder={holder}）"}
+            self._write("node.reclaim", tree=tree, node=node_id,
+                        prepare=lambda _t, payload=extra: dict(payload))
+        return stale
 
     def import_node(self, tree: str, node: str, status: str, note: str = "") -> dict:
         """导入既有状态（不可经验收门直接构造 done）——显式标记 imported。"""

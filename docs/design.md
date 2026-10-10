@@ -126,6 +126,8 @@ ready(n) := kind(n) == task
           ∧ ∀ d ∈ requires(n): status(d) == done        # 图入边
           ∧ ∀ t ∈ awaits(n): t ∈ closed                 # 跨树完成信号
           ∧ lease(n) == null                            # 未被告占用
+          # lease 自带 expires_at；**过期不会自动放行**：
+          # 靠显式 `disflow reap <tree>` 置回 pending（就绪判定不看时钟，保持纯函数）
           ∧ 无环（写入时已保证）
 
 blocked_by(n) := [ d ∈ requires(n) : status(d) != done ]
@@ -194,6 +196,9 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 | `disflow collect <tree> <node> --result` | 校验结果契约后落盘 | **不写 done** |
 | `disflow done <tree> <node> --decl` | 跑门 → 通过/拒收 | 证据自算；拒收给缺项 |
 | `disflow fail/retry/skip <tree> <node>` | 状态操作 | 经同一状态表 |
+| `disflow reap <tree>` | 回收**过期**租约（running → pending） | 显式事件；不自动”看时钟“ |
+| `disflow trees` | 列出所有树 + 是否 closed | 投影，不是第二存储 |
+| `disflow close <tree>` | 终止树（跑 `tree_closure` 门） | 供跨树 `awaits` 信号 |
 
 ### 5.3 spawn 归宿主
 

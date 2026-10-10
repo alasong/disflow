@@ -159,6 +159,14 @@ def _on_tree_close(state: dict, event: dict) -> None:
     state["trees"][event["slug"]]["closed"] = True
 
 
+def _on_node_reclaim(state: dict, event: dict) -> None:
+    """回收过期租约：回到 pending，保留回收原因（可审计）。"""
+    node = _node(state, event["slug"], event["node"])
+    node["status"] = "pending"
+    node["lease"] = None
+    node["reclaimed"] = event.get("reason", "")
+
+
 _HANDLERS = {
     "tree.init": _on_tree_init,
     "tree.goal": _on_tree_goal,
@@ -176,4 +184,5 @@ _HANDLERS = {
     "node.import": _on_node_import,
     "node.context": _on_node_context,
     "tree.close": _on_tree_close,
+    "node.reclaim": _on_node_reclaim,
 }

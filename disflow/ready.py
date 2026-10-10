@@ -4,10 +4,25 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from .graph import unmet_requires
 from .spec import TERMINAL
 
 RUNNING = "running"
+
+
+def lease_expired(lease: dict | None, now_ts: float) -> bool:
+    """租约是否已过期（仅 `reap` 调用；`ready()` 不看时钟，保持纯函数）。"""
+    if not lease:
+        return False
+    raw = lease.get("expires_at")
+    if not raw:
+        return False
+    try:
+        return datetime.fromisoformat(raw).timestamp() < now_ts
+    except ValueError:
+        return False
 
 
 def awaits_of(node: dict) -> list[str]:
