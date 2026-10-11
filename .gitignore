@@ -3,3 +3,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# 别的工具在本仓留下的按项目记忆（WorkBuddy.app 的 AI 工作目录，实测只有 memory/<date>.md）。
+# 不入库也不删：那是**它的**产物（删了丢别人的数据），忽略即可让 `git status` 干净。
+.workbuddy-ai/
