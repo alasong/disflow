@@ -342,7 +342,7 @@ def cmd_plan(engine: Engine, args) -> int:
 
 def cmd_rebuild(engine: Engine, args) -> int:
     if args.check:
-        matched, diffs = store.projection_matches(engine.spec, project=project)
+        matched, diffs = store.projection_matches(engine.storage, project=project)
         if matched:
             print("✓ 投影一致")
             return 0
@@ -350,9 +350,9 @@ def cmd_rebuild(engine: Engine, args) -> int:
         for item in diffs:
             print(f"  - {item}")
         return 1
-    state = store.rebuild(engine.spec, project=project)
-    store.write_projection(engine.spec, store.stamp_projection(
-        state, len(store.load_events(engine.spec))))
+    state = store.rebuild(engine.storage, project=project)
+    store.write_projection(engine.storage, store.stamp_projection(
+        state, len(store.load_events(engine.storage))))
     print("✓ 投影已从事件重建")
     return 0
 
@@ -390,7 +390,7 @@ def _state_dir_inside_repo(engine: Engine) -> tuple[str, str] | None:
     相对 state dir 一律以 `repo`（= `engine.cwd`，与 worktree 模块的 `repo` 同一来源）为基准解析，
     两个 cwd 下判定必须一致。
     """
-    raw = store.state_dir(engine.spec)
+    raw = store.state_dir(engine.storage)
     repo = os.path.realpath(engine.cwd)
     path = raw if os.path.isabs(raw) else os.path.join(engine.cwd, raw)
     resolved = os.path.realpath(path)
@@ -402,13 +402,13 @@ def _state_dir_inside_repo(engine: Engine) -> tuple[str, str] | None:
 def cmd_doctor(engine: Engine, args) -> int:
     problems: list[str] = []
     advisories: list[str] = []
-    matched, diffs = store.projection_matches(engine.spec, project=project)
+    matched, diffs = store.projection_matches(engine.storage, project=project)
     if not matched:
         problems.extend(f"投影漂移：{d}" for d in diffs)
         # 报告要带修法：漂移是投影函数变了/被手改，事件才是真相
         problems.append("修法：`disflow rebuild` 从事件重算投影（投影是派生的，事件是真相）")
     # 「已交付的 worktree 功能在当前 state dir 配置下不可用」——**主动发现**，不等 worktree 动词报错。
-    # 这一条是**需人判断**（不是故障，不计入退出码）：仓内 state dir 是**出厂默认**（`spec.py` 的
+    # 这一条是**需人判断**（不是故障，不计入退出码）：仓内 state dir 是**出厂默认**（`vocab.py` 的
     # `state.dir = ".disflow"`），不是误配；它只限制一项**可选功能**（worktree）的可用性，其余功能正常。
     # 判成故障会因默认布局把所有人假红（假红比不报更坏）——但也不能静默：单独一条、单独一行报出来，
     # 才兑现「提前可见」这个收益。
@@ -442,7 +442,7 @@ def cmd_doctor(engine: Engine, args) -> int:
                     problems.append(f"{name}/{node_id}: consumes 未登记 {consumed}")
     # 「关树后又挂任务」：**只能从事件顺序判**（终态里它和「合法地带着未完成任务关树」
     # 长得一模一样）。这条不是新守卫，而是**事后探测**：`expand` 的拒收只管从今往后。
-    for item in expands_after_close(store.load_events(engine.spec)):
+    for item in expands_after_close(store.load_events(engine.storage)):
         who = f"（holder={item['holder']}）" if item["holder"] else ""
         problems.append(
             f"{item['tree']}: {item['closed_at']} 已关闭，但之后又挂了任务"
@@ -719,7 +719,7 @@ def cmd_metrics(engine: Engine, args) -> int:
     「几个节点、完几个、剩几个」——否则燃尽只剩「0 → 0」，一行没有信息量。
     """
     tree = engine.tree(args.tree)
-    events = store.load_events(engine.spec)
+    events = store.load_events(engine.storage)
     now_ts = time.time()
     summary = metrics.summary(tree, events, slug=args.tree, now_ts=now_ts)
     burn = metrics.burndown(tree, events, slug=args.tree, now_ts=now_ts)
@@ -776,7 +776,7 @@ def cmd_deadline(engine: Engine, args) -> int:
         print("✓ deadline 已清空")
         return 0
     tree = engine.tree(args.tree)
-    summary = metrics.summary(tree, store.load_events(engine.spec), slug=args.tree,
+    summary = metrics.summary(tree, store.load_events(engine.storage), slug=args.tree,
                               now_ts=time.time())
     print(f"✓ deadline 已设为 {value}"
           + (f" · **逾期 {summary['deadline_overdue_days']} 天**"
@@ -829,7 +829,7 @@ def cmd_worktree(engine: Engine, args) -> int:
     `reap` 是**纯计划**——删除交还宿主跑它打印出来的命令：删是唯一不可逆动作，引擎不替人删数据。
     """
     engine.tree(args.tree)                 # 名字写错在这里就用 EngineError 拦下
-    spec, tree, cwd = engine.spec, args.tree, engine.cwd
+    storage, tree, cwd = engine.storage, args.tree, engine.cwd
     action = args.action
     nodes = _flatten_nodes(args.nodes)
     if nodes is not None and action != "apply":
@@ -844,7 +844,7 @@ def cmd_worktree(engine: Engine, args) -> int:
         raise EngineError(
             f"worktree {action} 不支持 --force（显式强删计划只对 reap 有意义）")
     if action == "plan":
-        report = _worktree_call(args, lambda: worktree.plan(spec, tree, cwd))
+        report = _worktree_call(args, lambda: worktree.plan(storage, tree, cwd))
         if args.json:
             _dump(report)
             return 0
@@ -859,7 +859,7 @@ def cmd_worktree(engine: Engine, args) -> int:
         print("只推不跑：要真建请 `disflow worktree apply <tree>`")
         return 0
     if action == "list":
-        report = _worktree_call(args, lambda: worktree.reconcile(spec, tree, cwd))
+        report = _worktree_call(args, lambda: worktree.reconcile(storage, tree, cwd))
         if args.json:
             _dump(report)
             return 0
@@ -878,7 +878,7 @@ def cmd_worktree(engine: Engine, args) -> int:
             print("  ✓ 干净")
         return 0
     if action == "apply":
-        report = _worktree_call(args, lambda: worktree.apply(spec, tree, cwd, nodes=nodes))
+        report = _worktree_call(args, lambda: worktree.apply(storage, tree, cwd, nodes=nodes))
         if args.json:
             _dump(report)
             return 0
@@ -897,7 +897,7 @@ def cmd_worktree(engine: Engine, args) -> int:
             return 1
         return 0
     if action == "reap":
-        report = _worktree_call(args, lambda: worktree.reap(spec, tree, cwd, force=force))
+        report = _worktree_call(args, lambda: worktree.reap(storage, tree, cwd, force=force))
         if args.json:
             _dump(report)
             return 0
@@ -941,7 +941,7 @@ def cmd_trees(engine: Engine, args) -> int:
     if not names:
         print("（无树）")
         return 0
-    events = store.load_events(engine.spec)      # 一次读，循环里复用（不每棵树重读）
+    events = store.load_events(engine.storage)      # 一次读，循环里复用（不每棵树重读）
     now_ts = time.time()
     for name in names:
         status = engine.status(name)

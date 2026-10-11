@@ -3,7 +3,7 @@
 **逆向自检**：扫描核心层文件，命中任何业务词即失败——不是「文档说核心中立」，而是可执行的断言。
 
 核心层 = `core.py` / `store.py` / `graph.py` / `ready.py`（通用机制与纯函数）。
-业务层 = `spec.py` / `model.py` / `state.py` / `gates.py` / `views.py` / `context.py` /
+业务层 = `vocab.py` / `model.py` / `state.py` / `gates.py` / `views.py` / `context.py` /
 `dispatch.py` / `engine.py` / `cli.py` / `import_mgt.py`（本实例的名词与策略）。
 
 **已知边界（诚实标注）**：本自检是**针脚表 + 单词边界**，不是业务词的闭集推导——
@@ -103,12 +103,12 @@ class LayeringTest(DisflowTestCase):
         """依赖方向：核心不许 import 业务层。"""
         with open(os.path.join(_package_dir(), "ready.py"), encoding="utf-8") as handle:
             text = handle.read()
-        self.assertNotIn("from .spec import", text)
+        self.assertNotIn("from .vocab import", text)
         self.assertIn("from .core import", text)
 
     def test_core_does_not_import_business_modules(self):
         pkg = _package_dir()
-        forbidden = ("from .spec ", "from .spec.", "from .model ", "from .state ",
+        forbidden = ("from .vocab ", "from .vocab.", "from .model ", "from .state ",
                      "from .gates ", "from .views ", "from .context ", "from .engine ",
                      "from .cli ", "from .import_mgt ")
         offenders: dict[str, list[str]] = {}

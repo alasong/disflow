@@ -212,7 +212,7 @@ class AdversarialOverdueVerbTest(DisflowTestCase):
         eng.init_tree("t", "g")
         eng.deadline("t", "2020-01-01")
         eng.expand("t", "root", [{"id": "a", "acceptance": {"cmd": "true", "expect": "exit0"}}])
-        s = summary(eng.tree("t"), store.load_events(eng.spec), slug="t", now_ts=_ep(2026, 6, 1))
+        s = summary(eng.tree("t"), store.load_events(eng.storage), slug="t", now_ts=_ep(2026, 6, 1))
         self.assertGreater(s["deadline_overdue_days"], 0)
         self.assertEqual(s["deadline"], "2020-01-01")
 

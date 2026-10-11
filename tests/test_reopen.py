@@ -22,7 +22,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from base import DisflowTestCase
 
-from disflow import spec, state, store
+from disflow import vocab, state, store
 from disflow.cli import main
 from disflow.engine import Engine, EngineError
 from disflow.state import expands_after_close, project
@@ -59,14 +59,14 @@ class ExpandOnClosedTreeTest(DisflowTestCase):
         self.assertIn("d", self.engine.closed_trees())
 
     def test_expand_on_closed_tree_is_rejected_and_points_to_reopen(self) -> None:
-        before = len(store.load_events(spec.SPEC))
+        before = len(store.load_events(vocab.STORAGE))
         with self.assertRaises(EngineError) as ctx:
             self.engine.expand("d", "a", [_task("z")])
         message = str(ctx.exception)
         self.assertIn("已关闭", message)
         # 报错必须给出**可照抄的修法**，而不是只说不许
         self.assertIn("disflow reopen d", message)
-        self.assertEqual(len(store.load_events(spec.SPEC)), before,
+        self.assertEqual(len(store.load_events(vocab.STORAGE)), before,
                          "拒收必须一条事件都不落（不是落一半）")
         self.assertNotIn("z", self.engine.tree("d")["nodes"])
 
@@ -107,7 +107,7 @@ class ReopenMechanicsTest(DisflowTestCase):
         """`reason` 可选：审计价值在「至少有一次显式事件」，不在强逼字符串。"""
         self.engine.close("d")
         self.engine.reopen("d")
-        kinds = [e["kind"] for e in store.load_events(spec.SPEC)]
+        kinds = [e["kind"] for e in store.load_events(vocab.STORAGE)]
         self.assertIn("tree.reopen", kinds)
 
     def test_reopen_then_close_again_is_allowed(self) -> None:
@@ -116,7 +116,7 @@ class ReopenMechanicsTest(DisflowTestCase):
         self.engine.reopen("d", reason="再干一阵")
         self.engine.close("d")
         self.assertTrue(self.engine.tree("d").get("closed"))
-        kinds = [e["kind"] for e in store.load_events(spec.SPEC) if e["kind"].startswith("tree.")]
+        kinds = [e["kind"] for e in store.load_events(vocab.STORAGE) if e["kind"].startswith("tree.")]
         self.assertEqual(kinds, ["tree.init", "tree.close", "tree.reopen", "tree.close"])
 
     def test_twice_closed_after_reopen_keeps_both_reasons(self) -> None:
@@ -128,8 +128,8 @@ class ReopenMechanicsTest(DisflowTestCase):
                          ["第一次重开", "第二次重开"])
 
     def test_kind_is_registered_in_both_declarations(self) -> None:
-        """`spec.EVENT_KINDS` 与 `state._HANDLERS` 必须同步（结构性守卫，见 test_declarations）。"""
-        self.assertIn("tree.reopen", spec.EVENT_KINDS)
+        """`vocab.EVENT_KINDS` 与 `state._HANDLERS` 必须同步（结构性守卫，见 test_declarations）。"""
+        self.assertIn("tree.reopen", vocab.EVENT_KINDS)
         self.assertIn("tree.reopen", state._HANDLERS)
 
 
@@ -140,17 +140,17 @@ class HolderOnExpandTest(DisflowTestCase):
         engine = Engine(cwd=self.tmp)
         engine.init_tree("d", "demo")
         engine.expand("d", "root", [_task("a")], holder="alice")
-        event = [e for e in store.load_events(spec.SPEC) if e["kind"] == "node.expand"][-1]
+        event = [e for e in store.load_events(vocab.STORAGE) if e["kind"] == "node.expand"][-1]
         self.assertEqual(event["holder"], "alice")
 
     def test_holder_defaults_to_empty_and_never_breaks_replay(self) -> None:
         engine = Engine(cwd=self.tmp)
         engine.init_tree("d", "demo")
         engine.expand("d", "root", [_task("a")])
-        event = [e for e in store.load_events(spec.SPEC) if e["kind"] == "node.expand"][-1]
+        event = [e for e in store.load_events(vocab.STORAGE) if e["kind"] == "node.expand"][-1]
         self.assertEqual(event["holder"], "")
-        replayed = project(store.load_events(spec.SPEC))
-        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        replayed = project(store.load_events(vocab.STORAGE))
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=project)
         self.assertTrue(matched, diffs)
         self.assertEqual(sorted(replayed["trees"]["d"]["nodes"]), ["a", "root"])
 
@@ -237,7 +237,7 @@ class DoctorDetectsLegacyViolationTest(_CliRunMixin, DisflowTestCase):
     def test_expand_event_after_close_is_reported(self) -> None:
         """模拟修复前建的状态目录：绕过 `Engine.expand` 的守卫，直接落事件。"""
         self._close_tree_with_pending_task()
-        store.append_event(spec.SPEC, "node.expand", project=project, slug="d", node="a",
+        store.append_event(vocab.STORAGE, "node.expand", project=project, slug="d", node="a",
                            extra={"children": [_task("z")], "holder": "legacy-bob"})
         code, out, err = self._run(["doctor"])
         self.assertEqual(code, 1)
@@ -249,7 +249,7 @@ class DoctorDetectsLegacyViolationTest(_CliRunMixin, DisflowTestCase):
     def test_violation_disappears_after_explicit_reopen(self) -> None:
         """重开之后，那条历史违规不再算违规（显式动作就是修法）。"""
         self._close_tree_with_pending_task()
-        store.append_event(spec.SPEC, "node.expand", project=project, slug="d", node="a",
+        store.append_event(vocab.STORAGE, "node.expand", project=project, slug="d", node="a",
                            extra={"children": [_task("z")], "holder": "legacy-bob"})
         self.assertEqual(self._run(["doctor"])[0], 1)
         self.assertEqual(self._run(["reopen", "d", "--reason", "补上 z"])[0], 0)
@@ -266,7 +266,7 @@ class DoctorDetectsLegacyViolationTest(_CliRunMixin, DisflowTestCase):
         self._run(["init", "d", "--goal", "demo"])
         self._run(["expand", "d", "root", "--children", json.dumps([_task("a")]),
                    "--holder", "alice"])
-        event = [e for e in store.load_events(spec.SPEC) if e["kind"] == "node.expand"][-1]
+        event = [e for e in store.load_events(vocab.STORAGE) if e["kind"] == "node.expand"][-1]
         self.assertEqual(event["holder"], "alice")
 
     def test_reopen_cli_warns_when_reason_missing(self) -> None:

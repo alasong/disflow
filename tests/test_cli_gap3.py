@@ -31,9 +31,9 @@ from datetime import date, datetime, timezone
 
 from base import DisflowTestCase, acceptance, git_repo
 
-from disflow import spec, store
+from disflow import vocab, store
 from disflow.cli import main
-from disflow.spec import SPEC
+from disflow.vocab import STORAGE
 
 # 与 test_worktree.py 同款：importlib 运行期解析，绕开 `disflow/__init__` 的再导出登记。
 worktree = importlib.import_module("disflow.worktree")
@@ -72,11 +72,11 @@ class CliMetricsDeadlineTest(_CliRunMixin, DisflowTestCase):
                    json.dumps(children, ensure_ascii=False)])
 
     def _deadline_in_projection(self) -> str | None:
-        state = store.read_json(store.projection_path(spec.SPEC))
+        state = store.read_json(store.projection_path(vocab.STORAGE))
         return state["trees"]["t"].get("deadline")
 
     def _events(self) -> int:
-        return len(store.read_jsonl(store.events_path(spec.SPEC)))
+        return len(store.read_jsonl(store.events_path(vocab.STORAGE)))
 
     # ── metrics ──────────────────────────────────────────────────────────
 
@@ -164,7 +164,7 @@ class CliWorktreeTest(_CliRunMixin, DisflowTestCase):
                                for nid in ids], ensure_ascii=False)])
 
     def _node_path(self, node: str) -> str:
-        return worktree.path_for(SPEC, "t", node)
+        return worktree.path_for(STORAGE, "t", node)
 
     # ── plan：零副作用 ───────────────────────────────────────────────────
 
@@ -174,7 +174,7 @@ class CliWorktreeTest(_CliRunMixin, DisflowTestCase):
         code, out, err = self._run(["worktree", "plan", "t"])
         self.assertEqual(code, 0, err)
         self.assertEqual(_worktree_paths(self.repo), before, "plan 不许改 worktree 登记")
-        self.assertFalse(os.path.exists(worktree.root(SPEC)), "plan 不许创建 worktree 根")
+        self.assertFalse(os.path.exists(worktree.root(STORAGE)), "plan 不许创建 worktree 根")
         # 打印出的落点必须在 state dir（= 仓外），否则会被 `git clean -xdf` 连带删掉
         path = os.path.realpath(self._node_path("a"))
         repo = os.path.realpath(self.repo)

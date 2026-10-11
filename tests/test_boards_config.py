@@ -1,7 +1,7 @@
 """看板定义配置化：**独立文件 `boards.json`**（2026-10-11 用户裁决）。
 
-**为什么单独一个文件**（本文件就是这条决定的规格）：四个看板曾写死在 `spec.STAGES` +
-`spec.STAGE_LABELS` 里。要做**动态看板**（按需建板），板定义必须先成为**数据**——
+**为什么单独一个文件**（本文件就是这条决定的规格）：四个看板曾写死在 `vocab.STAGES` +
+`vocab.STAGE_LABELS` 里。要做**动态看板**（按需建板），板定义必须先成为**数据**——
 否则「新建一块板」等于「改源码」。而它不塞进 `disflow.json`：板定义会**长大**，
 变更节奏与引擎参数（超时/预算/租约）不同，混在一起 review 也看不清改的是哪件事。
 
@@ -26,11 +26,11 @@ import unittest
 from base import DisflowTestCase, acceptance
 
 from disflow import boards as boards_mod
-from disflow import config, spec, store
+from disflow import config, vocab, store
 from disflow.boards import DEFAULT_BOARDS, Board, BoardsError
 from disflow.config import Config, ConfigError
 from disflow.engine import Engine, EngineError
-from disflow.spec import STAGES
+from disflow.vocab import STAGES
 from disflow.views import boards_lines
 
 
@@ -258,7 +258,7 @@ class StageDefaultTest(DisflowTestCase):
         write_boards(self, {"boards": ["todo", "doing"]})
         engine = Engine(cwd=self.tmp)
         engine.init_tree("t", "总目标")
-        events = store.read_jsonl(store.events_path(spec.SPEC))
+        events = store.read_jsonl(store.events_path(vocab.STORAGE))
         init = next(e for e in events if e["kind"] == "tree.init")
         self.assertEqual(init.get("stage"), "todo",
                          "入口板必须由**写时**给出（reducer 一读配置，事件流就不可重放了）")
@@ -270,7 +270,7 @@ class StageDefaultTest(DisflowTestCase):
         engine.init_tree("t", "总目标")
         engine.expand("t", "root", [
             {"id": "a", "goal": "没写 stage", "acceptance": acceptance()}])
-        events = store.read_jsonl(store.events_path(spec.SPEC))
+        events = store.read_jsonl(store.events_path(vocab.STORAGE))
         expand = next(e for e in events if e["kind"] == "node.expand")
         self.assertEqual(expand["children"][0]["stage"], "todo")
 

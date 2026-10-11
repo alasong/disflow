@@ -19,8 +19,12 @@
 `scan`（刷新索引）会写盘，且其中嵌了 `dirty`/`last_commit` 等 git 事实 ⇒ 提交后一跑就产生 diff；
 故本门**不写盘**：`scan` 是**提交前**的动作，不是收尾动作。
 
-跑法：`python3 scripts/finish.py [--dry-run]`
+跑法：`python3 scripts/finish.py [--jobs N] [--dry-run]`
 退出码：0 = 全量通过（资产 stale 只报不拦）；1 = 全量不过；2 = 环境不满足。
+
+**测试默认并行**：`--jobs 0`（默认）= 自动核数，走 `test_changed.py --all` 的**每文件一进程**
+（等价覆盖；本机 10 核实测：串行 75s → jobs10 28s）。`--jobs 1` 退回串行 `discover`
+（与 README 逐字一致的口径，`tests/test_finish.py` 钉住 `test_argv()`）。
 """
 from __future__ import annotations
 
@@ -36,11 +40,17 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 _TEST_ARGS = ["-m", "unittest", "discover", "-s", "tests", "-t", "tests"]
 _SCAN = "scripts/assets_scan.py"
+_PARALLEL = "scripts/test_changed.py"
 
 
 def test_argv() -> list[str]:
     """全量测试的 argv（收尾口径 = 与 README 的 `unittest discover` 逐字一致）。"""
     return [sys.executable, *_TEST_ARGS]
+
+
+def parallel_test_argv(jobs: int) -> list[str]:
+    """并行全量：`test_changed.py --all --jobs N`（每文件一进程，等价覆盖）。`jobs=0`=自动核数。"""
+    return [sys.executable, _PARALLEL, "--all", "--jobs", str(jobs)]
 
 
 def assets_argv(action: str) -> list[str]:
@@ -58,7 +68,13 @@ def _run(argv: list[str]) -> tuple[int, str]:
 
 
 def _tests_summary(output: str) -> str:
-    """从 unittest 输出取一行摘要（`Ran N tests` + `OK|FAILED`）；取不到就如实说。"""
+    """取一行摘要：**并行**（每文件一进程）或**串行**（`Ran N tests` + `OK|FAILED`）两种格式；
+    取不到就如实说。"""
+    par = re.search(r"\[并行 jobs=\d+\] (\d+) 个测试文件 · (\d+) 通过 · (\d+) 失败",
+                    output)
+    if par:
+        total, passed, failed = par.groups()
+        return f"{'OK' if failed == '0' else 'FAILED'}（{total} 文件 · {passed} 通过 · {failed} 失败）"
     ran = re.search(r"^Ran (\d+) tests?", output, re.MULTILINE)
     verdict = "OK" if re.search(r"^OK", output, re.MULTILINE) else "FAILED"
     return f"{verdict}（{ran.group(1) if ran else '?'} tests）"
@@ -73,9 +89,13 @@ def _stale_lines(check_output: str) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="收尾门：全量测试（硬）+ 资产健康（只读报告）")
     parser.add_argument("--dry-run", action="store_true", help="只打印将执行的命令，不跑")
+    parser.add_argument("--jobs", type=int, default=0,
+                        help="测试并发进程数：0=自动核数（默认）；1=串行 discover（与 README 逐字一致）；"
+                             "N=每文件一进程（本机 10 核：串行 75s → 并发 ~25-28s）")
     args = parser.parse_args(argv)
 
-    steps = [("全量测试", test_argv()), ("assets check", assets_argv("check"))]
+    test_cmd = test_argv() if args.jobs == 1 else parallel_test_argv(args.jobs)
+    steps = [("全量测试", test_cmd), ("assets check", assets_argv("check"))]
     if args.dry_run:
         for label, cmd in steps:
             print(f"{label}: {' '.join(cmd)}")
@@ -88,9 +108,9 @@ def main(argv: list[str] | None = None) -> int:
     log = pathlib.Path(tempfile.mkstemp(prefix="disflow-finish-", suffix=".log")[1])
     rc = 0
     with log.open("w", encoding="utf-8") as handle:
-        code, output = _run(test_argv())
+        code, output = _run(test_cmd)
         handle.write(f"\n===== 全量测试 =====\n{output}\n")
-        print(f"[1/2] 全量测试 … {_tests_summary(output)}")
+        print(f"[1/2] 全量测试（jobs={args.jobs}）… {_tests_summary(output)}")
         if code != 0:
             rc = 1
             for line in output.splitlines():

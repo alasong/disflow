@@ -4,8 +4,8 @@
 """
 from __future__ import annotations
 
-from . import context, gates, graph, model, ready, spec, state, store, views
+from . import context, gates, graph, model, ready, vocab, state, store, views
 
 __version__ = "0.1.0"
-__all__ = ["context", "gates", "graph", "model", "ready", "spec", "state", "store",
+__all__ = ["context", "gates", "graph", "model", "ready", "vocab", "state", "store",
            "views"]

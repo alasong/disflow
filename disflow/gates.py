@@ -12,7 +12,7 @@ import shlex
 import subprocess
 
 from .config import DEFAULTS, Config
-from .spec import CLOSURE_ENTRIES, SEDIMENT_ENTRIES
+from .vocab import CLOSURE_ENTRIES, SEDIMENT_ENTRIES
 
 
 def _resolve_timeout(acceptance: dict | None, cfg: Config) -> float:

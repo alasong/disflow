@@ -7,7 +7,7 @@
 
 **优先级**（后者覆盖前者，从低到高）：
 
-    内建默认（本文件的 dataclass 默认值，取自 spec.py）
+    内建默认（本文件的 dataclass 默认值，取自 vocab.py）
       < `disflow.json`（`$DISFLOW_CONFIG` 可指别处；缺失 = 全用内建默认）
         < 显式参数 / 节点声明（如 `acceptance.timeout`、`context.size_budget`、`--ttl`）
 
@@ -42,7 +42,7 @@ import os
 from dataclasses import dataclass, field, replace
 
 from .boards import DEFAULT_BOARDS, Board, load_boards, boards_path
-from .spec import (DEFAULT_STAGE, LEASE_TTL_SECONDS, QUESTION_POLICY_DEFAULT, ROLES,
+from .vocab import (DEFAULT_STAGE, LEASE_TTL_SECONDS, QUESTION_POLICY_DEFAULT, ROLES,
                    SIZE_BUDGET_DEFAULT)
 
 CONFIG_BASENAME = "disflow.json"
@@ -108,7 +108,7 @@ class Config:
     def default_stage(self) -> str:
         """任务**没声明 `stage`** 时落的板。
 
-        规则：内建默认板（`spec.DEFAULT_STAGE` = 「开发」，大多数节点是干活的）**是当前
+        规则：内建默认板（`vocab.DEFAULT_STAGE` = 「开发」，大多数节点是干活的）**是当前
         板集中的一块**就用它；否则回落 `entry_stage`（板序第一块）。
 
         为何要回落而不是报错：`expand` 不给 `stage` 是常见写法，板集自定义后一律报错会把

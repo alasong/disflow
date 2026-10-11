@@ -9,7 +9,7 @@ import unittest
 
 from base import DisflowTestCase
 
-from disflow import spec, state, store
+from disflow import vocab, state, store
 from disflow.engine import Engine
 from disflow.metrics import parse_deadline
 from disflow.state import project
@@ -53,22 +53,22 @@ class EngineDeadlineTest(DisflowTestCase):
 
     def test_invalid_deadline_is_rejected_loudly_and_does_not_write(self):
         """非法日期必须抛错且**一条事件都不落**（不是落一半、也不是静默当成 None）。"""
-        before = len(store.load_events(spec.SPEC))
+        before = len(store.load_events(vocab.STORAGE))
         with self.assertRaises(ValueError):
             self.engine.deadline("t", "2025-13-40")
-        self.assertEqual(len(store.load_events(spec.SPEC)), before)
+        self.assertEqual(len(store.load_events(vocab.STORAGE)), before)
         self.assertIsNone(self.engine.tree("t")["deadline"])
 
     def test_deadline_survives_replay(self):
         self.engine.deadline("t", "2030-01-01")
-        replayed = project(store.load_events(spec.SPEC))
+        replayed = project(store.load_events(vocab.STORAGE))
         self.assertEqual(replayed["trees"]["t"]["deadline"], "2030-01-01")
-        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=project)
         self.assertTrue(matched, diffs)
 
     def test_kind_is_registered_in_both_declarations(self):
-        """`spec.EVENT_KINDS` 与 `state._HANDLERS` 必须同步（结构性守卫，见 test_declarations）。"""
-        self.assertIn("tree.deadline", spec.EVENT_KINDS)
+        """`vocab.EVENT_KINDS` 与 `state._HANDLERS` 必须同步（结构性守卫，见 test_declarations）。"""
+        self.assertIn("tree.deadline", vocab.EVENT_KINDS)
         self.assertIn("tree.deadline", state._HANDLERS)
 
 

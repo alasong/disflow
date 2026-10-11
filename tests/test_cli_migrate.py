@@ -14,7 +14,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from base import DisflowTestCase
 
-from disflow import spec, store
+from disflow import vocab, store
 from disflow.cli import main
 
 
@@ -26,7 +26,7 @@ class CliMigrateVerbTest(DisflowTestCase):
         return code, out.getvalue(), err.getvalue()
 
     def _state(self) -> dict:
-        return store.read_json(store.projection_path(spec.SPEC))
+        return store.read_json(store.projection_path(vocab.STORAGE))
 
     def _fixture(self, name: str, todos: list[dict], registry: dict | None = None) -> str:
         """合成一个 mgt 项目目录：`.fat/mgt/state.json` + `.fat/registry.json`。"""

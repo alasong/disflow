@@ -23,7 +23,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from base import DisflowTestCase, acceptance
 
-from disflow import spec, store
+from disflow import vocab, store
 from disflow.cli import main
 
 # host-next JSON 的顶层键（形状即使命，防止字段悄悄消失）
@@ -146,13 +146,13 @@ class HostNextTest(DisflowTestCase):
             return handle.read()
 
     def _events_bytes(self) -> bytes:
-        return self._read_bytes(store.events_path(spec.SPEC))
+        return self._read_bytes(store.events_path(vocab.STORAGE))
 
     def _state_bytes(self) -> bytes:
-        return self._read_bytes(store.projection_path(spec.SPEC))
+        return self._read_bytes(store.projection_path(vocab.STORAGE))
 
     def _state_files(self) -> list[str]:
-        return sorted(os.listdir(store.state_dir(spec.SPEC)))
+        return sorted(os.listdir(store.state_dir(vocab.STORAGE)))
 
     # ── 种子 ────────────────────────────────────────────────────────────
 

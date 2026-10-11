@@ -13,7 +13,7 @@ import unittest
 
 from base import DisflowTestCase, acceptance
 
-from disflow import spec, store
+from disflow import vocab, store
 from disflow.engine import Engine, EngineError
 from disflow.ready import blocked_by, ready_tasks
 from disflow.state import project
@@ -33,7 +33,7 @@ class EdgeTest(DisflowTestCase):
         return self.engine.load()["trees"]["t"]
 
     def _events(self) -> int:
-        return len(store.load_events(spec.SPEC))
+        return len(store.load_events(vocab.STORAGE))
 
     def _ready(self) -> list[str]:
         return sorted(ready_tasks(self._tree()["nodes"], self.engine.closed_trees()))
@@ -61,7 +61,7 @@ class EdgeTest(DisflowTestCase):
         悬空边不可能由 `require` 造成（它要求两端存在），只能由导入 / 手工修复路径写进来；
         所以这里直接 append 事件来模拟那种来源。
         """
-        store.append_event(spec.SPEC, "node.require", project=project,
+        store.append_event(vocab.STORAGE, "node.require", project=project,
                            slug="t", node="A", extra={"dep": "ghost"})
         self.assertEqual(self._tree()["nodes"]["A"]["requires"], ["ghost"])
         self.engine.unrequire("t", "A", "ghost")
@@ -86,7 +86,7 @@ class EdgeTest(DisflowTestCase):
             with self.assertRaises(EngineError):
                 self.engine.unrequire("t", "C", "A")
         self.assertEqual(self._events(), before)
-        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=project)
         self.assertTrue(matched, diffs)                 # 事件流仍可重放
 
     # ── 删信息边（`unrelate`）──────────────────────────────────────────
@@ -117,7 +117,7 @@ class EdgeTest(DisflowTestCase):
 
     def test_unrelate_can_clear_a_dangling_edge(self):
         """对端不存在也要能删（与 `unrequire` 同样的理由）。"""
-        store.append_event(spec.SPEC, "node.relate", project=project,
+        store.append_event(vocab.STORAGE, "node.relate", project=project,
                            slug="t", node="A", extra={"other": "ghost"})
         self.assertEqual(self._tree()["nodes"]["A"]["relates"], ["ghost"])
         self.engine.unrelate("t", "A", "ghost")
@@ -139,7 +139,7 @@ class EdgeTest(DisflowTestCase):
             with self.assertRaises(EngineError):
                 self.engine.unrelate("t", "A", "B")
         self.assertEqual(self._events(), before)
-        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=project)
         self.assertTrue(matched, diffs)                 # 事件流仍可重放
 
     def test_relates_never_affects_readiness(self):
@@ -158,7 +158,7 @@ class EdgeTest(DisflowTestCase):
         self.engine.relate("t", "A", "C")
         self.engine.unrelate("t", "A", "B")
         self.engine.relate("t", "A", "B")              # 删错了能加回来
-        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=project)
         self.assertTrue(matched, diffs)
         self.assertEqual(sorted(self._tree()["nodes"]["A"]["relates"]), ["B", "C"],
                          "删错了能加回来；顺序按追加顺序（删 B 后是 ['C']，再加 B → ['C','B']）")
@@ -187,7 +187,7 @@ class EdgeTest(DisflowTestCase):
         self.engine.unrequire("t", "B", "C")
         self.engine.require("t", "B", "C")
         self.assertEqual(self._tree()["nodes"]["B"]["requires"], ["C"])
-        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=project)
         self.assertTrue(matched, diffs)
 
 
@@ -210,7 +210,7 @@ class ExpandDeclarationTest(DisflowTestCase):
         return self.engine.load()["trees"]["t"]
 
     def _events(self) -> int:
-        return len(store.load_events(spec.SPEC))
+        return len(store.load_events(vocab.STORAGE))
 
     @staticmethod
     def _spec(node_id: str, **extra) -> dict:
@@ -294,7 +294,7 @@ class ExpandDeclarationTest(DisflowTestCase):
             with self.assertRaises(ValueError):
                 self.engine.expand("t", "root", [self._spec("E", requires=["没有这个"])])
         self.assertEqual(self._events(), before)
-        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=project)
         self.assertTrue(matched, diffs)
 
     def test_declared_edges_are_idempotent_with_the_verbs(self):

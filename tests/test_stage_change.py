@@ -24,7 +24,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from base import DisflowTestCase, acceptance
 
-from disflow import spec, state, store
+from disflow import vocab, state, store
 from disflow.boards import DEFAULT_BOARDS, Board
 from disflow.cli import main
 from disflow.config import Config
@@ -87,12 +87,12 @@ class StageChangeTest(DisflowTestCase):
 
     def test_illegal_stage_is_rejected_and_writes_nothing(self):
         self._seed()
-        before = len(store.load_events(spec.SPEC))
+        before = len(store.load_events(vocab.STORAGE))
         with self.assertRaises(EngineError) as ctx:
             self.engine.set_stage("t", "n12", "audti", reason="手滑写成错别字")
         self.assertIn("stage 取值非法", str(ctx.exception))
         self.assertIn("audti", str(ctx.exception))
-        self.assertEqual(len(store.load_events(spec.SPEC)), before, "拒收不许落事件")
+        self.assertEqual(len(store.load_events(vocab.STORAGE)), before, "拒收不许落事件")
         self.assertEqual(self._node()["stage"], "dev", "拒收不许改投影")
         self.assertNotIn("stage_log", self._node(), "拒收不许留下半条历史")
 
@@ -110,18 +110,18 @@ class StageChangeTest(DisflowTestCase):
     def test_change_lands_new_event_kind_and_is_registered(self):
         self._seed()
         self.engine.set_stage("t", "n12", "verify", reason="r")
-        kinds = [event["kind"] for event in store.load_events(spec.SPEC)]
+        kinds = [event["kind"] for event in store.load_events(vocab.STORAGE)]
         self.assertIn("node.stage", kinds)
         # 新 kind 必须在两套清单里（否则 doctor 与错误文本会漂移 —— 本仓既有判据）
-        self.assertIn("node.stage", spec.EVENT_KINDS)
+        self.assertIn("node.stage", vocab.EVENT_KINDS)
         self.assertIn("node.stage", state._HANDLERS)
 
     def test_change_survives_replay_and_rebuild_is_consistent(self):
         self._seed()
         self.engine.set_stage("t", "n12", "verify", reason="r", holder="h")
-        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=project)
         self.assertTrue(matched, diffs)
-        rebuilt = store.rebuild(spec.SPEC, project=project)
+        rebuilt = store.rebuild(vocab.STORAGE, project=project)
         node = rebuilt["trees"]["t"]["nodes"]["n12"]
         self.assertEqual(node["stage"], "verify")
         self.assertEqual(node["stage_log"], self._node()["stage_log"])

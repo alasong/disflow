@@ -42,7 +42,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from disflow import config as dconfig  # noqa: E402
-from disflow import spec as dspec  # noqa: E402
+from disflow import vocab as dspec  # noqa: E402
 from disflow import views as dviews  # noqa: E402
 
 # pi 的 async run 落点
@@ -64,7 +64,7 @@ def state_dir():
 
 
 def stages():
-    """列 = **与 `disflow board` 同一来源**（`disflow.json` 的 `stages`；缺省 `spec.STAGES`）。
+    """列 = **与 `disflow board` 同一来源**（`disflow.json` 的 `stages`；缺省 `vocab.STAGES`）。
 
     配置坏了不该把只读旁路打挂：退回出厂列（与零配置下的 `board` 一致）。
     """

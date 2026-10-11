@@ -6,6 +6,13 @@
 >
 > **文档是资产**：多数已在 `assets/registry.json` 登记（`category` = requirement / design /
 > process / documentation）。本索引是**人的入口**，registry 是**机器的入口**（信任/依据走它）。
+>
+> **读某一节，别整读**（本索引只有**文档级**一句话；章节级在下面）。本章节级入口把「文档的
+> 节」变成「代码的符号」：`scripts/doc_outline.py <doc> <标题子串>` → `<doc>:<start>-<end>`，
+> 再 `read offset/limit` 只取那一段。例：
+> `python3 scripts/doc_outline.py docs/design.md "门与证据"` → `docs/design.md:484-675`。
+> 机读索引 `docs/outline.jsonl` 由 `doc_outline.py --write` 生成、`--check` 守同步
+> （漂移即红，`tests/test_doc_outline.py`）。
 
 ## 1. 分类（Diátaxis 裁剪 + ADR）
 
@@ -43,6 +50,7 @@
 | `docs/decisions/0004-ai-入口先读索引.md` | decision | active | AI 入口：动手前先读 docs/INDEX.md + assets/INDEX.md（仓根 AGENTS.md 兜） |
 | `docs/decisions/0005-看板提升为一等实体.md` | decision | active | 看板从「视图」升为一等实体；树/图是板内维度，分发器/验收器挂在板上 |
 | `docs/decisions/0006-spec-一等公民.md` | decision | active | Spec 升为一等公民（独立实体）；Spec 关联资产（多对多），不是归属 |
+| `docs/decisions/0007-spec-术语-机制模块改vocab.md` | decision | active | 0007：spec 术语收口 —— 机制常量改 `STORAGE`、机制模块改 `vocab`（spec 专指交付规格） |
 
 ## 3. 增 / 改 / 删 的规矩
 

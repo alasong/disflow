@@ -216,7 +216,7 @@ blocked_by(n) := [ d ∈ requires(n) : status(d) ∉ TERMINAL ]
 **`doctor` 对“state dir 落在 repo 内部”只报「需人判断」（不计入退出码）。** `worktree`
 模块硬拒落在 repo 内的落点（在仓内会污染 `git status`，且一次 `git clean -xdf` 会把状态
 目录连同全部 worktree 一起删掉），故该配置下「已交付的 `worktree` 功能不可用」。但仓内
-state dir 是**出厂默认**（`spec.py` 的 `state.dir = ".disflow"`），它只限制这一项**可选功能**
+state dir 是**出厂默认**（`vocab.py` 的 `state.dir = ".disflow"`），它只限制这一项**可选功能**
 的可用性、其余功能正常——判成故障会因默认布局把所有人**假红**（假红比不报更坏）。所以
 `doctor` **主动**算出这条（不等真跑 `worktree apply` 才炸），单独一条、单独一行报出：事实
 （state dir 的真实路径 vs `repo`，**经 `realpath` 归一**——文本在仓外但符号链接指进仓内同样
@@ -765,10 +765,10 @@ disflow doctor                                     # 自检
 | 层 | 文件 | 允许知道什么 |
 | --- | --- | --- |
 | **核心（机制）** | `core.py` `store.py` `graph.py` `ready.py` | 状态/分型/边/租约/事件 IO —— **零业务词** |
-| 业务（本实例） | `spec.py` `model.py` `state.py` `gates.py` `views.py` `context.py` `dispatch.py` `engine.py` `cli.py` `import_mgt.py` | 视图列/负责方/门名/模板名/写面/验收 |
+| 业务（本实例） | `vocab.py` `model.py` `state.py` `gates.py` `views.py` `context.py` `dispatch.py` `engine.py` `cli.py` `import_mgt.py` | 视图列/负责方/门名/模板名/写面/验收 |
 
 **依赖方向单向**：业务层 → 核心层；核心层**不得** `import` 业务层。
-机制词汇（`KINDS`/`STORED_STATUS`/`TERMINAL`）住在 `core.py`，`spec.py` 只做再导出。
+机制词汇（`KINDS`/`STORED_STATUS`/`TERMINAL`）住在 `core.py`，`vocab.py` 只做再导出。
 
 **判据可执行**（沿用 flowcore「lib 零业务判据名」）：`tests/test_layering.py` 扫描四个核心文件，
 命中业务词针脚即失败，并断言核心未 import 业务模块。写面打包（依赖业务字段）因此从

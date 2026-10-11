@@ -13,7 +13,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from base import DisflowTestCase, acceptance, always_fails
 
-from disflow import spec, store
+from disflow import vocab, store
 from disflow.cli import main
 
 
@@ -29,13 +29,13 @@ class CliLifecycleVerbTest(DisflowTestCase):
         return code, out.getvalue(), err.getvalue()
 
     def _state(self) -> dict:
-        return store.read_json(store.projection_path(spec.SPEC))
+        return store.read_json(store.projection_path(vocab.STORAGE))
 
     def _node(self, node: str, tree: str = "t") -> dict:
         return self._state()["trees"][tree]["nodes"][node]
 
     def _events(self) -> int:
-        return len(store.read_jsonl(store.events_path(spec.SPEC)))
+        return len(store.read_jsonl(store.events_path(vocab.STORAGE)))
 
     def _one_node_tree(self, accept: dict | None = None) -> None:
         payload = _json(accept or acceptance())

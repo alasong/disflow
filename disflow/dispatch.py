@@ -19,7 +19,7 @@ from .ready import (
     ready_tasks,
     running_tasks,
 )
-from .spec import SPEC
+from .vocab import STORAGE
 
 
 def _touch_pair_overlap(left: str, right: str) -> bool:
@@ -178,7 +178,7 @@ def _worktree_brief(tree_name: str, node_id: str, repo: str) -> dict | None:
     if not repo:
         return None
     try:
-        present = worktree.status(SPEC, tree_name, node_id, repo)
+        present = worktree.status(STORAGE, tree_name, node_id, repo)
     except (KeyError, worktree.WorktreeError, ValueError):
         return None
     if not present.get("real"):

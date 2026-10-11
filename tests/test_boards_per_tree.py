@@ -25,7 +25,7 @@ import unittest
 
 from base import DisflowTestCase
 
-from disflow import spec, store
+from disflow import vocab, store
 from disflow.boards import Board, BoardsError
 from disflow.cli import build_parser, cmd_board, cmd_init
 from disflow.engine import Engine, EngineError
@@ -77,7 +77,7 @@ class PerTreeBoardsTest(DisflowTestCase):
         self.assertEqual(fresh.cfg.stages, ("X", "Y", "Z"), "配置确实变了")
         self.assertEqual(fresh._tree_stages(fresh.tree("t")), ("A", "B"), "旧树读数不变")
         # 投影重放同口径：板来自事件，不读配置
-        events = store.read_jsonl(store.events_path(spec.SPEC))
+        events = store.read_jsonl(store.events_path(vocab.STORAGE))
         self.assertEqual([b["id"] for b in project(events)["trees"]["t"]["boards"]], ["A", "B"])
 
     def test_new_tree_picks_up_the_new_config(self):
@@ -114,7 +114,7 @@ class PerTreeBoardsTest(DisflowTestCase):
 
     # ── 判据 5：旧事件流兼容 ─────────────────────────────────────────────
     def test_old_event_stream_without_boards_falls_back_to_config(self):
-        store.append_event(spec.SPEC, "tree.init", project=project, slug="t",
+        store.append_event(vocab.STORAGE, "tree.init", project=project, slug="t",
                            node="", extra={"goal": "老树"})   # 不带 boards
         engine = Engine(cwd=self.tmp)
         self.assertEqual(engine.tree("t")["boards"], [])

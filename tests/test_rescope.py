@@ -17,7 +17,7 @@ import unittest
 
 from base import DisflowTestCase, acceptance, git_repo, touch
 
-from disflow import spec, store
+from disflow import vocab, store
 from disflow.engine import EngineError, GateReject
 from disflow.state import project
 
@@ -80,9 +80,9 @@ class RescopeTest(DisflowTestCase):
 
     def test_rescope_dry_run_writes_nothing(self):
         engine, _repo = self._running()
-        before = len(store.load_events(spec.SPEC))
+        before = len(store.load_events(vocab.STORAGE))
         engine.rescope("t", "n", ["src_a.py", "new.py"], "预演", dry_run=True)
-        self.assertEqual(len(store.load_events(spec.SPEC)), before)
+        self.assertEqual(len(store.load_events(vocab.STORAGE)), before)
         self.assertEqual(self._node(engine)["touch_plan"], ["src_a.py"])
 
     # ── rescope 的拒绝路径（门的力量所在）─────────────────────────────────
@@ -171,7 +171,7 @@ class RescopeTest(DisflowTestCase):
         """新事件必须能被重放（投影一致性是硬约束）。"""
         engine, _repo = self._running()
         engine.rescope("t", "n", ["src_a.py", "new.py"], "加范围")
-        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=project)
         self.assertTrue(matched, diffs)
 
 

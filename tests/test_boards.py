@@ -23,7 +23,7 @@ import unittest
 from base import DisflowTestCase, acceptance
 
 from disflow.engine import Engine
-from disflow.spec import STAGE_LABELS, STAGES
+from disflow.vocab import STAGE_LABELS, STAGES
 from disflow.views import board_layout, boards_layout, boards_lines
 
 

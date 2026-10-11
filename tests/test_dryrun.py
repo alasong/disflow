@@ -5,7 +5,7 @@ import unittest
 
 from base import DisflowTestCase, acceptance, always_fails
 
-from disflow import spec as spec_mod
+from disflow import vocab as vocab_mod
 from disflow import store
 from disflow.engine import Engine, GateReject
 
@@ -14,7 +14,7 @@ class DryRunTest(DisflowTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.engine = Engine(cwd=self.tmp)
-        self.events = store.events_path(spec_mod.SPEC)
+        self.events = store.events_path(vocab_mod.STORAGE)
 
     def _rows(self) -> int:
         return len(store.read_jsonl(self.events))

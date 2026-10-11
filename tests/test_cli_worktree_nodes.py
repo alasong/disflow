@@ -33,7 +33,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from base import DisflowTestCase, acceptance, git_repo
 
 from disflow.cli import main
-from disflow.spec import SPEC
+from disflow.vocab import STORAGE
 
 # 与 test_worktree.py 同款：importlib 运行期解析，绕开 `disflow/__init__` 的再导出登记。
 worktree = importlib.import_module("disflow.worktree")
@@ -72,7 +72,7 @@ class CliWorktreeNodesTest(DisflowTestCase):
                                for nid in ids], ensure_ascii=False)])
 
     def _node_path(self, node: str) -> str:
-        return worktree.path_for(SPEC, "t", node)
+        return worktree.path_for(STORAGE, "t", node)
 
     # ── B1：只建点名节点 ─────────────────────────────────────────────────
 
@@ -113,9 +113,9 @@ class CliWorktreeNodesTest(DisflowTestCase):
         code2, out2, err2 = self._run(["worktree", "apply", "u", "--nodes", "a,b"])
         self.assertEqual(code2, 0, err2)
         self.assertIn("建了 2 个", out2)
-        self.assertTrue(os.path.isdir(worktree.path_for(SPEC, "u", "a")))
-        self.assertTrue(os.path.isdir(worktree.path_for(SPEC, "u", "b")))
-        self.assertFalse(os.path.exists(worktree.path_for(SPEC, "u", "c")))
+        self.assertTrue(os.path.isdir(worktree.path_for(STORAGE, "u", "a")))
+        self.assertTrue(os.path.isdir(worktree.path_for(STORAGE, "u", "b")))
+        self.assertFalse(os.path.exists(worktree.path_for(STORAGE, "u", "c")))
 
     # ── B2：不传 --nodes = 全量，逐字一致 ────────────────────────────────
 

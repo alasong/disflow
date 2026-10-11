@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-from .spec import KINDS, STORED_STATUS
+from .vocab import KINDS, STORED_STATUS
 
 # 节点在**投影里**的完整字段集
 NODE_FIELDS: frozenset[str] = frozenset({

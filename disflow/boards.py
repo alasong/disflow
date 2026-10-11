@@ -1,7 +1,7 @@
 """看板定义：**专门文件 `boards.json`**（一块板 = 一个阶段 = 节点 `stage` 的取值）。
 
-**为什么从代码里搬出来**：四个看板（需求/设计/开发/验证）原本写死在 `spec.STAGES` 里，
-连人读标签都写死在 `spec.STAGE_LABELS` 里。要做**动态看板**（按用户需求按需建板），
+**为什么从代码里搬出来**：四个看板（需求/设计/开发/验证）原本写死在 `vocab.STAGES` 里，
+连人读标签都写死在 `vocab.STAGE_LABELS` 里。要做**动态看板**（按用户需求按需建板），
 板定义就必须先是**数据** —— 否则「新建一块板」等于「改源码」。
 
 **为什么是独立文件**（而不是塞进 `disflow.json` 的 `boards` 键）：同 `disflow.json`
@@ -13,7 +13,7 @@
 `disflow.json` 的 `stages` 键已**退役** —— 写了会**响亮报错**并给迁移指引。
 同一件事两处定义 = 双源，正是本仓批判 mgt 的 P1 病根。
 
-**零配置可用**：文件不存在 ⇒ 回落内建默认（`spec.STAGES` + `spec.STAGE_LABELS`），
+**零配置可用**：文件不存在 ⇒ 回落内建默认（`vocab.STAGES` + `vocab.STAGE_LABELS`），
 与 `disflow.json` 缺失即全用默认同一条纪律。
 
 文件形状（两种都收，简单场景不必写对象）：
@@ -30,7 +30,7 @@ import json
 import os
 from dataclasses import dataclass
 
-from .spec import STAGE_LABELS, STAGES
+from .vocab import STAGE_LABELS, STAGES
 
 BOARDS_BASENAME = "boards.json"
 ENV_BOARDS_PATH = "DISFLOW_BOARDS"
@@ -69,7 +69,7 @@ class BoardsError(ValueError):
 
 
 def default_boards() -> tuple[Board, ...]:
-    """内建默认：`spec.STAGES` + `spec.STAGE_LABELS`（零配置时的回落值）。"""
+    """内建默认：`vocab.STAGES` + `vocab.STAGE_LABELS`（零配置时的回落值）。"""
     return tuple(Board(id=sid, label=STAGE_LABELS.get(sid, sid)) for sid in STAGES)
 
 
@@ -183,7 +183,7 @@ def _entry(raw: object, path: str, index: int) -> Board:
     if board_id in RESERVED_IDS:
         raise BoardsError(
             f"{where} 的 id {board_id!r} 是**节点状态**不是板（`done` 表达「干完了」，"
-            f"用 status 表达；见 spec.py 里 STAGES 的注释）")
+            f"用 status 表达；见 vocab.py 里 STAGES 的注释）")
     return Board(id=board_id, label=label or board_id, wip=wip, acceptance=acceptance)
 
 

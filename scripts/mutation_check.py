@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import concurrent.futures
 import contextlib
 import os
 import pathlib
@@ -26,6 +27,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -90,8 +92,8 @@ MUTATIONS: list[Mutation] = [
     # ── 被拒的事件不许落盘（store 先试算后 append）────────────────────────
     ("store 改回「先落盘再试算」", "disflow/store.py",
      "    state = stamp_projection(project(candidate), len(candidate))\n"
-     "    append_jsonl(events_path(spec), record)",
-     "    append_jsonl(events_path(spec), record)\n"
+     "    append_jsonl(events_path(storage), record)",
+     "    append_jsonl(events_path(storage), record)\n"
      "    state = stamp_projection(project(candidate), len(candidate))",
      "test_store.py"),
 
@@ -225,7 +227,7 @@ MUTATIONS: list[Mutation] = [
      "test_config.py"),
     ("配置路径跟着状态目录走（不再独立）", "disflow/config.py",
      '    return os.path.join(os.path.abspath(cwd), CONFIG_BASENAME)',
-     '    from .spec import SPEC as _s\n'
+     '    from .vocab import STORAGE as _s\n'
      '    return os.path.join(os.path.abspath(cwd),\n'
      '                        os.path.basename(_s["state"]["dir"]), CONFIG_BASENAME)',
      "test_config.py"),
@@ -376,11 +378,11 @@ MUTATIONS: list[Mutation] = [
      "test_worktree.py"),
     ("worktree residual 绕过 _plan_entry 单一漏斗（判据被架空）", "disflow/worktree.py",
      '        residual_plan.append(_plan_entry(\n'
-     "            spec, tree, nid, repo,\n"
-     '            path=path_for(spec, tree, nid), branch=res["branch"],\n'
+     "            storage, tree, nid, repo,\n"
+     '            path=path_for(storage, tree, nid), branch=res["branch"],\n'
      '            status=res["status"], remove_cmd=None))',
      '        residual_plan.append({\n'
-     '            "node": nid, "path": path_for(spec, tree, nid),\n'
+     '            "node": nid, "path": path_for(storage, tree, nid),\n'
      '            "branch": res["branch"], "status": res["status"],\n'
      '            "head": res.get("tip"), "reasons": [], "safe_to_drop": True,\n'
      '            "remove_cmd": None,\n'
@@ -450,8 +452,8 @@ MUTATIONS: list[Mutation] = [
 ]
 
 
-def _run_tests(pattern: str) -> int:
-    for cache in ROOT.rglob("__pycache__"):
+def _run_tests(pattern: str, root: pathlib.Path = ROOT) -> int:
+    for cache in root.rglob("__pycache__"):
         # 清字节码：陈旧 .pyc 会静默跑旧代码，会让变异结果错得看不出来（实测踩过）
         try:
             shutil.rmtree(cache)
@@ -460,19 +462,43 @@ def _run_tests(pattern: str) -> int:
     return subprocess.run(
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "tests",
          "-p", pattern],
-        cwd=ROOT, capture_output=True, text=True).returncode
+        cwd=root, capture_output=True, text=True).returncode
 
 
-def _check(mutation: Mutation) -> tuple[bool, int, int]:
+def _repo_copy() -> pathlib.Path:
+    """仓的**独立临时副本**（`disflow/` + `tests/` + `scripts/` + `README.md`）。
+
+    为何要它：`--jobs N>1` 下多条变异**同时**注入。若都打在真工作树上，A 写变异时 B
+    正在读同一份源码——测试会读到别人注入的改动，结果不可信，且有残留风险。
+    每条变异在一份自己的副本上注入+跑，互不共享可踩（继承
+    `tests/test_mutation_harness.py::_repo_copy` 的隔离思路）。
+
+    `README.md` 必须带上：`test_readme_walkthrough.py` 会读仓根的 `README.md`，
+    副本里缺它会让该测试**报错**、被误判成“漏抓”。
+    """
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="disflow-mc-"))
+    repo = tmp / "repo"
+    for name in ("disflow", "tests", "scripts"):
+        shutil.copytree(ROOT / name, repo / name,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copy2(ROOT / "README.md", repo / "README.md")
+    return repo
+
+
+def _check(mutation: Mutation, root: pathlib.Path | None = None) -> tuple[bool, int, int]:
     """返回 (是否抓到, 注入后退出码, 还原后退出码)。无论如何都会还原。
+
+    `root` 为注入与跑测试的仓根；默认真仓根（串行、逐字节不变）。`--jobs N>1` 传入
+    该条变异自己的**副本**根，注入因此不碰真工作树、也不碰别的变异的副本。
 
     `PinNotFound` 与“漏抓”是**两件事**：
       - 针脚找不到 = 代码变了、针脚没跟上 ⇒ **harness 报错**（exit 2）；
       - 漏抓 = 注入生效了但测试没红 ⇒ **真覆盖缺口**（exit 1）。
     混在一起会把“过期的针脚”说成“这个行为没有被测试守住”——凭空造出一个不存在的结论。
     """
+    base = ROOT if root is None else root
     name, relpath, old, new, pattern = mutation
-    path = ROOT / relpath
+    path = base / relpath
     original = path.read_text(encoding="utf-8")
     if old not in original:
         # 针脚找不到 = **harness 自己的错**（代码改了、针脚没跟上），不是“测试没守住”。
@@ -482,42 +508,26 @@ def _check(mutation: Mutation) -> tuple[bool, int, int]:
     try:
         _RESTORER.arm(path, original)
         path.write_text(original.replace(old, new, 1), encoding="utf-8")
-        injected = _run_tests(pattern)
+        injected = _run_tests(pattern, base)
     finally:
         _RESTORER.disarm(path)
         path.write_text(original, encoding="utf-8")
-    restored = _run_tests(pattern)
+    restored = _run_tests(pattern, base)
     return (injected != 0 and restored == 0), injected, restored
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="变异测试：验证测试套件有牙")
-    parser.add_argument("-k", default="", help="只跑名字含该子串的变异")
-    parser.add_argument("--list", action="store_true", help="只列变异，不执行")
-    args = parser.parse_args(argv)
+def _check_in_copy(mutation: Mutation) -> tuple[bool, int, int]:
+    """在**本条变异专属的仓副本**上注入+跑，跑完删副本（并发隔离的落点）。"""
+    repo = _repo_copy()
+    try:
+        return _check(mutation, root=repo)
+    finally:
+        shutil.rmtree(repo.parent, ignore_errors=True)
 
-    selected = [(name, *rest) for name, *rest in
-                ((m[0], m) for m in MUTATIONS) if args.k in name]
-    if args.list:
-        for name, _m in selected:
-            print(name)
-        return 0
 
-    unresolved: list[str] = []
-    bad: list[str] = []
-    for name, mutation in selected:
-        try:
-            caught, injected, restored = _check(mutation)
-        except PinNotFound as exc:
-            print(f"  ⛔ {name}：针脚未应用")
-            print(f"     {exc}")
-            unresolved.append(name)
-            continue
-        print(f"  {'✅' if caught else '❌'} {name}"
-              f"（注入 exit={injected} / 还原 exit={restored}）")
-        if not caught:
-            bad.append(name)
-
+def _summarize(selected: list[Mutation],
+               unresolved: list[str], bad: list[str]) -> int:
+    """收尾报告与退出码。串行/并行共用同一份，保证**汇总数字与退出码一致**。"""
     total = len(selected)
     if unresolved:
         # 先报 harness 的错：它使本轮结果不可信，谈不上“捕获率”
@@ -533,6 +543,65 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {name}")
         return 1
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="变异测试：验证测试套件有牙")
+    parser.add_argument("-k", default="", help="只跑名字含该子串的变异")
+    parser.add_argument("--list", action="store_true", help="只列变异，不执行")
+    parser.add_argument(
+        "--jobs", type=int, default=1, metavar="N",
+        help="并发跑变异；N>1 时每条变异在**独立仓副本**上注入+跑（默认 1=串行，"
+             "行为与旧版逐字节一致）")
+    args = parser.parse_args(argv)
+    if args.jobs < 1:
+        parser.error("--jobs 必须 >= 1")
+
+    selected: list[Mutation] = [m for m in MUTATIONS if args.k in m[0]]
+    if args.list:
+        for mutation in selected:
+            print(mutation[0])
+        return 0
+
+    unresolved: list[str] = []
+    bad: list[str] = []
+
+    if args.jobs == 1:
+        # 串行：与原版逐字节一致（同一循环、同一输出、同一退出码语义）
+        for mutation in selected:
+            name = mutation[0]
+            try:
+                caught, injected, restored = _check(mutation)
+            except PinNotFound as exc:
+                print(f"  ⛔ {name}：针脚未应用")
+                print(f"     {exc}")
+                unresolved.append(name)
+                continue
+            print(f"  {'✅' if caught else '❌'} {name}"
+                  f"（注入 exit={injected} / 还原 exit={restored}）")
+            if not caught:
+                bad.append(name)
+        return _summarize(selected, unresolved, bad)
+
+    # 并行：每条变异提交给线程池，在**自己的仓副本**上跑（`_check_in_copy`）。
+    # 输出顺序随完成先后而变；结果由主线程串行打印（无交错），汇总与退出码与串行一致。
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        futures = {pool.submit(_check_in_copy, mutation): mutation[0]
+                   for mutation in selected}
+        for future in concurrent.futures.as_completed(futures):
+            name = futures[future]
+            try:
+                caught, injected, restored = future.result()
+            except PinNotFound as exc:
+                print(f"  ⛔ {name}：针脚未应用")
+                print(f"     {exc}")
+                unresolved.append(name)
+                continue
+            print(f"  {'✅' if caught else '❌'} {name}"
+                  f"（注入 exit={injected} / 还原 exit={restored}）")
+            if not caught:
+                bad.append(name)
+    return _summarize(selected, unresolved, bad)
 
 
 if __name__ == "__main__":

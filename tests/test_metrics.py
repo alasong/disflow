@@ -22,7 +22,7 @@ from unittest import mock
 
 from base import DisflowTestCase, acceptance
 
-from disflow import metrics, spec, state, store
+from disflow import metrics, vocab, state, store
 from disflow.cli import main
 from disflow.engine import Engine
 from disflow.metrics import NO_START_REASON, burndown, summary, tree_start_ts
@@ -79,11 +79,11 @@ class PointsValidationTest(DisflowTestCase):
         """`json.loads` 默认收 `NaN`：带 NaN 的 children 经 `Engine.expand` 必须被拒且不落事件。"""
         engine = Engine(cwd=self.tmp)
         engine.init_tree("t", "g")
-        before = len(store.load_events(spec.SPEC))
+        before = len(store.load_events(vocab.STORAGE))
         children = json.loads('[{"id": "a", "goal": "g", "points": NaN}]')
         with self.assertRaises(ValueError):
             engine.expand("t", "root", children)
-        self.assertEqual(len(store.load_events(spec.SPEC)), before,
+        self.assertEqual(len(store.load_events(vocab.STORAGE)), before,
                          "被拒的点数不得落事件")
         self.assertNotIn("a", engine.tree("t")["nodes"])
 
@@ -718,7 +718,7 @@ class SlugNotInProjectionTest(DisflowTestCase):
         tree = engine.tree("t")
         self.assertNotIn("slug", tree, "可推导值不该进投影")
         self.assertIn("deadline", tree, "deadline 是真声明，留在投影里")
-        projected = state.project(store.load_events(spec.SPEC))["trees"]["t"]
+        projected = state.project(store.load_events(vocab.STORAGE))["trees"]["t"]
         self.assertNotIn("slug", projected)
 
 
@@ -733,9 +733,9 @@ class ProjectionDeterminismTest(DisflowTestCase):
         engine.deadline("t", "2030-01-01")
         engine.start("t", "a", "w")
         engine.done("t", "a")
-        matched, diffs = store.projection_matches(spec.SPEC, project=state.project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=state.project)
         self.assertTrue(matched, diffs)
-        self.assertEqual(state.project(store.load_events(spec.SPEC),
+        self.assertEqual(state.project(store.load_events(vocab.STORAGE),
                                        )["trees"]["t"]["deadline"], "2030-01-01")
 
 

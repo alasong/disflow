@@ -33,7 +33,7 @@ from unittest import mock
 
 from base import DisflowTestCase, acceptance, git_repo, touch
 
-from disflow.spec import SPEC
+from disflow.vocab import STORAGE
 
 # 用 importlib 而非 `from disflow import worktree`：`disflow/__init__.py` 的子模块再导出
 # 列表不归本 lane 管（CLI 装配由另一人做），未登记的新子模块会被静态分析判为
@@ -54,7 +54,7 @@ class WorktreeTest(DisflowTestCase):
         ])
 
     def _path(self, node: str, tree: str = "t") -> str:
-        return worktree.path_for(SPEC, tree, node)
+        return worktree.path_for(STORAGE, tree, node)
 
     # ── 纯函数 ────────────────────────────────────────────────────────────
 
@@ -62,7 +62,7 @@ class WorktreeTest(DisflowTestCase):
         first = self._path("a")
         second = self._path("a")
         self.assertEqual(first, second)
-        self.assertEqual(first, os.path.join(worktree.root(SPEC), "t", "a"))
+        self.assertEqual(first, os.path.join(worktree.root(STORAGE), "t", "a"))
         self.assertEqual(worktree.branch_for("t", "a"), worktree.branch_for("t", "a"))
         self.assertEqual(worktree.branch_for("t", "a"), "disflow/t/a")
 
@@ -73,13 +73,13 @@ class WorktreeTest(DisflowTestCase):
                          f"worktree 落在 repo 内：{path}")
 
     def test_commands_shape(self):
-        cmds = worktree.commands(SPEC, "t", "a", self.repo)
+        cmds = worktree.commands(STORAGE, "t", "a", self.repo)
         path = self._path("a")
         self.assertEqual(cmds["add"],
                          ["git", "worktree", "add", "-b", "disflow/t/a", path, "HEAD"])
         # 默认**不带** --force：脏 worktree 由 git 自己响亮拒绝
         self.assertEqual(cmds["remove"], ["git", "worktree", "remove", path])
-        forced = worktree.commands(SPEC, "t", "a", self.repo, force=True)
+        forced = worktree.commands(STORAGE, "t", "a", self.repo, force=True)
         self.assertEqual(forced["remove"], ["git", "worktree", "remove", "--force", path])
 
     # ── plan 零副作用（「只推不跑」判据）──────────────────────────────────
@@ -87,13 +87,13 @@ class WorktreeTest(DisflowTestCase):
     def test_plan_has_no_side_effects(self):
         self._seed(["a", "b"])
         before_registered = worktree.registered(self.repo)
-        root_existed = os.path.exists(worktree.root(SPEC))
+        root_existed = os.path.exists(worktree.root(STORAGE))
         # 反复调用也必须前后完全一致
-        plan = worktree.plan(SPEC, "t", self.repo)
-        plan2 = worktree.plan(SPEC, "t", self.repo)
+        plan = worktree.plan(STORAGE, "t", self.repo)
+        plan2 = worktree.plan(STORAGE, "t", self.repo)
         self.assertEqual(plan, plan2)                       # 同输入必同输出
         self.assertEqual(worktree.registered(self.repo), before_registered)
-        self.assertEqual(os.path.exists(worktree.root(SPEC)), root_existed)
+        self.assertEqual(os.path.exists(worktree.root(STORAGE)), root_existed)
         self.assertFalse(root_existed, "plan 不许创建 worktree 根目录")
         self.assertEqual({e["node"] for e in plan["plan"]}, {"a", "b"})
         for entry in plan["plan"]:
@@ -104,7 +104,7 @@ class WorktreeTest(DisflowTestCase):
 
     def test_apply_creates_real_worktree(self):
         self._seed(["a", "b"])
-        result = worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        result = worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self.assertEqual(result["created"], ["a"])
         self.assertTrue(os.path.isdir(self._path("a")))
         self.assertIn(os.path.realpath(self._path("a")),
@@ -113,15 +113,15 @@ class WorktreeTest(DisflowTestCase):
 
     def test_apply_marks_status_real(self):
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
-        st = worktree.status(SPEC, "t", "a", self.repo)
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
+        st = worktree.status(STORAGE, "t", "a", self.repo)
         self.assertTrue(st["exists"] and st["registered"] and st["real"])
 
     def test_apply_is_idempotent(self):
         self._seed(["a", "b"])
-        first = worktree.apply(SPEC, "t", self.repo)
+        first = worktree.apply(STORAGE, "t", self.repo)
         self.assertEqual(sorted(first["created"]), ["a", "b"])
-        second = worktree.apply(SPEC, "t", self.repo)
+        second = worktree.apply(STORAGE, "t", self.repo)
         self.assertEqual(second["created"], [])
         self.assertEqual(sorted(second["skipped"]), ["a", "b"])
         self.assertEqual(second["broken"], [])
@@ -129,19 +129,19 @@ class WorktreeTest(DisflowTestCase):
     def test_apply_reattaches_registered_dir_missing(self):
         # FIX2-B2：已注册但目录被手工删了、分支还在 → re-attach（而非卡死/报 broken）
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         shutil.rmtree(self._path("a"))
-        result = worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        result = worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self.assertEqual(result["created"], [])
         self.assertEqual(result["reattached"], ["a"])
         self.assertTrue(os.path.isdir(self._path("a")))
-        self.assertTrue(worktree.status(SPEC, "t", "a", self.repo)["real"])
+        self.assertTrue(worktree.status(STORAGE, "t", "a", self.repo)["real"])
 
     def test_apply_flags_unregistered_dir_as_broken(self):
         # FIX-B6(2)：目录存在但未注册（手工 mkdir）→ 不得当成已建好
         self._seed(["a"])
         os.makedirs(self._path("a"))
-        result = worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        result = worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self.assertEqual(result["created"], [])
         self.assertNotIn("a", result["skipped"])
         self.assertEqual([b["node"] for b in result["broken"]], ["a"])
@@ -152,20 +152,20 @@ class WorktreeTest(DisflowTestCase):
 
     def test_reconcile_detects_leaks_and_missing(self):
         self._seed(["a", "b", "c"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a", "b"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a", "b"])
         self.engine.skip("t", "a")                          # 终态但 worktree 还在 → leak
         self.engine.start("t", "c", "w1")                  # running 且无 worktree → missing
-        report = worktree.reconcile(SPEC, "t", self.repo)
+        report = worktree.reconcile(STORAGE, "t", self.repo)
         self.assertEqual([leak["node"] for leak in report["leaks"]], ["a"])
         self.assertEqual(report["missing"], ["c"])
         self.assertEqual(report["orphans"], [])
 
     def test_reconcile_leak_carries_dirty_read(self):
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         touch(os.path.join(self._path("a"), "scratch.txt"), "wip\n")
         self.engine.skip("t", "a")
-        report = worktree.reconcile(SPEC, "t", self.repo)
+        report = worktree.reconcile(STORAGE, "t", self.repo)
         self.assertEqual(report["leaks"],
                          [{"node": "a", "status": "skipped", "dirty": True,
                            "ignored": []}])
@@ -173,19 +173,19 @@ class WorktreeTest(DisflowTestCase):
     def test_reconcile_flags_missing_for_running_without_worktree(self):
         self._seed(["a"])
         self.engine.start("t", "a", "w1")                   # running，无 worktree
-        report = worktree.reconcile(SPEC, "t", self.repo)
+        report = worktree.reconcile(STORAGE, "t", self.repo)
         self.assertEqual(report["missing"], ["a"])
         self.assertEqual(report["leaks"], [])
 
     def test_reconcile_flags_orphan_under_root(self):
         self._seed([])
         # 手工造一个注册在 root() 下、却对不上任何已知节点的 worktree
-        orphan_path = os.path.join(worktree.root(SPEC), "t", "ghost")
+        orphan_path = os.path.join(worktree.root(STORAGE), "t", "ghost")
         os.makedirs(os.path.dirname(orphan_path), exist_ok=True)
         subprocess.run(["git", "-C", self.repo, "worktree", "add", "-b", "ghostbranch",
                         orphan_path, "HEAD"], check=True,
                        capture_output=True, text=True)
-        report = worktree.reconcile(SPEC, "t", self.repo)
+        report = worktree.reconcile(STORAGE, "t", self.repo)
         self.assertEqual([os.path.realpath(p) for p in report["orphans"]],
                          [os.path.realpath(orphan_path)])
 
@@ -197,20 +197,20 @@ class WorktreeTest(DisflowTestCase):
         with self.assertRaises(worktree.WorktreeProbeError):
             worktree.registered(non_git)
         with self.assertRaises(worktree.WorktreeProbeError):
-            worktree.reconcile(SPEC, "t", non_git)
+            worktree.reconcile(STORAGE, "t", non_git)
         with self.assertRaises(worktree.WorktreeProbeError):
-            worktree.reap(SPEC, "t", non_git)
+            worktree.reap(STORAGE, "t", non_git)
         with self.assertRaises(worktree.WorktreeProbeError):
-            worktree.apply(SPEC, "t", non_git)
+            worktree.apply(STORAGE, "t", non_git)
 
     # ── reap：纯计划（无执行）─────────────────────────────────────────────
 
     def test_reap_plans_only_terminal_worktrees(self):
         self._seed(["a", "b"])
-        worktree.apply(SPEC, "t", self.repo)
+        worktree.apply(STORAGE, "t", self.repo)
         self.engine.skip("t", "a")                          # a 终态 → 可回收
         self.engine.start("t", "b", "w1")                   # b 在跑 → 不许碰
-        plan = worktree.reap(SPEC, "t", self.repo)
+        plan = worktree.reap(STORAGE, "t", self.repo)
         self.assertEqual([leak["node"] for leak in plan["leaks"]], ["a"])
         self.assertEqual(plan["executed"], False)
         self.assertTrue(os.path.isdir(self._path("a")), "reap 不真删")
@@ -219,9 +219,9 @@ class WorktreeTest(DisflowTestCase):
     def test_reap_plan_lists_safe_commands(self):
         # 干净终态节点：safe_to_drop=True，给出安全删命令（remove 不带 --force、branch 用 -d）
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self.engine.skip("t", "a")
-        plan = worktree.reap(SPEC, "t", self.repo)
+        plan = worktree.reap(STORAGE, "t", self.repo)
         entry = plan["leaks"][0]
         self.assertEqual(entry["remove_cmd"],
                          ["git", "worktree", "remove", self._path("a")])
@@ -234,13 +234,13 @@ class WorktreeTest(DisflowTestCase):
 
     def test_reap_never_drops_uncommitted_work(self):
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         precious = os.path.join(self._path("a"), "UNCOMMITTED_WORK.txt")
         touch(precious, "precious\n")
         self.engine.skip("t", "a")
-        self.assertTrue(worktree.status(SPEC, "t", "a", self.repo)["dirty"])
+        self.assertTrue(worktree.status(STORAGE, "t", "a", self.repo)["dirty"])
 
-        entry = worktree.reap(SPEC, "t", self.repo)["leaks"][0]
+        entry = worktree.reap(STORAGE, "t", self.repo)["leaks"][0]
         self.assertFalse(entry["safe_to_drop"])
         self.assertTrue(any(r.startswith("dirty:") for r in entry["reasons"]))
         self.assertTrue(entry["discard_warnings"])
@@ -255,7 +255,7 @@ class WorktreeTest(DisflowTestCase):
         这里是同一读数的可执行版本——**先量现实，再对提示**，两者必须一致。
         """
         self._setup_ignored()
-        entry = worktree.reap(SPEC, "t", self.repo)["leaks"][0]
+        entry = worktree.reap(STORAGE, "t", self.repo)["leaks"][0]
         self.assertFalse(entry["safe_to_drop"])
         self.assertEqual(entry["reasons"], ["ignored:debug.log"])
         warnings = entry["discard_warnings"]
@@ -270,7 +270,7 @@ class WorktreeTest(DisflowTestCase):
     def test_reap_dirty_warning_still_claims_git_refuses(self):
         """反向对照：dirty（已修改/未跟踪）确实让 git 拒绝 ⇒ 提示**必须**保留「git 会拒绝」。"""
         self._setup_dirty()
-        warnings = worktree.reap(SPEC, "t", self.repo)["leaks"][0]["discard_warnings"]
+        warnings = worktree.reap(STORAGE, "t", self.repo)["leaks"][0]["discard_warnings"]
         self.assertTrue(any("git 会拒绝" in w for w in warnings), warnings)
         proc = subprocess.run(["git", "-C", self.repo, "worktree", "remove",
                                self._path("a")], capture_output=True, text=True)
@@ -281,7 +281,7 @@ class WorktreeTest(DisflowTestCase):
     def test_reap_force_plan_is_explicit_and_records_discarded(self):
         """`force=True`：`remove_cmd` 才带 `--force`，并把将丢弃的项记进 `discarded`（记账）。"""
         self._setup_dirty()
-        forced = worktree.reap(SPEC, "t", self.repo, force=True)
+        forced = worktree.reap(STORAGE, "t", self.repo, force=True)
         entry = forced["leaks"][0]
         self.assertTrue(forced["force"])
         self.assertEqual(entry["remove_cmd"],
@@ -292,7 +292,7 @@ class WorktreeTest(DisflowTestCase):
     def test_reap_default_plan_is_byte_identical_without_force(self):
         """不传 `force`：计划**不新增** `force`/`discarded` 字段，`remove_cmd` 不带 `--force`。"""
         self._setup_dirty()
-        plan = worktree.reap(SPEC, "t", self.repo)
+        plan = worktree.reap(STORAGE, "t", self.repo)
         self.assertNotIn("force", plan)
         self.assertNotIn("discarded", plan)
         self.assertEqual(plan["leaks"][0]["remove_cmd"],
@@ -303,35 +303,35 @@ class WorktreeTest(DisflowTestCase):
         self._setup_dirty()
         precious = os.path.join(self._path("a"), "wip.txt")
         before = self._snapshot()
-        worktree.reap(SPEC, "t", self.repo, force=True)
+        worktree.reap(STORAGE, "t", self.repo, force=True)
         self.assertEqual(before, self._snapshot(), "reap --force 计划不得改变任何东西")
         self.assertTrue(os.path.exists(precious))
 
     def test_apply_reap_apply_cycle_keeps_branch(self):
         # reap 是纯计划 → 不删分支；apply 仍幂等。
         self._seed(["a"])
-        first = worktree.apply(SPEC, "t", self.repo)
+        first = worktree.apply(STORAGE, "t", self.repo)
         self.assertEqual(first["created"], ["a"])
         self.engine.skip("t", "a")
-        plan = worktree.reap(SPEC, "t", self.repo)
+        plan = worktree.reap(STORAGE, "t", self.repo)
         self.assertEqual([e["node"] for e in plan["leaks"]], ["a"])
         self.assertEqual(self._branches("disflow/t/a"), ["disflow/t/a"], "reap 不删分支")
         self.engine.retry("t", "a")
-        second = worktree.apply(SPEC, "t", self.repo)
+        second = worktree.apply(STORAGE, "t", self.repo)
         self.assertEqual(second["created"], [])
         self.assertEqual(second["skipped"], ["a"])
 
     def test_failed_node_is_reclaimable_in_plan(self):
         # failed 与 done/skipped 同列可回收，不再落在三分类之外永久占盘
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self.engine.fail("t", "a", "boom")
-        report = worktree.reconcile(SPEC, "t", self.repo)
+        report = worktree.reconcile(STORAGE, "t", self.repo)
         self.assertEqual([leak["node"] for leak in report["leaks"]], ["a"])
         self.assertEqual([leak["status"] for leak in report["leaks"]], ["failed"])
         # failed 不算「活」→ plan 不会再给它发 add
-        self.assertEqual(worktree.plan(SPEC, "t", self.repo)["plan"], [])
-        entry = worktree.reap(SPEC, "t", self.repo)["leaks"][0]
+        self.assertEqual(worktree.plan(STORAGE, "t", self.repo)["plan"], [])
+        entry = worktree.reap(STORAGE, "t", self.repo)["leaks"][0]
         self.assertTrue(entry["safe_to_drop"])
 
     # ── 最强性质：reap 永不改变任何东西 ──────────────────────────────────
@@ -378,7 +378,7 @@ class WorktreeTest(DisflowTestCase):
         self._reset_state()
         self.engine, self.repo = git_repo(self, {"README.md": "hello\n"}, commit=True)
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
 
     def _setup_clean(self) -> None:
         self._new_seeded_worktree()
@@ -398,7 +398,7 @@ class WorktreeTest(DisflowTestCase):
         subprocess.run(["git", "-C", self.repo, "-c", "user.name=t", "-c", "user.email=t@t",
                         "commit", "-qm", "ignore"], check=True, capture_output=True, text=True)
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         touch(os.path.join(self._path("a"), "debug.log"), "secret\n")
         self.engine.skip("t", "a")
 
@@ -422,7 +422,7 @@ class WorktreeTest(DisflowTestCase):
         self.engine.skip("t", "a")
 
     def _plan_entry_for(self, node: str) -> dict:
-        plan = worktree.reap(SPEC, "t", self.repo)
+        plan = worktree.reap(STORAGE, "t", self.repo)
         for entry in plan["leaks"] + plan["residual"]:
             if entry["node"] == node:
                 return entry
@@ -442,14 +442,14 @@ class WorktreeTest(DisflowTestCase):
             with self.subTest(kind=kind):
                 setup()
                 before = self._snapshot()
-                worktree.reap(SPEC, "t", self.repo)
+                worktree.reap(STORAGE, "t", self.repo)
                 self.assertEqual(before, self._snapshot(), f"{kind}: reap 改变了状态")
 
         with self.subTest(kind="探针坏"):
             self._setup_unmerged()
             with mock.patch.object(worktree, "_commit_on_other_ref", return_value=None):
                 before = self._snapshot()
-                worktree.reap(SPEC, "t", self.repo)
+                worktree.reap(STORAGE, "t", self.repo)
                 self.assertEqual(before, self._snapshot(), "探针坏: reap 改变了状态")
 
     # ── 结构性守卫：不靠「结果没变」，直接审 reap 发出的 argv ─────────────────
@@ -507,7 +507,7 @@ class WorktreeTest(DisflowTestCase):
                     return _real(argv, *args, **kwargs)
 
                 with mock.patch.object(subprocess, "run", side_effect=recorder):
-                    worktree.reap(SPEC, "t", self.repo)
+                    worktree.reap(STORAGE, "t", self.repo)
 
                 bad = self._mutating_git_calls(seen)
                 self.assertEqual([], bad, f"{label}: reap 发出了写型 git 调用：{bad}")
@@ -535,7 +535,7 @@ class WorktreeTest(DisflowTestCase):
         # FIX3-R2 / fail-closed：for-each-ref 不可判定 → safe_to_drop=False 且留显式 reason
         self._setup_unmerged()
         with mock.patch.object(worktree, "_commit_on_other_ref", return_value=None):
-            plan = worktree.reap(SPEC, "t", self.repo)
+            plan = worktree.reap(STORAGE, "t", self.repo)
         entry = plan["leaks"][0]
         self.assertFalse(entry["safe_to_drop"])
         self.assertTrue(any(r.startswith("unreadable-refs:") for r in entry["reasons"]))
@@ -546,11 +546,11 @@ class WorktreeTest(DisflowTestCase):
 
     def test_no_silent_loss_unmerged_commit_planned_unsafe(self):
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self._commit_in(self._path("a"), "work.txt", "precious\n")
         sha = self._sha(self._path("a"))
         self.engine.skip("t", "a")
-        entry = worktree.reap(SPEC, "t", self.repo)["leaks"][0]
+        entry = worktree.reap(STORAGE, "t", self.repo)["leaks"][0]
         self.assertFalse(entry["safe_to_drop"])
         self.assertIn(f"unmerged-commit:{sha[:12]}", entry["reasons"])
         self.assertTrue(entry["discard_warnings"])
@@ -565,13 +565,13 @@ class WorktreeTest(DisflowTestCase):
         subprocess.run(["git", "-C", self.repo, "-c", "user.name=t", "-c", "user.email=t@t",
                         "commit", "-qm", "ignore"], check=True, capture_output=True, text=True)
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         touch(os.path.join(self._path("a"), "debug.log"), "secret\n")
-        st = worktree.status(SPEC, "t", "a", self.repo)
+        st = worktree.status(STORAGE, "t", "a", self.repo)
         self.assertFalse(st["dirty"], "ignored 不该混进 dirty")
         self.assertEqual(st["ignored"], ["debug.log"])
         self.engine.skip("t", "a")
-        entry = worktree.reap(SPEC, "t", self.repo)["leaks"][0]
+        entry = worktree.reap(STORAGE, "t", self.repo)["leaks"][0]
         self.assertFalse(entry["safe_to_drop"])
         self.assertIn("ignored:debug.log", entry["reasons"])
         self.assertTrue(entry["discard_warnings"])
@@ -581,26 +581,26 @@ class WorktreeTest(DisflowTestCase):
     def test_no_silent_loss_missing_dir_with_commit_planned_unsafe(self):
         # E2：目录已不在、登记/分支还在且分支有提交 → 计划判不安全
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self._commit_in(self._path("a"), "work.txt", "precious\n")
         sha = self._sha(self._path("a"))
         self.engine.skip("t", "a")
         shutil.rmtree(self._path("a"))
-        entry = worktree.reap(SPEC, "t", self.repo)["leaks"][0]
+        entry = worktree.reap(STORAGE, "t", self.repo)["leaks"][0]
         self.assertFalse(entry["safe_to_drop"])
         self.assertTrue(self._reachable(sha))
 
     def test_no_silent_loss_detached_head_planned_unsafe(self):
         # E3：detached HEAD 上的提交；git 认为工作树干净，无 --force 也照删 → 计划必须判不安全
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         subprocess.run(["git", "-C", self._path("a"), "checkout", "--detach"],
                        check=True, capture_output=True, text=True)
         self._commit_in(self._path("a"), "det.txt", "x\n")
         sha = self._sha(self._path("a"))
-        self.assertFalse(worktree.status(SPEC, "t", "a", self.repo)["dirty"])
+        self.assertFalse(worktree.status(STORAGE, "t", "a", self.repo)["dirty"])
         self.engine.skip("t", "a")
-        entry = worktree.reap(SPEC, "t", self.repo)["leaks"][0]
+        entry = worktree.reap(STORAGE, "t", self.repo)["leaks"][0]
         self.assertFalse(entry["safe_to_drop"])
         self.assertTrue(os.path.isdir(self._path("a")))
         self.assertTrue(self._reachable(sha))
@@ -608,11 +608,11 @@ class WorktreeTest(DisflowTestCase):
     def test_apply_reattaches_residual_branch_with_commit(self):
         # FIX2-B2：worktree 没了、分支还在（残留分支）→ apply re-attach，带回上次那笔提交
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self._commit_in(self._path("a"), "work.txt", "precious\n")
         sha = self._sha(self._path("a"))
         shutil.rmtree(self._path("a"))                 # 模拟「worktree 被清、分支被拒留」
-        result = worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        result = worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self.assertEqual(result["created"], [])
         self.assertEqual(result["reattached"], ["a"])
         self.assertEqual(self._sha(self._path("a")), sha, "re-attach 必须带回上次那笔提交")
@@ -621,12 +621,12 @@ class WorktreeTest(DisflowTestCase):
     def test_apply_after_refused_reap_keeps_commit(self):
         # 建 → commit → reap（纯计划，不动手）→ apply 不得报错、提交仍在
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self._commit_in(self._path("a"), "work.txt", "precious\n")
         sha = self._sha(self._path("a"))
         self.engine.skip("t", "a")
-        worktree.reap(SPEC, "t", self.repo)
-        result = worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.reap(STORAGE, "t", self.repo)
+        result = worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self.assertEqual(result["created"], [])
         self.assertEqual(result["broken"], [])
         self.assertEqual(self._sha(self._path("a")), sha)
@@ -637,13 +637,13 @@ class WorktreeTest(DisflowTestCase):
         # FIX3-R1：同名 tag 使 git 给短名加前缀（heads/）→ 旧代码 refs.discard 打空而 fail-open；
         # 改用全名精确排除后计划必须判不安全，且提交仍可达。
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self._commit_in(self._path("a"), "work.txt", "precious\n")
         sha = self._sha(self._path("a"))
         subprocess.run(["git", "-C", self.repo, "tag", "disflow/t/a", "HEAD"],
                        check=True, capture_output=True, text=True)
         self.engine.skip("t", "a")
-        entry = worktree.reap(SPEC, "t", self.repo)["leaks"][0]
+        entry = worktree.reap(STORAGE, "t", self.repo)["leaks"][0]
         self.assertFalse(entry["safe_to_drop"])
         self.assertTrue(any(r.startswith("unmerged-commit:") for r in entry["reasons"]))
         self.assertTrue(os.path.isdir(self._path("a")), "同名 tag 下计划不得判安全")
@@ -652,7 +652,7 @@ class WorktreeTest(DisflowTestCase):
     def test_no_silent_loss_remote_named_disflow(self):
         # FIX3-R1 第二触发面：远端名恰为 disflow → refs/remotes/disflow/t/a；全名排除后不得 fail-open
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self._commit_in(self._path("a"), "work.txt", "precious\n")
         sha = self._sha(self._path("a"))
         main = self._sha(self.repo)
@@ -660,7 +660,7 @@ class WorktreeTest(DisflowTestCase):
                         "refs/remotes/disflow/t/a", main],
                        check=True, capture_output=True, text=True)
         self.engine.skip("t", "a")
-        entry = worktree.reap(SPEC, "t", self.repo)["leaks"][0]
+        entry = worktree.reap(STORAGE, "t", self.repo)["leaks"][0]
         self.assertFalse(entry["safe_to_drop"])
         self.assertTrue(self._reachable(sha))
 
@@ -668,16 +668,16 @@ class WorktreeTest(DisflowTestCase):
         # R2 闭洞：目录+登记都没、分支还在且带未合并提交 → 残留分支**必须过同一套判据**：
         # safe_to_drop=False，discard_warnings 说清会丢哪笔提交；且 reap 什么都不做。
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self._commit_in(self._path("a"), "work.txt", "precious\n")
         sha = self._sha(self._path("a"))
         subprocess.run(["git", "-C", self.repo, "worktree", "remove", "--force",
                         self._path("a")], check=True, capture_output=True, text=True)
         self.engine.skip("t", "a")
-        report = worktree.reconcile(SPEC, "t", self.repo)
+        report = worktree.reconcile(STORAGE, "t", self.repo)
         self.assertEqual(report["leaks"], [])
         self.assertEqual([r["node"] for r in report["residual"]], ["a"])
-        plan = worktree.reap(SPEC, "t", self.repo)
+        plan = worktree.reap(STORAGE, "t", self.repo)
         self.assertEqual([r["node"] for r in plan["residual"]], ["a"])
         entry = plan["residual"][0]
         self.assertEqual(entry["branch"], "disflow/t/a")
@@ -694,7 +694,7 @@ class WorktreeTest(DisflowTestCase):
         self.assertEqual(self._branches("disflow/t/a"), ["disflow/t/a"])
         # 宿主仍可 apply re-attach 拿回那笔提交（先 retry 让节点重新变“活”）
         self.engine.retry("t", "a")
-        result = worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        result = worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self.assertEqual(result["reattached"], ["a"])
         self.assertEqual(self._sha(self._path("a")), sha)
 
@@ -709,18 +709,18 @@ class WorktreeTest(DisflowTestCase):
         shutil.rmtree(other)
         before = {os.path.realpath(p) for p in worktree.registered(self.repo)}
         self.assertIn(os.path.realpath(other), before)
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         after = {os.path.realpath(p) for p in worktree.registered(self.repo)}
         self.assertIn(os.path.realpath(other), after, "别人的悬空登记不得被 apply 清掉")
 
     def test_apply_unknown_tree_has_no_side_effects(self):
         # FIX2-B6(b)：校验失败时零副作用——不得先把本命名空间下的悬空登记清掉
         self._seed(["a"])
-        worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         shutil.rmtree(self._path("a"))
         before = {os.path.realpath(p) for p in worktree.registered(self.repo)}
         with self.assertRaises(KeyError):
-            worktree.apply(SPEC, "nope", self.repo)
+            worktree.apply(STORAGE, "nope", self.repo)
         after = {os.path.realpath(p) for p in worktree.registered(self.repo)}
         self.assertEqual(before, after, "apply 校验失败时不得有任何副作用")
 
@@ -728,7 +728,7 @@ class WorktreeTest(DisflowTestCase):
         # FIX2-B9：显式点名却被过滤掉的节点单列 not_applicable，不与「已建好」混淆
         self._seed(["a"])
         self.engine.skip("t", "a")
-        result = worktree.apply(SPEC, "t", self.repo, nodes=["a"])
+        result = worktree.apply(STORAGE, "t", self.repo, nodes=["a"])
         self.assertEqual(result["created"], [])
         self.assertEqual(result["skipped"], [])
         self.assertEqual(result["not_applicable"], ["a"])
@@ -737,7 +737,7 @@ class WorktreeTest(DisflowTestCase):
         # FIX2-B11：目录在但不是真 worktree → dirty 是「未读」(None)，不是「干净」(False)
         self._seed(["a"])
         os.makedirs(self._path("a"))
-        st = worktree.status(SPEC, "t", "a", self.repo)
+        st = worktree.status(STORAGE, "t", "a", self.repo)
         self.assertFalse(st["real"])
         self.assertIsNone(st["dirty"])
 
@@ -745,7 +745,7 @@ class WorktreeTest(DisflowTestCase):
 
     def test_reject_in_repo_is_cwd_independent(self):
         # FIX-B3 + FIX-B8：仓内路径必须被**响亮拒绝**，且两个 cwd 下行为一致
-        rel_spec = {"state": dict(SPEC["state"])}
+        rel_spec = {"state": dict(STORAGE["state"])}
         rel_spec["state"]["env"] = "_DISFLOW_UNSET_FOR_TEST"      # 强制走相对 dir
         self.assertNotIn("_DISFLOW_UNSET_FOR_TEST", os.environ)
         old_cwd = os.getcwd()
@@ -758,9 +758,9 @@ class WorktreeTest(DisflowTestCase):
                     worktree.commands(rel_spec, "t", "a", self.repo)
             # 仓外绝对 state_dir：两个 cwd 下命令必须完全一致
             os.chdir(self.repo)
-            here = worktree.commands(SPEC, "t", "a", self.repo)
+            here = worktree.commands(STORAGE, "t", "a", self.repo)
             os.chdir(tempfile.gettempdir())
-            there = worktree.commands(SPEC, "t", "a", self.repo)
+            there = worktree.commands(STORAGE, "t", "a", self.repo)
             self.assertEqual(here, there)
         finally:
             os.chdir(old_cwd)
@@ -779,16 +779,16 @@ class WorktreeTest(DisflowTestCase):
     def test_unknown_tree_raises(self):
         self._seed(["a"])
         with self.assertRaises(KeyError):
-            worktree.plan(SPEC, "nope", self.repo)
+            worktree.plan(STORAGE, "nope", self.repo)
         with self.assertRaises(KeyError):
-            worktree.status(SPEC, "nope", "a", self.repo)
+            worktree.status(STORAGE, "nope", "a", self.repo)
 
     def test_unknown_node_raises(self):
         self._seed(["a"])
         with self.assertRaises(KeyError):
-            worktree.status(SPEC, "t", "ghost", self.repo)
+            worktree.status(STORAGE, "t", "ghost", self.repo)
         with self.assertRaises(KeyError):
-            worktree.plan(SPEC, "t", self.repo, nodes=["ghost"])
+            worktree.plan(STORAGE, "t", self.repo, nodes=["ghost"])
 
     # ── helpers ───────────────────────────────────────────────────────────
 

@@ -1,11 +1,16 @@
-"""disflow spec —— 机制数据（路径、状态集、阶段集）。业务名词只出现在这里与 node 模板。"""
+"""disflow 机制数据（路径 / 状态集 / 阶段集）。业务名词只出现在这里与 node 模板。
+
+⚠ **术语**：本模块名为 `spec`，但此处的「spec」是**本实例的机制数据（vocabulary + 内建默认）**，
+**不是** ADR 0006 的 **Spec（交付规格 / 一类交付单元实体，登记在项目资产里）**。
+存储布局的常量叫 `STORAGE`（不再叫 `SPEC`），避开与该实体撞名。
+"""
 from __future__ import annotations
 
-# 机制词汇从核心层再导出（NFR-2：核心不依赖业务层，方向是 spec → core）
+# 机制词汇从核心层再导出（NFR-2：核心不依赖业务层，方向是 vocab → core）
 from .core import KINDS, STORED_STATUS, TERMINAL  # noqa: F401  （向后兼容再导出）
 
 # 存储机制：状态目录与文件名（store 层按此取路径）
-SPEC: dict = {
+STORAGE: dict = {
     "state": {
         "dir": ".disflow",
         "env": "DISFLOW_STATE_DIR",

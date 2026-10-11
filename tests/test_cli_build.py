@@ -17,7 +17,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from base import DisflowTestCase, acceptance, git_repo, touch
 
-from disflow import spec, store
+from disflow import vocab, store
 from disflow.cli import build_parser, main
 
 # 与 tests/test_worktree.py 同款：importlib 运行期解析，绕开 `disflow/__init__` 的再导出登记。
@@ -52,7 +52,7 @@ class CliBuildVerbTest(DisflowTestCase):
         return code, out.getvalue(), err.getvalue()
 
     def _state(self) -> dict:
-        return store.read_json(store.projection_path(spec.SPEC))
+        return store.read_json(store.projection_path(vocab.STORAGE))
 
     def _tree(self, tree: str = "t") -> dict:
         return self._state()["trees"][tree]
@@ -61,7 +61,7 @@ class CliBuildVerbTest(DisflowTestCase):
         return self._tree(tree)["nodes"][node]
 
     def _events(self) -> int:
-        return len(store.read_jsonl(store.events_path(spec.SPEC)))
+        return len(store.read_jsonl(store.events_path(vocab.STORAGE)))
 
     # ── init / goal ───────────────────────────────────────────────────────
 
@@ -263,7 +263,7 @@ class CliWorktreeReapForceTest(DisflowTestCase):
                    json.dumps([{"id": node, "goal": node, "acceptance": acceptance()}],
                               ensure_ascii=False)])
         self._run(["worktree", "apply", "t", "--nodes", node])
-        path = worktree.path_for(spec.SPEC, "t", node)
+        path = worktree.path_for(vocab.STORAGE, "t", node)
         touch(os.path.join(path, "wip.txt"), "wip\n")
         self._run(["skip", "t", node, "--reason", "已收工"])
         return path

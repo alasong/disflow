@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from .dispatch import drive
 from .model import children_of
-from .spec import STAGE_LABELS, STAGES
+from .vocab import STAGE_LABELS, STAGES
 
 _MARKS = {"done": "✓", "running": "▶", "failed": "✗", "skipped": "—", "pending": "·"}
 _CONTAINER_MARK = "◦"
@@ -155,7 +155,7 @@ def board_layout(tree: dict, stage: str | None = None,
                  empty_columns: bool = True) -> dict:
     """看板布局的**唯一实现**：阶段列 + 列内树层级 + 列内状态分组。
 
-    **列定义单一来源**：`stages`（省略取 `spec.STAGES` 内建默认；CLI 传解析后的 `cfg.stages`，
+    **列定义单一来源**：`stages`（省略取 `vocab.STAGES` 内建默认；CLI 传解析后的 `cfg.stages`，
     而 `cfg.stages` 由 `boards.json` **派生** —— 板定义住 `disflow/boards.py`，
     视图层不读文件、也不抄一份字面量）。
 
@@ -325,7 +325,7 @@ def _stage_label(stage: str, labels: dict[str, str] | None = None) -> str:
     """阶段的人读标签 —— 缺项即回落成阶段名（自定义板不崩，也不另造第二份词表）。
 
     `labels` 由调用方从**配置**传入（`Config.labels` ← `boards.json`）；省略时用内建默认
-    （`spec.STAGE_LABELS`）—— 视图层不读文件，配置归 `config`/`boards` 两个模块。
+    （`vocab.STAGE_LABELS`）—— 视图层不读文件，配置归 `config`/`boards` 两个模块。
     """
     table = STAGE_LABELS if labels is None else labels
     return table.get(stage, stage)

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 
-from .spec import ROLES
+from .vocab import ROLES
 
 _KIND = {"R": "container", "O": "container", "T": "task", "S": "task"}
 _STATUS = {"pending": "pending", "ready": "pending", "iterating": "running", "done": "done"}

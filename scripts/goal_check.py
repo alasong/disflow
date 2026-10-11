@@ -200,7 +200,7 @@ def k_verify_separate() -> tuple[bool, str]:
 def k_iteration_burndown() -> tuple[bool, str]:
     """§1.3 保留项：迭代 / 燃尽。"""
     code, hits = _grep(r"^def burndown", "disflow/metrics.py")
-    code2, dl = _grep(r"deadline", "disflow/spec.py", "disflow/state.py", "disflow/engine.py")
+    code2, dl = _grep(r"deadline", "disflow/vocab.py", "disflow/state.py", "disflow/engine.py")
     return (bool(hits.strip()) and bool(dl.strip()),
             f"burndown 定义 {len(hits.splitlines())} 处；deadline 在 spec/state/engine {len(dl.splitlines())} 处")
 

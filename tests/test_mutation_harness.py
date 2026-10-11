@@ -14,6 +14,7 @@ import contextlib
 import importlib.util
 import io
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,31 @@ def _load_harness() -> Any:
 
 
 mc: Any = _load_harness()
+
+
+def _load_harness_from(repo: pathlib.Path) -> Any:
+    """从**仓副本**加载 harness（其 `ROOT` = 副本）——注入落在副本上，不碰真工作树。"""
+    path = repo / "scripts" / "mutation_check.py"
+    spec = importlib.util.spec_from_file_location("mutation_check_iso", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _repo_copy() -> pathlib.Path:
+    """仓的临时副本（`disflow/` + `tests/` + `scripts/`，去 `__pycache__`）。
+
+    **为何要它**：`HarnessReportingTest` 用一条**有效**针脚调 `main()`，会**就地改真源码**、
+    再跑对应测试。单进程串行下靠 `finally` 还原没事；但并发跑（每文件一进程，`finish.py`
+    默认）时，别的用例会读到那扇被改的源码（实测：与 `test_cli_readonly` 并发 ⇒ 后者
+    `done` 的门把被改文件当成“本节点引入的改动”而拒收）。注入落在副本上即无共享可踩。
+    """
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="disflow-mc-copy-"))
+    for name in ("disflow", "tests", "scripts"):
+        shutil.copytree(ROOT / name, tmp / name,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+    return tmp
 
 
 class PinNotFoundTest(unittest.TestCase):
@@ -99,22 +125,25 @@ class HarnessReportingTest(unittest.TestCase):
                   '''        return (f"zzz slug={slug!r} seen={', '.join(sorted(seen))}")''',
                   "test_metrics.py")
 
-    def test_a_toothless_pin_is_reported_as_a_miss_not_as_caught(self):
+    def _isolated(self) -> Any:
+        """在**仓副本**上跑的 harness：注入不碰真工作树，并发安全。"""
+        repo = _repo_copy()
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        return _load_harness_from(repo)
+
+    def test_a_toothless_pin_is_reported_as_a_miss_not_as_caught(self) -> None:
         """针脚改了实现、但对应测试照样绿 ⇒ 必须报「漏抓」（exit 1），不得算抓到。"""
-        original = mc.MUTATIONS
-        mc.MUTATIONS = [self._TOOTHLESS]
-        try:
-            buffer = io.StringIO()
-            with contextlib.redirect_stdout(buffer):
-                code = mc.main([])
-        finally:
-            mc.MUTATIONS = original
+        iso = self._isolated()
+        iso.MUTATIONS = [self._TOOTHLESS]
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = iso.main([])
         text = buffer.getvalue()
         self.assertEqual(code, 1, "注入生效但测试没红 ⇒ 漏抓（1），不是 harness 错（2）")
         self.assertIn("漏抓", text)
         self.assertIn("没有被测试守住", text)
 
-    def test_a_mismatched_pin_is_reported_never_silently_skipped(self):
+    def test_a_mismatched_pin_is_reported_never_silently_skipped(self) -> None:
         """针脚 `old` 在文件里找不到：必须点名报出（exit 2），不得静默跳过当没事。
 
         与 `PinNotFoundTest` 的区别：这里把对不上的针脚**混在一条有效针脚中间**，
@@ -126,14 +155,11 @@ class HarnessReportingTest(unittest.TestCase):
                 "test_metrics.py")
         bogus = ("对不上的针脚", "disflow/metrics.py",
                  "这段文本在 metrics.py 里根本不存在", "x", "test_metrics.py")
-        original = mc.MUTATIONS
-        mc.MUTATIONS = [good, bogus]
-        try:
-            buffer = io.StringIO()
-            with contextlib.redirect_stdout(buffer):
-                code = mc.main([])
-        finally:
-            mc.MUTATIONS = original
+        iso = self._isolated()
+        iso.MUTATIONS = [good, bogus]
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = iso.main([])
         text = buffer.getvalue()
         self.assertEqual(code, 2, "针脚对不上 = harness 的错（2），且本轮结果不可信")
         self.assertIn("对不上的针脚", text)

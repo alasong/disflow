@@ -55,7 +55,7 @@ from base import DisflowTestCase, acceptance, git_repo, touch
 from disflow import worktree
 from disflow.cli import main
 from disflow.engine import EngineError
-from disflow.spec import SPEC
+from disflow.vocab import STORAGE
 
 
 def git(cwd: str, *args: str) -> None:
@@ -83,8 +83,8 @@ class WorktreeGateTest(DisflowTestCase):
         self.engine.expand("t", "root", [{"id": node_id, **decl}])
 
     def _worktree(self, node_id: str) -> str:
-        worktree.apply(SPEC, "t", self.repo, nodes=[node_id])
-        return worktree.path_for(SPEC, "t", node_id)
+        worktree.apply(STORAGE, "t", self.repo, nodes=[node_id])
+        return worktree.path_for(STORAGE, "t", node_id)
 
     # ── A1′：工作区在 done 之前被删 ⇒ 必须 fail-closed（第一判据对称化）──
 

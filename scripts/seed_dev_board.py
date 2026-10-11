@@ -74,7 +74,7 @@ SKIP_REASON = "自造仪式：本看板是 dogfooding 演示，无下游消费�
 # 写面（供波次打包；同波不重叠者才并行）
 TARGETS: dict[str, list[str]] = {
     "D10": ["disflow/store.py"],
-    "D20": ["disflow/model.py", "disflow/spec.py"],
+    "D20": ["disflow/model.py", "disflow/vocab.py"],
     "D30": ["disflow/graph.py"],
     "D40": ["disflow/ready.py"],
     "D50": ["disflow/context.py"],

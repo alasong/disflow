@@ -141,7 +141,7 @@ flowchart TD
     CORE -. "禁止（tests/test_layering.py 守）" .-> BIZ
 ```
 
-`core.py` 持有机制词汇：`KINDS` / `STORED_STATUS` / `TERMINAL`（`spec.py` 只做再导出）。
+`core.py` 持有机制词汇：`KINDS` / `STORED_STATUS` / `TERMINAL`（`vocab.py` 只做再导出）。
 判据是**可执行断言**：扫核心四文件的业务词针脚（单词边界正则）+ 断言核心未 import 业务模块。
 
 ## 6. 多块板 = 多棵树（作用域隔离）

@@ -9,7 +9,7 @@ import unittest
 
 from base import DisflowTestCase, acceptance, always_fails, git_repo, touch
 
-from disflow import gates, spec, state, store
+from disflow import gates, vocab, state, store
 from disflow.engine import Engine, EngineError, GateReject
 
 
@@ -140,7 +140,7 @@ class EngineFlowTest(DisflowTestCase):
     def test_projection_rebuild_after_writes(self):
         self._seed()
         self.engine.done("t1", "a")
-        matched, diffs = store.projection_matches(spec.SPEC, project=state.project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=state.project)
         self.assertTrue(matched, diffs)
     def test_baseline_excludes_preexisting_dirt(self):
         repo = tempfile.mkdtemp(prefix="disflow-git-")

@@ -3,7 +3,7 @@
 **为什么要有这个文件**：本轮审查（python-expert 12 类）查出三个“声明是一套、实现是另一套”：
 1. `NODE_FIELDS` 含 `status`/`lease`/`evidence`/`parent`，但 `new_node` 根本不收它们
    ⇒ 声明通过校验后被**静默丢弃**。这与上一轮修的 `requires` 是**同一个 bug 家族**。
-2. `EVENT_KINDS`（spec）与 `_HANDLERS`（state）两套清单可漂移，而前者**只管报错文本**。
+2. `EVENT_KINDS`（vocab）与 `_HANDLERS`（state）两套清单可漂移，而前者**只管报错文本**。
 3. `store.py` 在模块顶层 `import fcntl` ⇒ 非 POSIX 平台连 `import disflow` 都失败。
 
 所以这里不测“某个值对不对”，而测**声明与实现互为镜像**——
@@ -19,7 +19,7 @@ import unittest
 
 from base import DisflowTestCase, acceptance
 
-from disflow import spec
+from disflow import vocab
 from disflow.engine import Engine
 from disflow.model import DECLARABLE_FIELDS, NODE_FIELDS, RUNTIME_FIELDS, new_node
 from disflow.state import _HANDLERS
@@ -89,12 +89,12 @@ class NodeFieldContractTest(DisflowTestCase):
 
 class EventKindContractTest(DisflowTestCase):
     def test_event_kinds_match_dispatchable_handlers(self):
-        """`spec.EVENT_KINDS`（声明）必须与 `state._HANDLERS`（可派发）**逐个相等**。
+        """`vocab.EVENT_KINDS`（声明）必须与 `state._HANDLERS`（可派发）**逐个相等**。
 
         两者漂移的后果是隐蔽的：`EVENT_KINDS` 曾经只用于报错文本 ⇒ 报错会列出
         根本没有 handler 的 kind，而少列一个真正可派发的 kind 没人发现。
         """
-        self.assertEqual(sorted(spec.EVENT_KINDS), sorted(_HANDLERS),
+        self.assertEqual(sorted(vocab.EVENT_KINDS), sorted(_HANDLERS),
                          "事件闭集与派发表不一致（加/删 kind 时两边都要动）")
 
     def test_unknown_kind_error_lists_dispatchable_kinds(self):

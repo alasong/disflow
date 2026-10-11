@@ -96,14 +96,14 @@ class AdversarialWorktreeTest(DisflowTestCase):
     # ── 现场搭建（照搬原文 `_seed_node` / `_adv_case` / `_finish`）─────────────
 
     def _seed_node(self, state: str, node: str = "a") -> tuple[dict, str]:
-        """建一棵 t 树，把节点 a 造成 `state` 描述的现场。返回 (spec, repo)。"""
+        """建一棵 t 树，把节点 a 造成 `state` 描述的现场。返回 (storage, repo)。"""
         eng = Engine(cwd=self.repo)
         eng.init_tree("t", "g")
         eng.expand("t", "root", [{"id": node, "acceptance": acceptance()}])
-        spec = eng.spec
+        storage = eng.storage
         eng.start("t", node)
-        worktree.apply(spec, "t", self.repo)
-        wt = worktree.path_for(spec, "t", node)
+        worktree.apply(storage, "t", self.repo)
+        wt = worktree.path_for(storage, "t", node)
         if state == "dirty":
             with open(os.path.join(wt, "README.md"), "a", encoding="utf-8") as fh:
                 fh.write("改一行\n")
@@ -121,14 +121,14 @@ class AdversarialWorktreeTest(DisflowTestCase):
         elif state == "residual-clean":
             subprocess.run(["git", "-C", self.repo, "worktree", "remove", "--force", wt], check=True)
         eng.skip("t", node, "x")
-        return spec, self.repo
+        return storage, self.repo
 
     def _adv_case(self, node: str = "a") -> tuple[Engine, dict, str]:
-        """独立临时真 git 仓 + 播一棵 t 树，节点 a 可跑。返回 (eng, spec, repo)。"""
+        """独立临时真 git 仓 + 播一棵 t 树，节点 a 可跑。返回 (eng, storage, repo)。"""
         eng = Engine(cwd=self.repo)
         eng.init_tree("t", "g")
         eng.expand("t", "root", [{"id": node, "acceptance": acceptance()}])
-        return eng, eng.spec, self.repo
+        return eng, eng.storage, self.repo
 
     def _finish(self, eng: Engine, node: str = "a") -> None:
         eng.start("t", node)
@@ -157,11 +157,11 @@ class AdversarialWorktreeTest(DisflowTestCase):
             self.fail(f"无条目（node={node}）")
         return entry
 
-    def _fingerprint(self, spec: dict) -> dict:
+    def _fingerprint(self, storage: dict) -> dict:
         """现实指纹：state 目录文件 + repo 工作区文件 + 全部 refs + worktree 登记 + status。"""
         from disflow import store
         fp: dict[str, str] = {}
-        base = store.state_dir(spec)
+        base = store.state_dir(storage)
         for root, _dirs, files in os.walk(base):
             for f in files:
                 p = os.path.join(root, f)
@@ -198,18 +198,18 @@ class AdversarialWorktreeTest(DisflowTestCase):
 
     def _assert_b1(self, state: str) -> None:
         """① reap 在任何状态下都逐字不变更（含 refs / 登记 / 文件 / 状态目录）。"""
-        spec, repo = self._seed_node(state)
-        before = self._fingerprint(spec)
-        res = worktree.reap(spec, "t", repo)
-        after = self._fingerprint(spec)
+        storage, repo = self._seed_node(state)
+        before = self._fingerprint(storage)
+        res = worktree.reap(storage, "t", repo)
+        after = self._fingerprint(storage)
         self.assertEqual(before, after, f"{state}：reap 变更了现场")
         self.assertTrue(_is_exactly_false(res.get("executed")),
                         f"{state}：executed={res.get('executed')!r}（须恰为 False）")
 
     def _assert_b2(self, state: str, dangerous: bool) -> None:
         """② 每种危险状态都必须 fail-closed（危险→全 False+警告；安全→全 True+无警告）。"""
-        spec, repo = self._seed_node(state)
-        res = worktree.reap(spec, "t", repo)
+        storage, repo = self._seed_node(state)
+        res = worktree.reap(storage, "t", repo)
         entries = res["leaks"] + res["residual"]
         self.assertTrue(entries, f"{state}：无条目，无法判定")
         warnings = [w for e in entries for w in (e.get("discard_warnings") or [])]
@@ -282,8 +282,8 @@ class AdversarialWorktreeTest(DisflowTestCase):
 
     def test_b3_residual_unmerged_branch_uses_same_funnel_and_is_rejected(self):
         """③ 残留未合并分支走同一漏斗且被拒"""
-        spec, repo = self._seed_node("residual-unmerged")
-        res = worktree.reap(spec, "t", repo)
+        storage, repo = self._seed_node("residual-unmerged")
+        res = worktree.reap(storage, "t", repo)
         residual = res["residual"]
         self.assertTrue(residual, "无 residual 条目")
         self.assertIn("unmerged-commit", " ".join(residual[0]["reasons"]),
@@ -293,8 +293,8 @@ class AdversarialWorktreeTest(DisflowTestCase):
 
     def test_b3b_residual_branch_cmd_is_safe_delete_d_and_remove_cmd_none(self):
         """③b 残留分支的 branch_cmd 用安全删 `-d`（非 -D）且 remove_cmd 为 None"""
-        spec, repo = self._seed_node("residual-unmerged")
-        res = worktree.reap(spec, "t", repo)
+        storage, repo = self._seed_node("residual-unmerged")
+        res = worktree.reap(storage, "t", repo)
         residual = res["residual"]
         self.assertTrue(residual, "无 residual 条目")
         sha = _git(repo, "rev-parse", "disflow/t/a").stdout.strip()[:12]
@@ -306,26 +306,26 @@ class AdversarialWorktreeTest(DisflowTestCase):
 
     def test_b4_broken_probe_raises_worktree_probe_error(self):
         """④ 探针坏 → 抛 WorktreeProbeError（不返回假 all-clear）"""
-        spec, _repo = self._seed_node("clean")
+        storage, _repo = self._seed_node("clean")
         notgit = tempfile.mkdtemp(prefix="disflow-adv-notgit-")
         self.addCleanup(shutil.rmtree, notgit, ignore_errors=True)
         with self.assertRaises(worktree.WorktreeProbeError):
-            worktree.reap(spec, "t", notgit)
+            worktree.reap(storage, "t", notgit)
 
     def test_b5_apply_executes_and_reattach_restores_old_head(self):
         """⑤ apply 仍执行 + re-attach 后 HEAD 回到旧提交"""
         eng = Engine(cwd=self.repo)
         eng.init_tree("t", "g")
         eng.expand("t", "root", [{"id": "a", "acceptance": acceptance()}])
-        spec = eng.spec
+        storage = eng.storage
         eng.start("t", "a")                          # 保持 running（活节点），不是终态
-        worktree.apply(spec, "t", self.repo)
-        wt0 = worktree.path_for(spec, "t", "a")
+        worktree.apply(storage, "t", self.repo)
+        wt0 = worktree.path_for(storage, "t", "a")
         _commit_in(wt0, "f.txt", "c")
         subprocess.run(["git", "-C", self.repo, "worktree", "remove", "--force", wt0], check=True)
         sha = _git(self.repo, "rev-parse", "disflow/t/a").stdout.strip()
-        res = worktree.apply(spec, "t", self.repo)
-        wt = worktree.path_for(spec, "t", "a")
+        res = worktree.apply(storage, "t", self.repo)
+        wt = worktree.path_for(storage, "t", "a")
         head_back = _git(wt, "rev-parse", "HEAD").stdout.strip() if os.path.isdir(wt) else ""
         self.assertEqual(res["reattached"], ["a"],
                          f"reattached={res['reattached']} created={res['created']}")
@@ -335,12 +335,12 @@ class AdversarialWorktreeTest(DisflowTestCase):
 
     def test_adv1_unmerged_commit_plan_rejects_and_commit_still_reachable(self):
         """adv1 未合并提交：计划拒绝 + 提交仍可达"""
-        eng, spec, repo = self._adv_case()
-        worktree.apply(spec, "t", repo)
-        wt = worktree.path_for(spec, "t", "a")
+        eng, storage, repo = self._adv_case()
+        worktree.apply(storage, "t", repo)
+        wt = worktree.path_for(storage, "t", "a")
         sha = _commit_in(wt)
         self._finish(eng)
-        res = worktree.reap(spec, "t", repo)
+        res = worktree.reap(storage, "t", repo)
         entry = self._require_leak(res, "a")
         self.assertFalse(entry["safe_to_drop"], f"reasons={entry['reasons']}")
         self.assertTrue(any(r.startswith("unmerged-commit") for r in entry["reasons"]),
@@ -352,13 +352,13 @@ class AdversarialWorktreeTest(DisflowTestCase):
 
     def test_adv2_ignored_file_plan_rejects_and_file_survives(self):
         """adv2 ignored 文件：计划拒绝 + 文件还在"""
-        eng, spec, repo = self._adv_case()
-        worktree.apply(spec, "t", repo)
-        wt = worktree.path_for(spec, "t", "a")
+        eng, storage, repo = self._adv_case()
+        worktree.apply(storage, "t", repo)
+        wt = worktree.path_for(storage, "t", "a")
         with open(os.path.join(wt, "debug.log"), "w", encoding="utf-8") as fh:
             fh.write("secret")
         self._finish(eng)
-        res = worktree.reap(spec, "t", repo)
+        res = worktree.reap(storage, "t", repo)
         entry = self._require_leak(res, "a")
         survived = os.path.exists(os.path.join(wt, "debug.log"))
         self.assertFalse(entry["safe_to_drop"], f"reasons={entry['reasons']}")
@@ -368,13 +368,13 @@ class AdversarialWorktreeTest(DisflowTestCase):
 
     def test_adv3_dir_gone_branch_has_commit_plan_rejects_and_commit_reachable(self):
         """adv3 目录已丢+分支有提交：计划拒绝 + 提交仍可达"""
-        eng, spec, repo = self._adv_case()
-        worktree.apply(spec, "t", repo)
-        wt = worktree.path_for(spec, "t", "a")
+        eng, storage, repo = self._adv_case()
+        worktree.apply(storage, "t", repo)
+        wt = worktree.path_for(storage, "t", "a")
         sha = _commit_in(wt)
         shutil.rmtree(wt)                            # 模拟目录被手工删掉（登记仍在 → 落 leaks 漏斗）
         self._finish(eng)
-        res = worktree.reap(spec, "t", repo)
+        res = worktree.reap(storage, "t", repo)
         entry = self._require_entry(res, "a")
         self.assertFalse(entry["safe_to_drop"], f"reasons={entry['reasons']}")
         self.assertTrue(any(r.startswith("unmerged-commit") for r in entry["reasons"]),
@@ -383,14 +383,14 @@ class AdversarialWorktreeTest(DisflowTestCase):
 
     def test_adv4_detached_commit_plan_rejects_and_workspace_not_destroyed(self):
         """adv4 detached 提交：计划拒绝 + 工作区未被销毁"""
-        eng, spec, repo = self._adv_case()
-        worktree.apply(spec, "t", repo)
-        wt = worktree.path_for(spec, "t", "a")
+        eng, storage, repo = self._adv_case()
+        worktree.apply(storage, "t", repo)
+        wt = worktree.path_for(storage, "t", "a")
         _git(wt, "checkout", "-q", "--detach", cwd=wt)
         sha = _commit_in(wt, "detached.txt")
         readable = _git(wt, "cat-file", "-e", sha, cwd=wt, check=False).returncode == 0
         self._finish(eng)
-        res = worktree.reap(spec, "t", repo)
+        res = worktree.reap(storage, "t", repo)
         entry = self._require_leak(res, "a")
         self.assertFalse(entry["safe_to_drop"], f"safe_to_drop={entry['safe_to_drop']}")
         self.assertTrue(os.path.isdir(wt), "worktree 目录被销毁")
@@ -398,37 +398,37 @@ class AdversarialWorktreeTest(DisflowTestCase):
 
     def test_adv5_apply_does_not_prune_others_registration(self):
         """adv5 apply 不 prune 别人的登记"""
-        _eng, spec, repo = self._adv_case()
+        _eng, storage, repo = self._adv_case()
         other = self._other_worktree("other/x")
         shutil.rmtree(other)                         # 别人的 worktree「暂时不在」（卷卸载）
         before = _git(repo, "worktree", "list", "--porcelain").stdout
-        worktree.apply(spec, "t", repo)
+        worktree.apply(storage, "t", repo)
         after = _git(repo, "worktree", "list", "--porcelain").stdout
         self.assertIn("other-wt", before, f"现场没建上：{before}")
         self.assertIn("other-wt", after, f"apply prune 了别人的登记：{after}")
 
     def test_adv6_apply_missing_tree_raises_and_zero_side_effects(self):
         """adv6 apply(不存在的树) 抛错且零副作用"""
-        _eng, spec, repo = self._adv_case()
+        _eng, storage, repo = self._adv_case()
         other = self._other_worktree("other/y")
         shutil.rmtree(other)
         before = _git(repo, "worktree", "list", "--porcelain").stdout
         with self.assertRaises(KeyError):
-            worktree.apply(spec, "NOPE", repo)
+            worktree.apply(storage, "NOPE", repo)
         after = _git(repo, "worktree", "list", "--porcelain").stdout
         self.assertEqual(before, after, "apply(不存在的树) 产生了副作用")
 
     def test_adv7_residual_branch_reattach_no_deadlock_and_old_commit_restored(self):
         """adv7 残留分支 re-attach：不卡死且拿回上次提交"""
-        eng, spec, repo = self._adv_case()
-        worktree.apply(spec, "t", repo)
-        wt = worktree.path_for(spec, "t", "a")
+        eng, storage, repo = self._adv_case()
+        worktree.apply(storage, "t", repo)
+        wt = worktree.path_for(storage, "t", "a")
         sha = _commit_in(wt)
         self._finish(eng)
-        worktree.reap(spec, "t", repo)               # 纯计划：分支被拒留 → 残留分支
+        worktree.reap(storage, "t", repo)               # 纯计划：分支被拒留 → 残留分支
         branch_left = bool(_git(repo, "branch", "--list", "disflow/t/a").stdout.strip())
         eng.retry("t", "a")
-        r2 = worktree.apply(spec, "t", repo)
+        r2 = worktree.apply(storage, "t", repo)
         head_ok = (_git(wt, "rev-parse", "HEAD", cwd=wt, check=False).stdout.strip() == sha
                    if os.path.isdir(wt) else False)
         self.assertTrue(branch_left, "分支没留下")
@@ -444,9 +444,9 @@ class AdversarialWorktreeTest(DisflowTestCase):
         可观测量不变——危险条目的 discard_warnings 必须逐条覆盖 dirty / ignored /
         unmerged-commit 三类会丢的东西（强删前宿主读的就是它）。
         """
-        eng, spec, repo = self._adv_case()
-        worktree.apply(spec, "t", repo)
-        wt = worktree.path_for(spec, "t", "a")
+        eng, storage, repo = self._adv_case()
+        worktree.apply(storage, "t", repo)
+        wt = worktree.path_for(storage, "t", "a")
         with open(os.path.join(wt, "debug.log"), "w", encoding="utf-8") as fh:
             fh.write("secret")
         _commit_in(wt, "tracked.txt")
@@ -454,7 +454,7 @@ class AdversarialWorktreeTest(DisflowTestCase):
         with open(os.path.join(wt, "README.md"), "a", encoding="utf-8") as fh:
             fh.write("uncommitted\n")                # 提交后再改脏已跟踪文件
         self._finish(eng)
-        res = worktree.reap(spec, "t", repo)
+        res = worktree.reap(storage, "t", repo)
         entry = self._require_leak(res, "a")
         self.assertFalse(entry["safe_to_drop"], f"reasons={entry['reasons']}")
         warnings_list = entry.get("discard_warnings") or []

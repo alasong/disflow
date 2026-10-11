@@ -27,7 +27,7 @@ from base import DisflowTestCase, acceptance
 from disflow import store
 from disflow.dispatch import drive
 from disflow.engine import Engine, EngineError
-from disflow.spec import STAGES
+from disflow.vocab import STAGES
 from disflow.views import (
     board_layout,
     board_lines,
@@ -76,18 +76,18 @@ class ViewsTest(DisflowTestCase):
     def test_stage_done_is_not_a_column_and_is_rejected(self):
         """`done` 是**状态**不是列：默认闭集里没有它，写进去必须**响亮拒收且不落事件**。"""
         self.assertNotIn("done", STAGES)
-        before = len(store.load_events(self.engine.spec))
+        before = len(store.load_events(self.engine.storage))
         with self.assertRaises(EngineError) as ctx:
             self.engine.set_stage("t", "a", "done", reason="done 是状态不是列")
         self.assertIn("stage 取值非法", str(ctx.exception))
-        self.assertEqual(len(store.load_events(self.engine.spec)), before, "拒收不许落事件")
+        self.assertEqual(len(store.load_events(self.engine.storage)), before, "拒收不许落事件")
         self.assertEqual(self.engine.tree("t")["nodes"]["a"]["stage"], "dev", "拒收不许改投影")
 
         with self.assertRaises(EngineError) as ctx_expand:
             self.engine.expand("t", "root", [{"id": "c", "stage": "done",
                                                "goal": "建节点也走同一套闭集"}])
         self.assertIn("stage 取值非法", str(ctx_expand.exception))
-        self.assertEqual(len(store.load_events(self.engine.spec)), before, "拒收不许落事件")
+        self.assertEqual(len(store.load_events(self.engine.storage)), before, "拒收不许落事件")
 
     def test_non_canonical_stage_is_appended_and_marked(self):
         """不在闭集里的历史 stage **不许丢**：追加在末尾并标注（读时容忍 ≠ 静默隐藏）。"""

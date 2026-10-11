@@ -6,7 +6,7 @@
 
 - **R1 写时校验**：树名（`Engine.init_tree`）与节点 id（`validate_node_spec`）都拒路径形名字，
   且**不落事件**（跑完读事件数，必须与跑前相同）。
-- **R2 结构性兜底**：`worktree.path_for` 算完路径必须断言严格在 `root(spec)` 之下，否则抛错——
+- **R2 结构性兜底**：`worktree.path_for` 算完路径必须断言严格在 `root(storage)` 之下，否则抛错——
   **就算事实源里已有坏名字（老状态目录）也不放行**。
 - **R3 `apply` 失败一行人话**：git 建失败时 CLI 输出**不含 `Traceback`**、退出码 1。
 """
@@ -24,7 +24,7 @@ from disflow import store, worktree
 from disflow.cli import main
 from disflow.engine import Engine
 from disflow.model import validate_node_spec, validate_path_name
-from disflow.spec import SPEC
+from disflow.vocab import STORAGE
 
 # 路径形名字表（树名与节点 id 共用）。`a／b` 里的 `／` 是全角斜杠（U+FF0F）。
 BAD_NAMES = ["", "  ", ".", "..", "a/b", "../x", "x/..", "a\\b", "a／b"]
@@ -40,7 +40,7 @@ class NameValidationTest(DisflowTestCase):
     """R1：写时校验 —— 坏名字拒收且不落事件；好名字照过。"""
 
     def _events(self) -> int:
-        return len(store.read_jsonl(store.events_path(SPEC)))
+        return len(store.read_jsonl(store.events_path(STORAGE)))
 
     # ── 树名 ────────────────────────────────────────────────────────────
 
@@ -107,27 +107,27 @@ class PathForFailClosedTest(DisflowTestCase):
     def test_path_for_rejects_bad_node(self):
         for name in ESCAPING_NODE_NAMES:
             with self.subTest(node=name), self.assertRaises(ValueError):
-                worktree.path_for(SPEC, "t", name)
+                worktree.path_for(STORAGE, "t", name)
 
     def test_path_for_rejects_bad_tree(self):
         for name in ESCAPING_TREE_NAMES:
             with self.subTest(tree=name), self.assertRaises(ValueError):
-                worktree.path_for(SPEC, name, "a")
+                worktree.path_for(STORAGE, name, "a")
 
     def test_path_for_good_is_strictly_under_root(self):
-        root = os.path.realpath(worktree.root(SPEC))
-        path = os.path.realpath(worktree.path_for(SPEC, "t", "a"))
+        root = os.path.realpath(worktree.root(STORAGE))
+        path = os.path.realpath(worktree.path_for(STORAGE, "t", "a"))
         self.assertTrue(path.startswith(root + os.sep), path)
         self.assertNotEqual(path, root)
 
     def test_bad_name_cannot_escape_root(self):
         # 直接钉住「逃逸」本身：任何坏名字的结果要么抛错，要么（若真返回）仍在 root 下。
-        root = os.path.realpath(worktree.root(SPEC))
+        root = os.path.realpath(worktree.root(STORAGE))
         for tree, node in [("t", ".."), ("t", "../../../../../../tmp/pwned"),
                            ("..", "a"), ("../../evil", "a")]:
             with self.subTest(tree=tree, node=node):
                 try:
-                    path = os.path.realpath(worktree.path_for(SPEC, tree, node))
+                    path = os.path.realpath(worktree.path_for(STORAGE, tree, node))
                 except ValueError:
                     continue
                 self.fail(f"{tree=} {node=} 返回了逃逸路径 {path!r}（root={root}）")
@@ -150,7 +150,7 @@ class LegacyBadStateTest(DisflowTestCase):
         R2（只管逃逸）就不该、也不会拒绝。
         """
         self.engine.init_tree("t", "g")
-        path = store.projection_path(SPEC)
+        path = store.projection_path(STORAGE)
         state = store.read_json(path)
         state["trees"]["t"]["nodes"][bad_id] = {
             "id": bad_id, "parent": "root", "kind": "task", "status": "pending",
@@ -160,7 +160,7 @@ class LegacyBadStateTest(DisflowTestCase):
     def test_plan_raises_on_legacy_bad_id(self):
         self._inject_bad_node("../../pwned")
         with self.assertRaises(ValueError):
-            worktree.plan(SPEC, "t", self.repo)
+            worktree.plan(STORAGE, "t", self.repo)
 
     def test_cli_plan_reports_error_not_escape_path(self):
         self._inject_bad_node("../../../../../../tmp/pwned")
@@ -190,7 +190,7 @@ class ApplyFailureTest(DisflowTestCase):
 
     def _block_worktree_dir(self) -> None:
         """把 `<root>/t` 做成**普通文件**，让 `git worktree add <root>/t/a` 真失败。"""
-        root = worktree.root(SPEC)
+        root = worktree.root(STORAGE)
         os.makedirs(root, exist_ok=True)
         with open(os.path.join(root, "t"), "w", encoding="utf-8") as handle:
             handle.write("not a dir\n")
@@ -199,7 +199,7 @@ class ApplyFailureTest(DisflowTestCase):
         self._seed_one()
         self._block_worktree_dir()
         with self.assertRaises(worktree.WorktreeError):
-            worktree.apply(SPEC, "t", self.repo)
+            worktree.apply(STORAGE, "t", self.repo)
 
     def test_cli_apply_failure_is_one_line(self):
         self._seed_one()

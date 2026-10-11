@@ -16,7 +16,7 @@
    以及宿主该跑的命令，**永不**执行任何 git 变更；删除由宿主读完计划后自己跑那两条打印出来
    的命令。分界不是「一律不执行」，而是**可逆 vs 不可逆**。
 3. **路径绝不在 repo 内**：worktree 若落在仓内，会污染 `git status`，进而污染证据门
-   （`gates` 靠 `git status` 取改动集）。故路径一律从 `store.state_dir(spec)` 派生，
+   （`gates` 靠 `git status` 取改动集）。故路径一律从 `store.state_dir(storage)` 派生，
    且在带 repo 的函数里**响亮拒绝**落在 repo 内的路径。**仓内是脆弱配置**：哪怕该目录
    被 `.gitignore` 忽略，一次 `git clean -xdf` 也会把状态目录连同全部 worktree 一起删掉
    （忽略 ≠ 安全）——所以本模块**不**为「仓内但被 ignore」开口子，只给可操作的错误提示。
@@ -50,7 +50,7 @@ import os
 import subprocess
 
 from . import store
-from .spec import TERMINAL
+from .vocab import TERMINAL
 
 __all__ = [
     "WorktreeError", "WorktreeProbeError",
@@ -88,9 +88,9 @@ RECLAIMABLE: tuple[str, ...] = tuple(TERMINAL) + ("failed",)
 # ── 纯派生：路径 / 分支 / 命令 ────────────────────────────────────────────
 
 
-def root(spec: dict) -> str:
+def root(storage: dict) -> str:
     """worktree 根：`<state_dir>/worktrees`。从状态目录派生（约束 1、3）。"""
-    return os.path.join(store.state_dir(spec), "worktrees")
+    return os.path.join(store.state_dir(storage), "worktrees")
 
 
 def _assert_strictly_under(base: str, path: str, *, tree: str, node: str) -> None:
@@ -113,7 +113,7 @@ def _assert_strictly_under(base: str, path: str, *, tree: str, node: str) -> Non
             f"（根 {base!r}）——名字含路径分隔符/`..`，请用非路径形名字")
 
 
-def path_for(spec: dict, tree: str, node: str) -> str:
+def path_for(storage: dict, tree: str, node: str) -> str:
     """节点 worktree 落点：`<root>/<tree>/<node>`。纯函数，无 IO、无副作用。
 
     `state_dir` 相对时返回相对路径。带 repo 的函数做**文件系统 IO** 前一律经
@@ -121,14 +121,14 @@ def path_for(spec: dict, tree: str, node: str) -> str:
     否则相对 state_dir 下换个 cwd 整棵树会「消失」）；git 子进程一律带 `cwd=repo`，
     相对路径由 git 按 repo 解析。故返回值可安全跨 cwd 传递。
 
-    **fail-closed（第二道防线）**：算完路径后断言它**严格位于 `root(spec)` 之下**，
+    **fail-closed（第二道防线）**：算完路径后断言它**严格位于 `root(storage)` 之下**，
     不满足即抛 `ValueError`，**绝不返回**逃逸路径。为什么留两道：写时（`model.validate_path_name`
     在 `Engine.init_tree` / `validate_node_spec`）管「坏名字进不了事实源」；本道管「就算事实源里
     已有坏名字（老状态目录可能残留），算路径这一步也不放行」。只靠写时校验不够——**旧数据
     已经存在**；只靠本道也不够——它会等到算路径才拒绝，且下游别处可能绕过 `path_for` 自拼路径。
     两者是不同失效模式，不可互相替代。
     """
-    base = root(spec)
+    base = root(storage)
     path = os.path.join(base, tree, node)
     _assert_strictly_under(base, path, tree=tree, node=node)
     return path
@@ -139,7 +139,7 @@ def branch_for(tree: str, node: str) -> str:
     return f"disflow/{tree}/{node}"
 
 
-def commands(spec: dict, tree: str, node: str, repo: str,
+def commands(storage: dict, tree: str, node: str, repo: str,
              base: str = "HEAD", *, force: bool = False) -> dict:
     """给定节点，返回 `{"add": argv, "remove": argv}`（**argv 列表，不是 shell 字符串**）。
 
@@ -149,7 +149,7 @@ def commands(spec: dict, tree: str, node: str, repo: str,
     （安全删）。
     落到 repo 内的路径直接抛错（约束 3）——判定以 `repo` 为基准，不依赖进程 cwd。
     """
-    path = path_for(spec, tree, node)
+    path = path_for(storage, tree, node)
     _reject_if_inside(path, repo)
     remove = ["git", "worktree", "remove"]
     if force:
@@ -183,7 +183,7 @@ def registered(repo: str) -> set[str]:
     return paths
 
 
-def status(spec: dict, tree: str, node: str, repo: str, *,
+def status(storage: dict, tree: str, node: str, repo: str, *,
            registered_paths: set[str] | None = None) -> dict:
     """一个节点 worktree 的现实读数：
     `{node, path, exists, registered, real, dirty, ignored}`。
@@ -198,10 +198,10 @@ def status(spec: dict, tree: str, node: str, repo: str, *,
     tree/node 不在状态里时**响亮报错**，而不是返回一个「不存在」的安静结果——后者会把
     「节点名写错」伪装成「还没建」。
     """
-    _nodes(spec, tree, node)                      # 校验存在性（不存在即抛 KeyError）
-    path = path_for(spec, tree, node)
+    _nodes(storage, tree, node)                      # 校验存在性（不存在即抛 KeyError）
+    path = path_for(storage, tree, node)
     _reject_if_inside(path, repo)
-    abs_path = _repo_path(spec, tree, node, repo)
+    abs_path = _repo_path(storage, tree, node, repo)
     reg = registered(repo) if registered_paths is None else registered_paths
     exists = os.path.isdir(abs_path)
     is_registered = _norm(path, repo) in {_norm(p, repo) for p in reg}
@@ -215,13 +215,13 @@ def status(spec: dict, tree: str, node: str, repo: str, *,
             "ignored": ignored}
 
 
-def plan(spec: dict, tree: str, repo: str, *, nodes: list[str] | None = None) -> dict:
+def plan(storage: dict, tree: str, repo: str, *, nodes: list[str] | None = None) -> dict:
     """对每个**活** task 节点（pending/running）给出 `{node, status, add_cmd, branch}`；**零副作用**。
 
     `nodes` 让调用方限定到一个波次（`dispatch.pack_waves` 的产物）；给了就只算这些
     （不在该树里 → 响亮报错）。本函数只读投影与 git，绝不改动文件系统。
     """
-    all_nodes = _nodes(spec, tree)                # 校验树存在性
+    all_nodes = _nodes(storage, tree)                # 校验树存在性
     if nodes is None:
         ids = sorted(nid for nid, item in all_nodes.items() if _is_live_task(item))
     else:
@@ -233,14 +233,14 @@ def plan(spec: dict, tree: str, repo: str, *, nodes: list[str] | None = None) ->
     for nid in ids:
         entries.append({
             "node": nid,
-            "status": status(spec, tree, nid, repo),
-            "add_cmd": commands(spec, tree, nid, repo)["add"],
+            "status": status(storage, tree, nid, repo),
+            "add_cmd": commands(storage, tree, nid, repo)["add"],
             "branch": branch_for(tree, nid),
         })
-    return {"tree": tree, "root": root(spec), "plan": entries}
+    return {"tree": tree, "root": root(storage), "plan": entries}
 
 
-def reconcile(spec: dict, tree: str, repo: str) -> dict:
+def reconcile(storage: dict, tree: str, repo: str) -> dict:
     """三分类现实核对（只读）：
 
     - `leaks`：节点**可回收**（done/skipped/failed）但 worktree 还在 → 该收口没删。
@@ -256,7 +256,7 @@ def reconcile(spec: dict, tree: str, repo: str) -> dict:
     **探针失败时直接抛 `WorktreeProbeError`**，不返回 `reliable=False` + 空三分类：
     空表会被外部调用方读成「对账干净」，正是最危险的假阴性。要宽容展示就显式 `except`。
     """
-    all_nodes = _nodes(spec, tree)                # 校验树存在性
+    all_nodes = _nodes(storage, tree)                # 校验树存在性
     reg = registered(repo)                        # 探针失败即抛（FIX2-B5）
 
     leaks: list[dict] = []
@@ -267,7 +267,7 @@ def reconcile(spec: dict, tree: str, repo: str) -> dict:
         if item.get("kind") != "task":
             continue
         node_status = item.get("status")
-        present = status(spec, tree, nid, repo, registered_paths=reg)
+        present = status(storage, tree, nid, repo, registered_paths=reg)
         live = present["real"]
         if node_status in RECLAIMABLE and (present["exists"] or present["registered"]):
             leaks.append({"node": nid, "status": node_status,
@@ -281,16 +281,16 @@ def reconcile(spec: dict, tree: str, repo: str) -> dict:
                 residual.append({"node": nid, "branch": branch, "tip": tip,
                                  "status": node_status})
 
-    known = {_norm(path_for(spec, other, nid), repo)
-             for other, t in _all_trees(spec).items()
+    known = {_norm(path_for(storage, other, nid), repo)
+             for other, t in _all_trees(storage).items()
              for nid in (t.get("nodes") or {})}
-    under_root = {p for p in reg if _under(p, root(spec), base=repo)}
+    under_root = {p for p in reg if _under(p, root(storage), base=repo)}
     orphans = sorted(p for p in under_root if _norm(p, repo) not in known)
     return {"leaks": leaks, "missing": missing, "orphans": orphans,
             "residual": residual}
 
 
-def reap(spec: dict, tree: str, repo: str, *, force: bool = False) -> dict:
+def reap(storage: dict, tree: str, repo: str, *, force: bool = False) -> dict:
     """**纯计划**：给 leaks 与 residual 的判据、理由、证据，以及**宿主该跑的命令**。
     **永不执行任何 git 变更**——没有 `apply`；`force` 只改**打印出来的命令**与记账，仍不执行。
 
@@ -323,17 +323,17 @@ def reap(spec: dict, tree: str, repo: str, *, force: bool = False) -> dict:
     返回 `{tree, leaks, residual, reliable, executed: False}`；`reliable` 表示所有条目的现场
     探针**均可判定**（无任何 `unreadable-…` 理由）。
     """
-    report = reconcile(spec, tree, repo)          # 探针失败即抛（FIX2-B5）
+    report = reconcile(storage, tree, repo)          # 探针失败即抛（FIX2-B5）
     leak_nodes = {leak["node"] for leak in report["leaks"]}
 
     leaks_plan: list[dict] = []
     for leak in report["leaks"]:
         nid = leak["node"]
         leaks_plan.append(_plan_entry(
-            spec, tree, nid, repo,
-            path=path_for(spec, tree, nid), branch=branch_for(tree, nid),
+            storage, tree, nid, repo,
+            path=path_for(storage, tree, nid), branch=branch_for(tree, nid),
             status=leak["status"],
-            remove_cmd=commands(spec, tree, nid, repo, force=force)["remove"]))
+            remove_cmd=commands(storage, tree, nid, repo, force=force)["remove"]))
 
     # 残留分支：分支存在但目录与登记都没。只对**可回收**节点给计划（在跑的节点不能扔掉它的
     # 基线）；同一节点的 leak 已连带处理其分支，不重复。
@@ -343,8 +343,8 @@ def reap(spec: dict, tree: str, repo: str, *, force: bool = False) -> dict:
         if nid in leak_nodes or res["status"] not in RECLAIMABLE:
             continue
         residual_plan.append(_plan_entry(
-            spec, tree, nid, repo,
-            path=path_for(spec, tree, nid), branch=res["branch"],
+            storage, tree, nid, repo,
+            path=path_for(storage, tree, nid), branch=res["branch"],
             status=res["status"], remove_cmd=None))
 
     entries = leaks_plan + residual_plan
@@ -376,7 +376,7 @@ def _discarded_ledger(entries: list[dict]) -> list[dict]:
     return ledger
 
 
-def apply(spec: dict, tree: str, repo: str, *, nodes: list[str] | None = None) -> dict:
+def apply(storage: dict, tree: str, repo: str, *, nodes: list[str] | None = None) -> dict:
     """对 `plan` 里**尚不存在**的条目跑 `add` 命令；**幂等**（跑两次结果一样）。
 
     跳过判据不是「目录存在」，而是「存在 **且**已注册 **且**是个真 worktree」（`status.real`）。
@@ -388,20 +388,20 @@ def apply(spec: dict, tree: str, repo: str, *, nodes: list[str] | None = None) -
     - 其余半创建状态（目录在但未注册 / 注册了但缺 `.git`）**响亮归入 `broken`**，不静默跳过。
     - **先校验后动手**：树/节点不存在即抛，**任何副作用都不早于参数校验**（FIX2-B6）——否则
       `apply(不存在的树)` 会把整仓 worktree 登记清掉。
-    - **不做全局 prune**：只清理 `root(spec)` 命名空间下、目录已不在的登记残留（逐条），
+    - **不做全局 prune**：只清理 `root(storage)` 命名空间下、目录已不在的登记残留（逐条），
       绝不碰别人的 worktree（FIX2-B6）。
     - 显式点名（`nodes=[...]`）却被「非活节点」过滤掉的节点，单独报进 `not_applicable`
       （FIX2-B9），不与「已建好」混淆。
     返回 `{tree, created, reattached, skipped, broken, not_applicable, pruned}`。
     git 建失败即**响亮上抛**（不静默吞掉半个结果）。
     """
-    report = plan(spec, tree, repo, nodes=nodes)  # 校验树/节点存在性（副作用前，FIX2-B6）
+    report = plan(storage, tree, repo, nodes=nodes)  # 校验树/节点存在性（副作用前，FIX2-B6）
     planned_ids = {entry["node"] for entry in report["plan"]}
     not_applicable = (sorted(nid for nid in nodes if nid not in planned_ids)
                       if nodes is not None else [])
 
     # 只清自己命名空间下的悬空登记（目录已不在），绝不全局 prune。
-    pruned = _prune_own(spec, repo)
+    pruned = _prune_own(storage, repo)
     reg = registered(repo)
     reg_norm = {_norm(p, repo) for p in reg}
     created: list[str] = []
@@ -410,8 +410,8 @@ def apply(spec: dict, tree: str, repo: str, *, nodes: list[str] | None = None) -
     broken: list[dict] = []
     for entry in report["plan"]:
         nid = entry["node"]
-        path = path_for(spec, tree, nid)
-        abs_path = _repo_path(spec, tree, nid, repo)
+        path = path_for(storage, tree, nid)
+        abs_path = _repo_path(storage, tree, nid, repo)
         branch = branch_for(tree, nid)
         exists = os.path.isdir(abs_path)
         is_reg = _norm(path, repo) in reg_norm
@@ -449,7 +449,7 @@ def apply(spec: dict, tree: str, repo: str, *, nodes: list[str] | None = None) -
 # ── 内部：现场读数与丢失判据 ──────────────────────────────────────────────
 
 
-def _inspect(spec: dict, tree: str, node: str, repo: str) -> dict:
+def _inspect(storage: dict, tree: str, node: str, repo: str) -> dict:
     """真正删除前重读该 worktree 会丢什么
     （`{dirty, ignored, head, commit_safe, reasons}`）。
 
@@ -462,7 +462,7 @@ def _inspect(spec: dict, tree: str, node: str, repo: str) -> dict:
     `commit_safe` 是提交可达性判定：`True`=确证别处可达、`False`=确证只在本节点分支上
     （会丢）、`None`=不可判定（当会丢）。
     """
-    abs_path = _repo_path(spec, tree, node, repo)
+    abs_path = _repo_path(storage, tree, node, repo)
     dirty: bool | None = None
     ignored: list[str] = []
     reasons: list[str] = []
@@ -474,7 +474,7 @@ def _inspect(spec: dict, tree: str, node: str, repo: str) -> dict:
         reasons.append("dirty:未提交的改动（已修改或未跟踪）")
     for lost in ignored:
         reasons.append(f"ignored:{lost}")
-    head, head_readable = _worktree_head(spec, tree, node, repo)
+    head, head_readable = _worktree_head(storage, tree, node, repo)
     commit_safe: bool | None = None
     if not head_readable:
         reasons.append("unreadable-head:无法读取 HEAD")
@@ -516,14 +516,14 @@ def _read_worktree_state(path: str) -> tuple[bool | None, list[str]]:
     return dirty, ignored
 
 
-def _worktree_head(spec: dict, tree: str, node: str, repo: str) -> tuple[str | None, bool]:
+def _worktree_head(storage: dict, tree: str, node: str, repo: str) -> tuple[str | None, bool]:
     """该 worktree 当前 HEAD 的 sha；目录不在时退回分支 ref 的 sha。
 
     返回 `(sha, readable)`：`readable=False` 表示探针坏了（**不可判定**），`_inspect` 必须
     把它当「会丢」处理（fail-closed）；目录不在且分支**确实**不存在时返回 `(None, True)`
     （确实没有提交可丢）。
     """
-    abs_path = _repo_path(spec, tree, node, repo)
+    abs_path = _repo_path(storage, tree, node, repo)
     branch = branch_for(tree, node)
     if os.path.isdir(abs_path):
         proc = subprocess.run(["git", "-C", abs_path, "rev-parse", "--verify", "HEAD"],
@@ -606,7 +606,7 @@ def _commit_on_other_ref(repo: str, sha: str, own_branch: str) -> bool | None:
     return bool(others)
 
 
-def _plan_entry(spec: dict, tree: str, node: str, repo: str, *,
+def _plan_entry(storage: dict, tree: str, node: str, repo: str, *,
                 path: str, branch: str, status: str,
                 remove_cmd: list[str] | None) -> dict:
     """给一个待回收对象（leak 或 residual）产出一条**纯计划**：判据 + 命令 + 风险。
@@ -615,7 +615,7 @@ def _plan_entry(spec: dict, tree: str, node: str, repo: str, *,
     带未合并提交 / 脏改动 / ignored 文件的条目都必须 `safe_to_drop=False`，没有第二条路径。
     `remove_cmd` 为 `None`（residual：没有 worktree 可删）时仍给 `branch_cmd`。
     """
-    live = _inspect(spec, tree, node, repo)
+    live = _inspect(storage, tree, node, repo)
     reasons = live["reasons"]
     safe = not reasons
     entry = {
@@ -665,14 +665,14 @@ def _branch_delete_cmd(repo: str, branch: str) -> list[str]:
 # ── 内部：状态读取与路径校验 ──────────────────────────────────────────────
 
 
-def _all_trees(spec: dict) -> dict:
+def _all_trees(storage: dict) -> dict:
     """投影里的全部树（`{name: tree}`）；投影缺失 → 空 dict。"""
-    return store.read_json(store.projection_path(spec)).get("trees", {}) or {}
+    return store.read_json(store.projection_path(storage)).get("trees", {}) or {}
 
 
-def _nodes(spec: dict, tree: str, node: str | None = None) -> dict:
+def _nodes(storage: dict, tree: str, node: str | None = None) -> dict:
     """取某树的节点表；`node` 给定则额外校验该节点存在。两者不存在都**响亮报错**。"""
-    trees = _all_trees(spec)
+    trees = _all_trees(storage)
     if tree not in trees:
         raise KeyError(f"树不存在：{tree}（现有：{sorted(trees)}）")
     nodes = trees[tree].get("nodes") or {}
@@ -714,8 +714,8 @@ def _branch_exists(repo: str, branch: str) -> bool:
     return proc.returncode == 0
 
 
-def _prune_own(spec: dict, repo: str) -> list[str]:
-    """清掉 **`root(spec)` 命名空间下**、目录已不在了的 worktree 登记（逐条），返回被清的路径。
+def _prune_own(storage: dict, repo: str) -> list[str]:
+    """清掉 **`root(storage)` 命名空间下**、目录已不在了的 worktree 登记（逐条），返回被清的路径。
 
     绝不全局 `git worktree prune`：那会把别人只是「暂时不在」（如卷未挂载）的登记一起清掉，
     卷回来后那棵 worktree 永久坏掉（FIX2-B6）。`git worktree remove` 对目录已不在的登记会
@@ -723,7 +723,7 @@ def _prune_own(spec: dict, repo: str) -> list[str]:
     """
     pruned: list[str] = []
     for path in sorted(registered(repo)):
-        if not _under(path, root(spec), base=repo):
+        if not _under(path, root(storage), base=repo):
             continue
         abs_path = path if os.path.isabs(path) else os.path.join(repo, path)
         if os.path.isdir(abs_path):
@@ -735,13 +735,13 @@ def _prune_own(spec: dict, repo: str) -> list[str]:
     return pruned
 
 
-def _repo_path(spec: dict, tree: str, node: str, repo: str) -> str:
+def _repo_path(storage: dict, tree: str, node: str, repo: str) -> str:
     """`path_for` 的**绝对**形式，供文件系统 IO 用：相对 state_dir 以 repo 为基准解析。
 
     `os.path.isdir` 等按**进程 cwd** 解析相对路径，两个 cwd 会得出不同结论（一个 cwd 下
     整棵树「消失」）。所有 IO 一律走这里，守卫与读数才真正跨 cwd 一致（FIX2-B10）。
     """
-    path = path_for(spec, tree, node)
+    path = path_for(storage, tree, node)
     return path if os.path.isabs(path) else os.path.join(repo, path)
 
 

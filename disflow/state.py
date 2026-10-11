@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from . import graph
 from .model import new_node, next_id, validate_node_spec, validate_points
-from .spec import DEFAULT_STAGE, ENTRY_STAGE
+from .vocab import DEFAULT_STAGE, ENTRY_STAGE
 
 ROOT_ID = "root"
 
@@ -71,7 +71,7 @@ def apply_event(state: dict, event: dict) -> None:
     handler = _HANDLERS.get(kind)
     if handler is None:
         # 报错文本用 `_HANDLERS`（**真正可派发**的集合），不用 `EVENT_KINDS`：
-        # 后者是 spec 里的声明，两者可漂移；测试 `test_event_kinds.py` 把它钉住。
+        # 后者是 vocab 里的声明，两者可漂移；测试 `test_event_kinds.py` 把它钉住。
         raise ValueError(f"未知事件 kind：{kind!r}（可派发：{sorted(_HANDLERS)}）")
     handler(state, event)
 

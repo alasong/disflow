@@ -8,7 +8,7 @@
 
 通用工作流引擎 lib · **存储面**（L0：路径/锁/原子写/JSONL/事件追加/投影读写/重建）。
 
-事件流是唯一真相，投影是派生缓存。本模块不认识任何业务名词 —— 只按 spec（机制数据）
+事件流是唯一真相，投影是派生缓存。本模块不认识任何业务名词 —— 只按 storage（机制数据）
 取路径、落一条事件、刷新投影；投影形状（事件流 → 状态）由调用方注入的 `project` 提供。
 
 **两层分工**：
@@ -223,45 +223,45 @@ def compare_projection(recomputed: dict, on_disk: dict) -> tuple[bool, list[str]
     return False, diffs
 
 
-# ── spec 感知面（带 IO 与注入）：路径 / 锁 / 事件追加 / 投影读写 / 重建 / 比对 ──────
+# ── storage 感知面（带 IO 与注入）：路径 / 锁 / 事件追加 / 投影读写 / 重建 / 比对 ──────
 
 
-def state_dir(spec: dict) -> str:
+def state_dir(storage: dict) -> str:
     """状态目录：`[state].env` 指名的环境变量优先（多会话/多仓库隔离），否则 `[state].dir`。
-    两键**直取**（缺即 KeyError）：spec 是唯一来源，不留代码默认副本。"""
-    cfg = spec["state"]
+    两键**直取**（缺即 KeyError）：storage 是唯一来源，不留代码默认副本。"""
+    cfg = storage["state"]
     return os.path.expanduser(os.environ.get(cfg["env"]) or cfg["dir"])
 
 
-def events_path(spec: dict) -> str:
+def events_path(storage: dict) -> str:
     """事件流落点：`<state dir>/[state].events`。"""
-    return os.path.join(state_dir(spec), spec["state"]["events"])
+    return os.path.join(state_dir(storage), storage["state"]["events"])
 
 
-def projection_path(spec: dict) -> str:
+def projection_path(storage: dict) -> str:
     """投影落点：`<state dir>/[state].projection`。"""
-    return os.path.join(state_dir(spec), spec["state"]["projection"])
+    return os.path.join(state_dir(storage), storage["state"]["projection"])
 
 
 @contextlib.contextmanager
-def lock(spec: dict):
+def lock(storage: dict):
     """跨进程互斥：给「读判定 → 写事件」**整段**用，否则两个会话能各判一次都放行
     （check-then-act）。锁本体是 `file_lock`（同一把 flock），落点 `<state dir>/lock`；
     同进程重复取锁会自锁 ⇒ 调用方自己不要嵌套取锁。"""
-    with file_lock(state_dir(spec)):
+    with file_lock(state_dir(storage)):
         yield
 
 
-def load_events(spec: dict) -> list[dict]:
+def load_events(storage: dict) -> list[dict]:
     """读事件流：缺文件 → `[]`，坏行 raise（不静默跳过，文案由 `read_jsonl` 给）。"""
-    return read_jsonl(events_path(spec))
+    return read_jsonl(events_path(storage))
 
 
-def _validate_record(spec: dict, record: dict) -> None:
-    """事件形状校验（**数据驱动**：模板取自 spec，不写死任何 kind）：kind 有模板即校验 ——
+def _validate_record(storage: dict, record: dict) -> None:
+    """事件形状校验（**数据驱动**：模板取自 storage，不写死任何 kind）：kind 有模板即校验 ——
     信封面（`[state].event_base`）与 per-kind 增量模板合并后再比；缺必填 / 出现未声明字段
     → 报错（不是静默写）；无模板的 kind 交给调用方的闭集机检。"""
-    state_cfg = spec.get("state") or {}
+    state_cfg = storage.get("state") or {}
     tpl = (state_cfg.get("event_fields") or {}).get(record.get("kind", ""))
     if not isinstance(tpl, dict):
         return
@@ -274,21 +274,21 @@ def _validate_record(spec: dict, record: dict) -> None:
                          f"缺必填 {sorted(missing)}、未声明 {sorted(unknown)}")
 
 
-def write_projection(spec: dict, state: dict) -> str:
+def write_projection(storage: dict, state: dict) -> str:
     """**原子**写投影到 `<state dir>/[state].projection`，**恒返回路径**（归一化：调用方不需要 None）。"""
-    return write_json_atomic(projection_path(spec), state, indent=2, sort_keys=False)
+    return write_json_atomic(projection_path(storage), state, indent=2, sort_keys=False)
 
 
-def rebuild(spec: dict, *, project, offset: int | None = None) -> dict:
+def rebuild(storage: dict, *, project, offset: int | None = None) -> dict:
     """从事件流重算投影（可选只重算到某偏移，用于 restore）。
     `project`（事件流 → 状态）由调用方注入 —— 投影 schema 归调用方，lib 不认识它。"""
-    events = load_events(spec)
+    events = load_events(storage)
     if offset is not None:
         events = events[:offset]
     return project(events)
 
 
-def _persist(spec: dict, record: dict, project) -> dict:
+def _persist(storage: dict, record: dict, project) -> dict:
     """唯一落盘+刷新点：形状校验 → **先重投影试算（语义闸门）** → O_APPEND 落一行 → 原子写投影。
 
     **为何先试算（曾是真缺陷的修法）**：`project` 就是语义校验点（重复 id / 环 / 悬空引用
@@ -301,14 +301,14 @@ def _persist(spec: dict, record: dict, project) -> dict:
     - append 失败 → `append_jsonl` 抛「事件未落盘（kind）…」。
     - 投影写盘失败 → 「事件已落盘（kind）但投影未刷新… 可由 rebuild 重建」（事件合法，不谎称全失败）。
     """
-    _validate_record(spec, record)
-    events = load_events(spec)
+    _validate_record(storage, record)
+    events = load_events(storage)
     candidate = events + [record]
     # 语义闸门：非法即抛，此时**尚未落盘**（这是「事件流永远可重放」的保证）
     state = stamp_projection(project(candidate), len(candidate))
-    append_jsonl(events_path(spec), record)     # 失败已带「事件未落盘（<kind>）」措辞，直接上抛
+    append_jsonl(events_path(storage), record)     # 失败已带「事件未落盘（<kind>）」措辞，直接上抛
     try:
-        write_projection(spec, state)
+        write_projection(storage, state)
     except OSError as exc:
         raise OSError(
             f"事件已落盘（{record.get('kind')}）但投影未刷新：{exc} —— 可由 rebuild 重建"
@@ -324,7 +324,7 @@ def build_event(kind: str, *, cmd: str = "", args: list | None = None, exit_code
 
     即时写点 `append_event` 与相界批量写（`tree.batch_phase` 攒批后交 `batch_append`）**共用**
     这一个信封构造处 —— 两条路径产出的记录逐字段相同，不会各写一份而漂移。
-    构造无 IO，故不接 `spec`（形状校验在各自写点里做）。"""
+    构造无 IO，故不接 `storage`（形状校验在各自写点里做）。"""
     event = {
         "ts": now_iso(), "kind": kind, "cmd": cmd, "args": list(args or []),
         "exit": exit_code, "slug": slug, "layer": layer,
@@ -336,7 +336,7 @@ def build_event(kind: str, *, cmd: str = "", args: list | None = None, exit_code
     return event
 
 
-def append_event(spec: dict, kind: str, *, project, cmd: str = "", args: list | None = None,
+def append_event(storage: dict, kind: str, *, project, cmd: str = "", args: list | None = None,
                  exit_code: int = 0, slug: str = "", node: str = "", layer: str = "root",
                  extra: dict | None = None) -> dict:
     """append 一条事件，**并立即刷新投影到 `len(events)`**（唯一写点：任何调用方都不可能忘）。
@@ -345,25 +345,25 @@ def append_event(spec: dict, kind: str, *, project, cmd: str = "", args: list | 
     信封面由 `build_event` 统一构造（与相界批量写共用）；`extra` 是 per-kind 增量字段。`project` **必填**：没有它就无法重算投影 —— 不给默认值（要只落事件请直接用
     `append_jsonl`，那是更底层的原语）。写失败**上抛** `OSError`（不静默、不降级）。"""
     return _persist(
-        spec,
+        storage,
         build_event(kind, cmd=cmd, args=args, exit_code=exit_code, slug=slug, node=node,
                     layer=layer, extra=extra),
         project,
     )
 
 
-def checkpoint(spec: dict, name: str = "") -> dict:
+def checkpoint(storage: dict, name: str = "") -> dict:
     """记当前事件偏移（行数）到 `<state dir>/[state].checkpoints/<name>.json`：只记偏移，
     不改投影、不写事件。缺省名用 UTC 时间戳。返回 `{"offset", "name", "ts"}`。"""
-    events = load_events(spec)
-    directory = os.path.join(state_dir(spec), spec["state"]["checkpoints"])
+    events = load_events(storage)
+    directory = os.path.join(state_dir(storage), storage["state"]["checkpoints"])
     label = name or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     record = {"name": label, "offset": len(events), "ts": now_iso()}
     write_json_atomic(os.path.join(directory, f"{label}.json"), record, indent=2)
     return record
 
 
-def projection_matches(spec: dict, *, project, offset: int | None = None) -> tuple[bool, list[str]]:
+def projection_matches(storage: dict, *, project, offset: int | None = None) -> tuple[bool, list[str]]:
     """投影一致性：注入的 `project` 重算结果 vs 磁盘投影（纯 diff 委派 `compare_projection`）。
 
     判据：**正文必须恰好等于 `project(events[:projection_offset])`**。`offset=None`（三处读路径的
@@ -378,8 +378,8 @@ def projection_matches(spec: dict, *, project, offset: int | None = None) -> tup
     自述偏移非法/超出事件流 = fail-closed 判漂移（宁可误杀滞后，绝不放过损坏）。
     该分支留在这里：空事件的重算结果通常非空，直接交 `compare_projection` 会把「全新环境」
     误报成漂移。两层分工：本函数带 IO 与注入，`compare_projection` 只做无 IO 的逐键纯 diff。"""
-    events = load_events(spec)
-    on_disk = read_json(projection_path(spec))
+    events = load_events(storage)
+    on_disk = read_json(projection_path(storage))
     if not events and not on_disk:
         return True, []
     if not on_disk:
@@ -394,14 +394,14 @@ def projection_matches(spec: dict, *, project, offset: int | None = None) -> tup
     return compare_projection(project(events[:claimed]), body)
 
 
-def read_projection_offset(spec: dict) -> int | None:
+def read_projection_offset(storage: dict) -> int | None:
     """读投影自述的 `projection_offset`：缺失（旧格式）→ `None`。
     供调用方把 `lag = len(events) - offset` 作为**信息**报出；判定本身在 `projection_matches` 里。"""
-    claimed = read_json(projection_path(spec)).get(PROJECTION_OFFSET)
+    claimed = read_json(projection_path(storage)).get(PROJECTION_OFFSET)
     return claimed if isinstance(claimed, int) and not isinstance(claimed, bool) else None
 
 
-def batch_append(spec: dict, records: Iterable[dict], *, project) -> dict:
+def batch_append(storage: dict, records: Iterable[dict], *, project) -> dict:
     """**批次落事件**：批内逐条 O(1) `append_jsonl`，**批末恰好一次**全量重算 + 原子写投影，
     并给投影盖自述偏移 `projection_offset = 批末的 len(events)`（与正文同一次原子写落盘）。
 
@@ -425,16 +425,16 @@ def batch_append(spec: dict, records: Iterable[dict], *, project) -> dict:
     **注意**：disflow 目前不为任何调用方（`tree.batch_phase` 那套批处理未落地），
     但仍采用与 `_persist` 同款的**先试算后落盘**语义，以免成为哑雷。"""
     pending = list(records)
-    events = load_events(spec)
+    events = load_events(storage)
     # 语义闸门（与 _persist 同款）：先整批试算，非法则**一条都不落**
     candidate = stamp_projection(project(events + pending), len(events) + len(pending))
     appended = 0
     for record in pending:
-        _validate_record(spec, record)
-        append_jsonl(events_path(spec), record)   # 失败已带「事件未落盘（<kind>）」措辞，直接上抛
+        _validate_record(storage, record)
+        append_jsonl(events_path(storage), record)   # 失败已带「事件未落盘（<kind>）」措辞，直接上抛
         appended += 1
     try:                                          # 批末一次性写投影（写盘失败 ≠ 事件失败）
-        write_projection(spec, candidate)
+        write_projection(storage, candidate)
     except OSError as exc:
         raise OSError(
             f"批次已落盘（{appended} 条）但投影未刷新：{exc} —— 可由 rebuild 重建"

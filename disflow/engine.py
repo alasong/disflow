@@ -27,7 +27,7 @@ from .ready import (
     ready_tasks,
     running_tasks,
 )
-from .spec import DEFAULT_STAGE, SPEC
+from .vocab import DEFAULT_STAGE, STORAGE
 from .state import project
 
 
@@ -140,9 +140,9 @@ class GateReject(EngineError):
 
 
 class Engine:
-    def __init__(self, spec: dict | None = None, cwd: str | None = None,
+    def __init__(self, storage: dict | None = None, cwd: str | None = None,
                  cfg: Config | None = None):
-        self.spec = spec or SPEC
+        self.storage = storage or STORAGE
         self.cwd = cwd or os.getcwd()
         # 配置从 `<cwd>/disflow.json` 读（可用 `$DISFLOW_CONFIG` 指别处）；缺文件 = 全用内建默认。
         # 显式传入 `cfg` 用于测试与“别处已解析好”的场景。
@@ -151,7 +151,7 @@ class Engine:
     # ── 读 ────────────────────────────────────────────────────────────────
 
     def load(self) -> dict:
-        return store.read_json(store.projection_path(self.spec))
+        return store.read_json(store.projection_path(self.storage))
 
     def trees(self) -> list[str]:
         return sorted(self.load().get("trees", {}))
@@ -190,7 +190,7 @@ class Engine:
         `dry_run=True`：**跑完全部门与 prepare，但不追加事件**（预演，FR-13）；
         门不过依旧抛 `GateReject` —— 预演的意义就是把拒收提前暴露。
         """
-        with store.lock(self.spec):
+        with store.lock(self.storage):
             state = self.load()
             current = state.get("trees", {}).get(tree)
             if existing and current is None:
@@ -206,7 +206,7 @@ class Engine:
             if dry_run:
                 return {"dry_run": True, "kind": kind, "tree": tree, "node": node,
                         "extra": extra or {}, "state": state}
-            store.append_event(self.spec, kind, project=project, slug=tree,
+            store.append_event(self.storage, kind, project=project, slug=tree,
                                node=node, extra=extra or {})
         return self.load()
 
@@ -435,7 +435,7 @@ class Engine:
         —— 与「没有 worktree」同路，**不抛**（门的目录解析不能比门本身更容易炸）。
         """
         try:
-            present = worktree.status(self.spec, tree, node, self.cwd)
+            present = worktree.status(self.storage, tree, node, self.cwd)
         except (KeyError, worktree.WorktreeError, ValueError):
             return self.cwd
         if not present.get("real"):

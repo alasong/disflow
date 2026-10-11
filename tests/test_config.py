@@ -31,7 +31,7 @@ from disflow import config, gates, store, views
 from disflow.boards import DEFAULT_BOARDS, Board, BoardsError
 from disflow.config import Config, ConfigError
 from disflow.engine import Engine, EngineError, GateReject
-from disflow.spec import ROLES, SIZE_BUDGET_DEFAULT, STAGES
+from disflow.vocab import ROLES, SIZE_BUDGET_DEFAULT, STAGES
 from disflow.state import project
 
 
@@ -63,13 +63,13 @@ class ConfigFileTest(DisflowTestCase):
         改状态目录，配置路径不动。（生产默认：状态目录 `<cwd>/.disflow`，配置 `<cwd>/disflow.json`）
         """
         before = config.config_path(self.tmp)
-        from disflow.spec import SPEC
+        from disflow.vocab import STORAGE
         original = os.environ["DISFLOW_STATE_DIR"]
         try:
             for other in (os.path.join(self.tmp, ".disflow"),
                           os.path.join(self.tmp, "完全另一处")):
                 os.environ["DISFLOW_STATE_DIR"] = other
-                self.assertEqual(store.state_dir(SPEC), other)
+                self.assertEqual(store.state_dir(STORAGE), other)
                 self.assertEqual(config.config_path(self.tmp), before,
                                  "换状态目录不能改变配置路径")
         finally:
@@ -77,11 +77,11 @@ class ConfigFileTest(DisflowTestCase):
 
     def test_config_is_not_a_state_file(self):
         """生产默认布局下，配置不在状态目录之内（是兄弟，不是子文件）。"""
-        from disflow.spec import SPEC
-        self.assertEqual(SPEC["state"]["dir"], ".disflow")
+        from disflow.vocab import STORAGE
+        self.assertEqual(STORAGE["state"]["dir"], ".disflow")
         self.assertEqual(config.CONFIG_BASENAME, "disflow.json")
         self.assertFalse(config.CONFIG_BASENAME.startswith(".disflow"))
-        self.assertNotIn("disflow.json", {SPEC["state"]["events"], SPEC["state"]["projection"]})
+        self.assertNotIn("disflow.json", {STORAGE["state"]["events"], STORAGE["state"]["projection"]})
 
     def test_state_dir_reset_does_not_lose_policy(self):
         """删状态目录后策略仍在——这就是“独立文件”要换来的东西。
@@ -374,9 +374,9 @@ class VocabularyValidationTest(DisflowTestCase):
         engine = Engine(cwd=self.tmp)
         engine.init_tree("t", "g")
         # 直接落一条“来自未来版本”的事件（绕开写时校验，模拟别的写者/更新的版本）
-        with store.lock(engine.spec):
+        with store.lock(engine.storage):
             store.append_event(
-                engine.spec, "node.expand", project=project, slug="t", node="root",
+                engine.storage, "node.expand", project=project, slug="t", node="root",
                 extra={"children": [{"id": "f1", "kind": "task", "stage": "未来的列",
                                      "role": "未来角色", "goal": "g",
                                      "acceptance": acceptance()}]})

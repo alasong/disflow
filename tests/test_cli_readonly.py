@@ -15,7 +15,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from base import DisflowTestCase, acceptance
 
-from disflow import spec, store
+from disflow import vocab, store
 from disflow.cli import main
 
 # ── 回归基线：改动前（本节点起点 HEAD）在「无任何节点在跑」时抓取的 `drive --json` 输出 ──
@@ -62,7 +62,7 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         return code, out.getvalue(), err.getvalue()
 
     def _events(self) -> int:
-        return len(store.read_jsonl(store.events_path(spec.SPEC)))
+        return len(store.read_jsonl(store.events_path(vocab.STORAGE)))
 
     def _seed(self) -> None:
         self._run(["init", "t", "--goal", "只读测试"])
@@ -316,7 +316,7 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         """纯读：跑 `board`（含过滤/非法列/json）前后，`events.jsonl` 与 `state.json`
         必须**逐字节不变**（比只数事件条数更强：投影被改写也算破）。"""
         self._seed()
-        paths = [store.events_path(spec.SPEC), store.projection_path(spec.SPEC)]
+        paths = [store.events_path(vocab.STORAGE), store.projection_path(vocab.STORAGE)]
 
         def snapshot() -> list[bytes]:
             out: list[bytes] = []
@@ -366,7 +366,7 @@ class CliReadOnlyVerbTest(DisflowTestCase):
     def test_doctor_detects_dangling_requires(self):
         """自检必须真有牙：手工损坏投影后 doctor 应报错。"""
         self._seed()
-        path = store.projection_path(spec.SPEC)
+        path = store.projection_path(vocab.STORAGE)
         state = store.read_json(path)
         state["trees"]["t"]["nodes"]["b"]["requires"] = ["不存在的前置"]
         store.write_json_atomic(path, state)
@@ -414,7 +414,7 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         """两者的错不能互相掩盖：同时存在时，真故障仍然退出码 1、stdout 干净。"""
         self._seed()
         self._start_with_expired_lease()
-        path = store.projection_path(spec.SPEC)          # 造一个真故障：投影漂移
+        path = store.projection_path(vocab.STORAGE)          # 造一个真故障：投影漂移
         state = store.read_json(path)
         state["trees"]["t"]["nodes"]["b"]["status"] = "done"
         store.write_json_atomic(path, state)
@@ -459,7 +459,7 @@ class CliReadOnlyVerbTest(DisflowTestCase):
     def test_doctor_names_the_remedy_for_projection_drift(self):
         """报故障必须带修法：漂移时要点名 `rebuild`，否则用户只知道“坏了”。"""
         self._seed()
-        path = store.projection_path(spec.SPEC)
+        path = store.projection_path(vocab.STORAGE)
         state = store.read_json(path)
         state["trees"]["t"]["nodes"]["b"]["status"] = "done"      # 与事件不符 ⇒ 漂移
         store.write_json_atomic(path, state)

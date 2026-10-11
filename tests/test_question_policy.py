@@ -28,7 +28,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from base import DisflowTestCase
 
-from disflow import config, dispatch, spec
+from disflow import config, dispatch, vocab
 from disflow.cli import main
 from disflow.config import DEFAULTS
 from disflow.engine import Engine
@@ -76,7 +76,7 @@ class ResolveQuestionPolicyTest(DisflowTestCase):
         """返回值被改不能污染出厂默认（否则一次调用会改掉所有后续调用）。"""
         policy = dispatch.resolve_question_policy({})
         policy["how"] = "被改了"
-        self.assertNotEqual(spec.QUESTION_POLICY_DEFAULT["how"], "被改了")
+        self.assertNotEqual(vocab.QUESTION_POLICY_DEFAULT["how"], "被改了")
         self.assertNotEqual(dispatch.resolve_question_policy({})["how"], "被改了")
 
     def test_config_overrides_default(self) -> None:
@@ -97,7 +97,7 @@ class ResolveQuestionPolicyTest(DisflowTestCase):
         node = {"context": {"question_policy": {"how": "节点级"}}}
         policy = dispatch.resolve_question_policy(node)
         self.assertEqual(policy["how"], "节点级")
-        self.assertEqual(policy["ask_host"], list(spec.QUESTION_POLICY_DEFAULT["ask_host"]))
+        self.assertEqual(policy["ask_host"], list(vocab.QUESTION_POLICY_DEFAULT["ask_host"]))
 
     def test_garbage_node_context_is_ignored_not_merged_into_result(self) -> None:
         for junk in ("字符串", 42, ["列表"], None):
@@ -205,9 +205,9 @@ class CollectAcceptsBlockedTest(_CliRunMixin, DisflowTestCase):
         self._run(["collect", "t", "a", "--result",
                    json.dumps({"status": "blocked", "summary": "问题", "changed_files": []},
                               ensure_ascii=False)])
-        replayed = project(store.load_events(spec.SPEC))
+        replayed = project(store.load_events(vocab.STORAGE))
         self.assertEqual(replayed["trees"]["t"]["nodes"]["a"]["collected"]["status"], "blocked")
-        matched, diffs = store.projection_matches(spec.SPEC, project=project)
+        matched, diffs = store.projection_matches(vocab.STORAGE, project=project)
         self.assertTrue(matched, diffs)
 
 
