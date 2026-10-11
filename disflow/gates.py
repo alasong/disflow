@@ -325,7 +325,11 @@ def git_changed_files(cwd: str, cfg: Config = DEFAULTS, *,
     if probe.returncode != 0:
         return None
     try:
-        status = subprocess.run([*_quote_path_off(cwd), "status", "--porcelain"],
+        # `-uall`（而非默认 `-unormal`）：未跟踪**目录**要被展开成里面的**文件**。
+        # 为何必须（实测踩到）：`touch_plan` 声明的是文件（`tests/test_calc.py`），
+        # 而默认模式对新目录只报 `?? tests/` ⇒ 与 `touch_plan` 对不上 ⇒ **假拒收**
+        # （改对了也判「超出 touch_plan：['tests/']」）。展开后两边同粒度。
+        status = subprocess.run([*_quote_path_off(cwd), "status", "--porcelain", "-uall"],
                                 capture_output=True, text=True, timeout=cfg.git_timeout)
     except OSError:
         return None

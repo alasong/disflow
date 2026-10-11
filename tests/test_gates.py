@@ -178,6 +178,35 @@ class DiffSizeTest(DisflowTestCase):
         self.assertIsNone(gates.diff_size(self.tmp, ["a.py"]))
 
 
+class UntrackedDirectoryExpansionTest(DisflowTestCase):
+    """`git_changed_files` 必须**展开未跟踪目录里的文件**（`-uall`）。
+
+    为何是硬判据（实测踩到）：本函数的输出要与 `touch_plan`（**文件**粒度）对账。
+    `git status --porcelain` 默认 `-unormal` 对新目录只报 `?? tests/` ⇒ 与
+    `touch_plan`（`tests/test_calc.py`）对不上 ⇒ **假拒收**（改对了也报
+    「超出 touch_plan：['tests/']」）。实测在一个新项目里第一次 `done` 就撞上，
+    正是「新建 tests/ 目录」这个最常见的动作。
+    """
+
+    def test_untracked_directory_is_expanded_to_files(self):
+        _engine, repo = git_repo(self, {}, commit=True)
+        os.makedirs(os.path.join(repo, "tests"))
+        write_lines(os.path.join(repo, "tests", "test_new.py"), 3)
+        changed = gates.git_changed_files(repo) or []
+        self.assertIn("tests/test_new.py", changed,
+                      "未跟踪目录要展开成文件，否则与 touch_plan 粒度对不上")
+        self.assertNotIn("tests/", changed, "不得只报目录名")
+
+    def test_scope_gate_accepts_a_file_inside_a_new_directory(self):
+        """端到端：`touch_plan` 写文件时，新建目录下的该文件**不得**被判越界。"""
+        _engine, repo = git_repo(self, {"calc.py": "x = 1\n"}, commit=True)
+        os.makedirs(os.path.join(repo, "tests"))
+        write_lines(os.path.join(repo, "tests", "test_calc.py"), 3)
+        result = gates.scope_check(["calc.py", "tests/test_calc.py"],
+                                   gates.git_changed_files(repo))
+        self.assertEqual(result.get("violations", []), [], f"不该有越界：{result}")
+
+
 class ExpectSemanticsTest(DisflowTestCase):
     """`acceptance.expect` 三分支的语义（真缺口 B4）。
 
