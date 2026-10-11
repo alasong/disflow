@@ -3,7 +3,7 @@
 > 由 `scripts/fr_check.py` 生成（`python3 scripts/fr_check.py --report`）。
 > 本条报告的头等产出**不是通过率**，而是把 **[未实现]** 与 **[不可机检]** 诚实分出来。
 
-## 总表（29 FR + 7 NFR = 36 条）
+## 总表（32 FR + 7 NFR = 39 条）
 
 | # | 一句话验收标准 | 证据类型 | 证据（可复制命令 / 测试名） |
 | --- | --- | --- | --- |
@@ -36,6 +36,9 @@
 | FR-27 | status 能识别卡死 | [机检] | `python3 scripts/fr_check.py` 的 `[FR-27]` 行 |
 | FR-28 | import mgt 从 state/registry 读入 | [机检] | `python3 scripts/fr_check.py` 的 `[FR-28]` 行 |
 | FR-29 | 映射关系写进 design.md §10 | [机检] | `python3 scripts/fr_check.py` 的 `[FR-29]` 行 |
+| FR-30 | 分发器是看板的附属（逐列 WIP 上限） | [测试] | tests/test_board_policy.py::WipPolicyTest |
+| FR-31 | 验收器是看板的附属（逐列默认验收） | [测试] | tests/test_board_policy.py::AcceptancePolicyTest |
+| FR-32 | 动态看板：结构可预设、逐树覆盖 | [测试] | tests/test_boards_per_tree.py::PerTreeBoardsTest::test_two_trees_can_have_different_boards |
 | NFR-1 | 零第三方依赖 | [机检] | `python3 scripts/fr_check.py` 的 `[NFR-1]` 行 |
 | NFR-2 | 核心语言中立（业务词不进 core） | [测试] | tests/test_layering.py::LayeringTest::test_core_has_no_business_nouns |
 | NFR-3 | 文件式：无服务、无数据库 | [机检] | `python3 scripts/fr_check.py` 的 `[NFR-3]` 行 |
@@ -44,11 +47,11 @@
 | NFR-6 | 规模预算，超预算即拒 | [机检] | `python3 scripts/fr_check.py` 的 `[NFR-6]` 行 |
 | NFR-7 | 不静默降级 | [机检] | `python3 scripts/fr_check.py` 的 `[NFR-7]` 行 |
 
-`[机检]` 共 29 条，全部真跑并打印原始观测；`[测试]` 6 条；`[未实现]` 0 条；`[不可机检]` 1 条；另有 `[◐ 部分缺口]` 0 条。
+`[机检]` 共 29 条，全部真跑并打印原始观测；`[测试]` 9 条；`[未实现]` 0 条；`[不可机检]` 1 条；另有 `[◐ 部分缺口]` 0 条。
 
 ## [未实现]（实现里找不到对应能力——最有价值的输出）
 
-**（空）**：29 FR + 7 NFR 里没有整条未实现的。**◐ 部分缺口** 0 条（整条机检通过、子句在实现里找不到）；**已复核·非缺口** 2 条（曾标 ◐、复核后确认需求已满足）。
+**（空）**：32 FR + 7 NFR 里没有整条未实现的。**◐ 部分缺口** 0 条（整条机检通过、子句在实现里找不到）；**已复核·非缺口** 2 条（曾标 ◐、复核后确认需求已满足）。
 
 ## [不可机检]（语义判断，不冒充通过）
 
@@ -79,6 +82,15 @@
 - **FR-22**：多板 = 多棵树，隔离
   - 测试：`tests/test_multitree.py::MultiTreeTest::test_trees_are_isolated`
   - 为什么不可独立机检：隔离是两棵树并存时的行为，无单条 grep 能判定。
+- **FR-30**：分发器是看板的附属（逐列 WIP 上限）
+  - 测试：`tests/test_board_policy.py::WipPolicyTest`
+  - 为什么不可独立机检：「列满则其余就绪者不派」是具体节点图上的行为（在跑计数 vs 上限），无单条 grep 能判定。
+- **FR-31**：验收器是看板的附属（逐列默认验收）
+  - 测试：`tests/test_board_policy.py::AcceptancePolicyTest`
+  - 为什么不可独立机检：「节点未自带则派生、自带则优先」是 `done` 路径上的行为，grep 只能证字段在场。
+- **FR-32**：动态看板：结构可预设、逐树覆盖
+  - 测试：`tests/test_boards_per_tree.py::PerTreeBoardsTest::test_two_trees_can_have_different_boards`
+  - 为什么不可独立机检：「逐树覆盖」是两棵树并存、同一进程读不同板集的行为，无单条 grep 能判定。
 - **NFR-2**：核心语言中立（业务词不进 core）
   - 测试：`tests/test_layering.py::LayeringTest::test_core_has_no_business_nouns`
   - 为什么不可独立机检：针脚表住在测试文件里；在 fr_check 里另抄一份会造出第二把尺子、并可漂移。

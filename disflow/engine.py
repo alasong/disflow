@@ -241,6 +241,23 @@ class Engine:
         ids = self._tree_stages(tree_state)
         return DEFAULT_STAGE if DEFAULT_STAGE in ids else ids[0]
 
+    def _effective_acceptance(self, tree_state: dict, item: dict) -> dict | None:
+        """节点 `done` 时真正生效的验收：**节点自带优先，否则由该列看板策略派生**（FR-31）。
+
+        为何在**引擎这一处**取：验收器是看板的附属（ADR 0005）——列默认验收挂在板上，
+        节点没写 `acceptance` 时不应“无门可过”（否则整列漏门），而应回落到列的默认。
+        写死为属性而非散在各调用点：`done` 里的取数（门 / 空洞判据 / 契约 / 必填声明）
+        必须**同一份**验收，否则同一次 `done` 会用两套判据（分叉）。
+        """
+        own = item.get("acceptance")
+        if own:
+            return own
+        stage = str(item.get("stage") or "")
+        for board in self._tree_boards(tree_state):
+            if board.id == stage and board.acceptance:
+                return board.acceptance
+        return own
+
     def set_boards(self, tree: str, boards: tuple, *, reason: str = "") -> dict:
         """改该树的板定义（`tree.boards` 事件）——`set_stage` 的**树级同形补口**。
 
@@ -499,6 +516,9 @@ class Engine:
         """
         def prepare(t: dict) -> dict:
             item = self._need(t, node)
+            # FR-31：验收策略是看板（逐列）的附属——节点未自带时由该列默认验收派生，
+            # 且在本次 `done` 里**只用这一份**（门 / 空洞 / 契约 / 必填声明同源）。
+            acceptance = self._effective_acceptance(t, item)
             collected = item.get("collected")
             reason = str(no_result or "").strip()
             if reason and collected is not None:
@@ -544,7 +564,7 @@ class Engine:
             # 为空 ⇒ 空洞通过（fail-open）。worktree 与原地两条路必须走同一条判据。
             # （旧事件没有 `workspace` 时取到 None，退回只读 `git status`，不炸。）
             base_sha = workspace.get("head_sha")
-            ok, why, evidence = gates.evidence_meta(item.get("acceptance"), cwd,
+            ok, why, evidence = gates.evidence_meta(acceptance, cwd,
                                                    self.cfg, base_sha=base_sha)
             baseline = item.get("baseline") or {}
             # 只归因「开工后**内容真的变了**」的改动：既忽略开工前的脏文件，
@@ -563,7 +583,7 @@ class Engine:
             evidence["budget"] = budget
             # 空洞通过的门（没东西可验）：记下来，否则“门全过”会被读成“门都验了”
             evidence["vacuous"] = gates.vacuous_reasons(
-                acceptance=item.get("acceptance"), touch_plan=item.get("touch_plan") or [],
+                acceptance=acceptance, touch_plan=item.get("touch_plan") or [],
                 introduced=introduced, size=size)
             # worker 结果的记账（与门的通过/拒收**无关**）：CLI 用它强制宿主循环契约
             # （无 collect ⇒ 拒收），树的读者用它看出「这个节点没 worker 结果」。
@@ -575,13 +595,13 @@ class Engine:
                 waiver = (declarations or {}).get(key)
                 if waiver:
                     evidence[key] = waiver
-            contract = {"node": node, "acceptance": item.get("acceptance"),
+            contract = {"node": node, "acceptance": acceptance,
                         "touch_plan": item.get("touch_plan"), "size_budget": budget,
                         "expect": "验收命令通过；改动落在 touch_plan 内；改动行数不超预算"}
             missing: list[str] = []
             if not ok:
                 missing.append(f"验收未通过：{why}")
-            required = (item.get("acceptance") or {}).get("require_declarations") or []
+            required = (acceptance or {}).get("require_declarations") or []
             absent = [name for name in required
                       if not str((declarations or {}).get(name) or "").strip()]
             if absent:

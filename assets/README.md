@@ -85,6 +85,7 @@ python3 scripts/assets_scan.py check    # 收尾门（有 stale / 缺证据 → 
 | 2026-10-11 | 信任**不**沿依据边传递（保持一跳） | jev `choice` conf 0.89；传递 = 推测传染（一个根动一次刷红全图） | **保持一跳** |
 | 2026-10-11 | 刷新顺序由 premises 拓扑序**派生**，不用手写 spec | jev `choice` conf 0.95；`noul`(spec 管顺序合适)=0.20 | **派生** |
 | 2026-10-11 | 加 `plan` 命令（改动→要刷的资产集，一步出范围+顺序） | jev `choice` conf 0.97 | **加** |
+| 2026-10-11 | `dev-board` / `lessons` 归为**档案**、移出登记 | jev `choice` conf 0.77；两者是过程记录，被测试当**夹具**读（非可复用资产）；其 premises 挂活 `pkg`/`tests` ⇒ 任何代码改动都令它们 stale ⇒ `check` 永久红（正是「把档案当资产」反模式）。活耦合已由 `test_typecheck`/`test_docs` 直接守，不靠 stale 提醒 | **移除** |
 
 ## 已知局限（诚实声明，别当没有）
 

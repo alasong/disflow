@@ -43,18 +43,6 @@
         "design"
       ]
     },
-    "dev-board": {
-      "type": "board",
-      "category": "process",
-      "path": "docs/dev-board.md",
-      "purpose": "开发看板 + 逐轮 fresh-context 独立验证记录",
-      "tier": "asserted",
-      "premises": [
-        "requirements",
-        "pkg",
-        "tests"
-      ]
-    },
     "backlog": {
       "type": "doc",
       "category": "requirement",
@@ -72,16 +60,6 @@
       "premises": [
         "pkg",
         "scripts"
-      ]
-    },
-    "lessons": {
-      "type": "doc",
-      "category": "process",
-      "path": "docs/self-harden-lessons.md",
-      "purpose": "self-harden 树踩坑与规避（过程资产，跨任务复用）",
-      "tier": "asserted",
-      "premises": [
-        "pkg"
       ]
     },
     "design-draft": {

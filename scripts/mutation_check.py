@@ -18,8 +18,12 @@
 from __future__ import annotations
 
 import argparse
+import atexit
+import contextlib
+import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
 
@@ -35,6 +39,52 @@ class PinNotFound(Exception):
     与“漏抓”必须分开：漏抓是「注入生效了但测试没红」= 真覆盖缺口；
     针脚未应用是「根本没注入」——把后者说成“这个行为没有被测试守住”是**编造**。
     """
+
+
+class _Restorer:
+    """变异注入期间登记被改写文件的原文；**正常退出 / SIGINT / SIGTERM** 一律写回。
+
+    为什么需要（实测事故，2026-10-11）：`tests/test_mutation_harness.py` 会在**真工作树**
+    上注入变异（用一条有效针脚调 `main()`），靠 `_check` 的 `finally` 还原。进程若在这个
+    窗口被**杀掉**（宿主 kill 全量套件即如此），`finally` 不执行 ⇒ 变异残留在 `disflow/*.py`，
+    此后每次跑都红，且从报错看不出是残留（本案：`metrics._done_as_of` 的 `<=` 被留成 `>`）。
+    本类把还原从「依赖控制流」改成「依赖退出钩子」：正常退出与可捕获的信号都能还原。
+    SIGKILL 拦不住（不做承诺），但宿主默认发的是 SIGTERM。
+    """
+
+    def __init__(self) -> None:
+        self._pending: dict[str, str] = {}
+        self._hooked = False
+
+    def _install(self) -> None:
+        if self._hooked:
+            return
+        atexit.register(self.restore_all)
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with contextlib.suppress(ValueError, OSError):
+                signal.signal(sig, self._on_signal)   # 非主线程/平台不支持：atexit 兜底
+        self._hooked = True
+
+    def arm(self, path: pathlib.Path, original: str) -> None:
+        self._install()
+        self._pending[str(path)] = original
+
+    def disarm(self, path: pathlib.Path) -> None:
+        self._pending.pop(str(path), None)
+
+    def restore_all(self) -> None:
+        for raw, original in list(self._pending.items()):
+            with contextlib.suppress(OSError):
+                pathlib.Path(raw).write_text(original, encoding="utf-8")
+            self._pending.pop(raw, None)
+
+    def _on_signal(self, signum: int, _frame: object) -> None:
+        self.restore_all()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)      # 还原后按默认行为终止（退出码如实）
+
+
+_RESTORER = _Restorer()
 
 MUTATIONS: list[Mutation] = [
     # ── 被拒的事件不许落盘（store 先试算后 append）────────────────────────
@@ -244,7 +294,7 @@ MUTATIONS: list[Mutation] = [
      "test_vacuity.py"),
     ("done 不把空洞写进证据", "disflow/engine.py",
      '            evidence["vacuous"] = gates.vacuous_reasons(\n'
-     '                acceptance=item.get("acceptance"), '
+     '                acceptance=acceptance, '
      'touch_plan=item.get("touch_plan") or [],\n'
      '                introduced=introduced, size=size)',
      '            evidence["vacuous"] = {}',
@@ -430,9 +480,11 @@ def _check(mutation: Mutation) -> tuple[bool, int, int]:
         raise PinNotFound(
             f"针脚找不到（{relpath} 的代码变了？）：\n      old = {old!r}")
     try:
+        _RESTORER.arm(path, original)
         path.write_text(original.replace(old, new, 1), encoding="utf-8")
         injected = _run_tests(pattern)
     finally:
+        _RESTORER.disarm(path)
         path.write_text(original, encoding="utf-8")
     restored = _run_tests(pattern)
     return (injected != 0 and restored == 0), injected, restored

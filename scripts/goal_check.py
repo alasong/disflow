@@ -225,12 +225,19 @@ def g3_push_only() -> tuple[bool, str]:
     return not hits.strip(), f"engine/dispatch/ready 里 subprocess 命中 {len(hits.splitlines())} 处（应为 0）"
 
 
-def g4_board_is_view() -> tuple[bool, str]:
-    """§2 目标 4：看板是视图不是第二存储；多板 = 多棵隔离的树。"""
+def g4_board_first_class() -> tuple[bool, str]:
+    """§2 目标 4：看板是一等实体（板定义随事件流持久化）；树/图同源渲染、不各存一份。
+
+    ADR 0005 起目标 4 = 「看板是一等实体」。可机检的是它已落地的一半：板定义随事件流
+    持久化（`engine.py` 写 `tree.init`/`tree.boards` 的 `boards`）+ 视图不写盘（同源、不是第二份存储）。
+    仍缺的一半（分发器/验收器挂到板上）由 `[未实现]` 的 FR-30/31 跟踪，不在此冒充。
+    """
     code, hits = _grep(r"^def board|^def render", "disflow/views.py")
     code2, store = _grep(r"write_json|append_jsonl", "disflow/views.py")
-    return (bool(hits.strip()) and not store.strip(),
-            f"views.py 渲染函数 {len(hits.splitlines())} 个；其中写盘 {len(store.splitlines())} 处（应为 0）")
+    code3, persist = _grep(r"boards", "disflow/engine.py")
+    return (bool(hits.strip()) and not store.strip() and bool(persist.strip()),
+            f"views.py 渲染函数 {len(hits.splitlines())} 个、写盘 {len(store.splitlines())} 处（应为 0）；"
+            f"engine.py 里 boards 命中 {len(persist.splitlines())} 处（>0 = 板定义随事件持久化）")
 
 
 def g5_mgt_migration() -> tuple[bool, str]:
@@ -302,7 +309,7 @@ CHECKS: list[tuple[str, str, Check]] = [
     ("目标1", "单一事实源的决定论引擎", g1_single_fact_source),
     ("目标2", "树与图职责不重叠", g2_tree_graph_split),
     ("目标3", "只推不跑、无常驻", g3_push_only),
-    ("目标4", "看板是视图、多板隔离", g4_board_is_view),
+    ("目标4", "看板是一等实体、多板隔离", g4_board_first_class),
     ("目标5", "从 mgt 可迁移", g5_mgt_migration),
     ("非目标1", "不做 Web/DB、零第三方依赖", n1_no_web_db_deps),
     ("非目标2", "不做常驻调度 daemon", n2_no_scheduler_daemon),

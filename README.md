@@ -1,6 +1,6 @@
 # disflow
 
-任务分发流引擎：**树提供上下文继承，图提供调度与引用，看板是视图，分发器只推不跑。**
+任务分发流引擎：**看板是一等实体**（固定列结构、空也在；树/图是板内维度），分发器只推不跑。
 
 ## 5 分钟上手：看它自己排顺序，并拒收一次假的完成
 
@@ -212,7 +212,7 @@ python3 -m disflow.cli worktree reap demo         # 只打印命令，**不执�
 
 - **分发器，不是多保活 agent**：保活的是进程，不是 agent 上下文；每任务 fresh context，从树祖先链注入。
 - **树管上下文继承（唯一父、无环、有限）；图管调度与引用（`requires` 必须 DAG）**，不混用。
-- **看板是投影，不是第二份存储**；多块板 = 多棵作用域隔离的树。
+- **看板是一等实体**（固定列结构、空也在；板定义随事件流持久化）；树/图是板内维度；多块板 = 多棵作用域隔离的树。
 - **引擎只推不跑**，无常驻 daemon。
 
 ## 用法
@@ -283,6 +283,8 @@ python3 -m disflow.cli doctor
 ```
 
 `boards.json` 也可写成纯字符串数组（`{"boards": ["req", "dev"]}`，label 回落成 id）。
+条目可选带**看板策略**（看板是一等实体，策略是它的附属）：`"wip": 2`（逐列并发在跑上限，
+分发策略 FR-30）、`"acceptance": {"cmd": …, "expect": …}`（逐列默认验收，节点未自带时派生，FR-31）。
 `done` **不是板**：它是节点**状态**（`core.TERMINAL`），写进去会被响亮拒收。
 板序第一块 = **流程入口**（root 容器落的板）；任务没声明 `stage` 时落 `dev`（是板集里的一块），
 没有 `dev` 就落入口板。要精确控制就显式声明 `stage`。
@@ -324,7 +326,8 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 743 passed（零第三方依赖）——收尾全量，保留可用
+python3 -m unittest discover -s tests -t tests    # 763 passed（零第三方依赖）——收尾全量，保留可用
+python3 scripts/finish.py                          # 收尾门：全量 + 资产 scan/check（退出码当门）
 python3 scripts/test_changed.py --all --jobs 8    # **收尾推荐**：全量 + 并发（96s→33s，2.9×）
 python3 scripts/test_changed.py                   # 迭代期：只跑改动相关的子集（带「这不是全量」横幅）
 python3 scripts/test_changed.py --jobs 8          # 迭代期子集 + 并发

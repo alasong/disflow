@@ -22,6 +22,20 @@
   新增资产走 `assets/registry.json` + `python3 scripts/assets_scan.py scan`。
 - 本文件自身由 `tests/test_agent_entry.py` 守卫（存在 + 指向两份索引 + 指针不失效）。
 
+**资产是拿来「消费」的，不只是「检索」的**——改任何已登记资产（或它的依据物）**走这个循环**
+（判据：`playbooks/anchor-workflow.md` + `scripts/assets_scan.py`，**不靠记忆**）：
+
+| 时机 | 命令 | 作用 |
+| --- | --- | --- |
+| 动手前 | `python3 scripts/assets_scan.py plan` | 改动路径 → **依据先的拓扑刷新序**（哪些资产命中、按什么次序改） |
+| 改锚点后 | `python3 scripts/assets_scan.py impact <id>` | 反查**谁依赖它**：所有下游都要重新论证还成不成立（依据断裂是**静默**的，只有 `impact` 看得见） |
+| 改完 | `python3 scripts/assets_scan.py scan` | 重生成 `assets/INDEX.md` + `index.jsonl`（防索引漂移） |
+| 收尾 | `python3 scripts/finish.py` | **全量测试（硬门）+ 资产 `check`（只读报告，`stale` 只报不拦）**。`scan`（刷新索引）是**提交前**动作，收尾门不写盘 |
+| —（底层动作） | `python3 scripts/assets_scan.py check` | `stale` / 缺证据 → 退出码 1（**当门**）。按 git 事实算：未提交必 stale，故它是**收尾**门，不是每次跑都绿的门 |
+
+`stale` 的含义：依据物比本资产更新（或未提交）⇒ 本资产的结论可能失真，**回源码对**后再收尾 `scan`
+重算。历史快照（`dev-board` / `lessons`）持续 stale 是**设计使然**，不是缺陷。
+
 ## 1. 一句话地图
 
 disflow = 「**只推不跑**」的任务树分发器：事件流（`events.jsonl`）是唯一真相，投影

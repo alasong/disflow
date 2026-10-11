@@ -14,6 +14,10 @@ import contextlib
 import importlib.util
 import io
 import pathlib
+import subprocess
+import sys
+import tempfile
+import time
 import unittest
 from typing import Any
 
@@ -135,6 +139,46 @@ class HarnessReportingTest(unittest.TestCase):
         self.assertIn("对不上的针脚", text)
         self.assertIn("未应用", text)
         self.assertNotIn("没有被测试守住", text, "坏针脚不得被当成覆盖缺口")
+
+
+class KillSafeRestoreTest(unittest.TestCase):
+    """**被杀的注入必须还原**——否则宿主 kill 全量套件会把变异留在 `disflow/*.py`。
+
+    复现真实事故（2026-10-11）：`HarnessReportingTest` 在真工作树注入变异后，靠 `_check` 的
+    `finally` 还原；进程被杀则残留（本案 `metrics._done_as_of` 的 `<=` 被留成 `>`）。
+    本测试在一个**子进程**里 arm 还原钩子 → 写变异 → 睡；父进程 SIGTERM 它，断言文件已还原。
+    """
+
+    def test_sigterm_during_a_mutation_restores_the_file(self):
+        with tempfile.TemporaryDirectory(prefix="disflow-kill-") as tmp:
+            target = pathlib.Path(tmp) / "sample.py"
+            target.write_text("ORIGINAL = 1\n", encoding="utf-8")
+            code = (
+                "import importlib.util, pathlib, time\n"
+                f"spec = importlib.util.spec_from_file_location('mc2', {str(mc.__file__)!r})\n"
+                "mc2 = importlib.util.module_from_spec(spec)\n"
+                "spec.loader.exec_module(mc2)\n"
+                f"p = pathlib.Path({str(target)!r})\n"
+                "orig = p.read_text(encoding='utf-8')\n"
+                "mc2._RESTORER.arm(p, orig)\n"
+                "p.write_text('MUTATED = 1\\n', encoding='utf-8')\n"
+                "time.sleep(30)\n"
+            )
+            proc = subprocess.Popen([sys.executable, "-c", code])
+            try:
+                deadline = time.time() + 15
+                while (time.time() < deadline
+                       and target.read_text(encoding="utf-8") != "MUTATED = 1\n"):
+                    time.sleep(0.05)
+                self.assertEqual(target.read_text(encoding="utf-8"), "MUTATED = 1\n",
+                                 "子进程没在预算内写出变异，测试前提不成立")
+                proc.terminate()                 # SIGTERM：宿主 kill 全量套件的信号
+                proc.wait(timeout=10)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+            self.assertEqual(target.read_text(encoding="utf-8"), "ORIGINAL = 1\n",
+                             "被 SIGTERM 杀掉后变异没被还原（kill-safe 守卫失效）")
 
 
 if __name__ == "__main__":

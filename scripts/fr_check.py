@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""对 `docs/requirements.md` §3–§7 的 29 条 FR + 7 条 NFR **逐条**机检 + 分类。
+"""对 `docs/requirements.md` §3–§7 的 32 条 FR + 7 条 NFR **逐条**机检 + 分类。
 
 为什么要有这个脚本（而不是在会话里口述一遍）：
 本会话已机检过 §1.2 病根 8 条 / §1.3 保留项 5 条 / §2 目标与非目标 10 条（见
@@ -479,6 +479,15 @@ TEST_ONLY: list[tuple[str, str, str, str]] = [
     ("FR-22", "多板 = 多棵树，隔离",
      "tests/test_multitree.py::MultiTreeTest::test_trees_are_isolated",
      "隔离是两棵树并存时的行为，无单条 grep 能判定。"),
+    ("FR-30", "分发器是看板的附属（逐列 WIP 上限）",
+     "tests/test_board_policy.py::WipPolicyTest",
+     "「列满则其余就绪者不派」是具体节点图上的行为（在跑计数 vs 上限），无单条 grep 能判定。"),
+    ("FR-31", "验收器是看板的附属（逐列默认验收）",
+     "tests/test_board_policy.py::AcceptancePolicyTest",
+     "「节点未自带则派生、自带则优先」是 `done` 路径上的行为，grep 只能证字段在场。"),
+    ("FR-32", "动态看板：结构可预设、逐树覆盖",
+     "tests/test_boards_per_tree.py::PerTreeBoardsTest::test_two_trees_can_have_different_boards",
+     "「逐树覆盖」是两棵树并存、同一进程读不同板集的行为，无单条 grep 能判定。"),
     ("NFR-2", "核心语言中立（业务词不进 core）",
      "tests/test_layering.py::LayeringTest::test_core_has_no_business_nouns",
      "针脚表住在测试文件里；在 fr_check 里另抄一份会造出第二把尺子、并可漂移。"),
@@ -597,7 +606,7 @@ def emit_report() -> str:
     out.append("> 由 `scripts/fr_check.py` 生成（`python3 scripts/fr_check.py --report`）。")
     out.append("> 本条报告的头等产出**不是通过率**，而是把 **[未实现]** 与 **[不可机检]** 诚实分出来。")
     out.append("")
-    out.append("## 总表（29 FR + 7 NFR = 36 条）")
+    out.append("## 总表（32 FR + 7 NFR = 39 条）")
     out.append("")
     out.append("| # | 一句话验收标准 | 证据类型 | 证据（可复制命令 / 测试名） |")
     out.append("| --- | --- | --- | --- |")
@@ -613,9 +622,13 @@ def emit_report() -> str:
     out.append("## [未实现]（实现里找不到对应能力——最有价值的输出）")
     out.append("")
     if not UNIMPLEMENTED:
-        out.append("**（空）**：29 FR + 7 NFR 里没有整条未实现的。"
+        out.append("**（空）**：32 FR + 7 NFR 里没有整条未实现的。"
                    f"**◐ 部分缺口** {len(PARTIAL)} 条（整条机检通过、子句在实现里找不到）；"
                    f"**已复核·非缺口** {len(DOWNGRADED)} 条（曾标 ◐、复核后确认需求已满足）。")
+    for cid, title, missing, acceptance in UNIMPLEMENTED:
+        out.append(f"- **{cid}**：{title}")
+        out.append(f"  - 缺什么：{missing}")
+        out.append(f"  - 若要做，验收点：{acceptance.removeprefix('若要做：')}")
     out.append("")
 
     out.append("## [不可机检]（语义判断，不冒充通过）")
@@ -674,7 +687,7 @@ def emit_report() -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="对 docs/requirements.md §3–§7 的 29 FR + 7 NFR 逐条机检并分类")
+        description="对 docs/requirements.md §3–§7 的 32 FR + 7 NFR 逐条机检并分类")
     parser.add_argument("--report", action="store_true",
                         help="从判据表生成 markdown 报告到 stdout（不跑机检）")
     args = parser.parse_args(argv)
@@ -706,7 +719,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print("\n[未实现]（实现里找不到对应能力——最有价值的输出）")
     if not UNIMPLEMENTED:
-        print("  （空：29 FR + 7 NFR 里没有整条未实现的）")
+        print("  （空：32 FR + 7 NFR 里没有整条未实现的）")
     for cid, title, missing, acceptance in UNIMPLEMENTED:
         print(f"  [{cid}] {title}")
         print(f"        缺什么：{missing}")
@@ -734,7 +747,7 @@ def main(argv: list[str] | None = None) -> int:
     total = len(MACHINE) + len(TEST_ONLY) + len(UNJUDGEABLE) + len(UNIMPLEMENTED)
     print(f"\n四类计数：机检 {len(MACHINE)}（通过 {len(MACHINE) - len(failed)} · 失败 {len(failed)}）"
           f" · 测试 {len(TEST_ONLY)} · 未实现 {len(UNIMPLEMENTED)} · 不可机检 {len(UNJUDGEABLE)}"
-          f" · 合计 {total}（应 36）；另有 ◐ 部分缺口 {len(PARTIAL)} 条")
+          f" · 合计 {total}（应 39）；另有 ◐ 部分缺口 {len(PARTIAL)} 条")
     for name in failed:
         print("  FAIL:", name)
     return 1 if failed else 0

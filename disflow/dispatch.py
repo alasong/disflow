@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 
 from . import worktree
+from .boards import from_projection as boards_from_projection
 from .config import DEFAULTS, Config
 from .context import brief as build_brief
 from .ready import (
@@ -106,6 +107,28 @@ def drive(tree_name: str, tree: dict,
             deferred.append({"node": nid, "why": "；".join(reasons)})
         else:
             packable.append(nid)
+    # FR-30：看板的**逐列 WIP 上限**是分发策略的落地——它在 `drive` 这层生效（只推不跑），
+    # 列内已在跑数达上限 ⇒ 该列其余就绪者同样进 `deferred`（点名原因），**不静默丢**。
+    # 无 wip 的板 / 旧事件流（boards 缺字段）⇒ `wip_by_stage` 为空 ⇒ 行为与改动前逐字节一致。
+    wip_by_stage = {b.id: b.wip for b in boards_from_projection(tree.get("boards"))
+                    if b.wip}
+    if wip_by_stage:
+        running_per_stage: dict[str, int] = {}
+        for nid in running_tasks(nodes):
+            stage = str(nodes[nid].get("stage") or "?")
+            running_per_stage[stage] = running_per_stage.get(stage, 0) + 1
+        allowed: list[str] = []
+        for nid in packable:
+            stage = str(nodes[nid].get("stage") or "?")
+            cap = wip_by_stage.get(stage)
+            if cap is not None and running_per_stage.get(stage, 0) >= cap:
+                deferred.append({
+                    "node": nid,
+                    "why": f"列 {stage} 已达 WIP 上限 {cap}"
+                           f"（在跑 {running_per_stage.get(stage, 0)}）"})
+            else:
+                allowed.append(nid)
+        packable = allowed
     waves = pack_waves(nodes, packable)
     blocked = {nid: blocked_by(nodes, nid, closed) for nid in live_tasks(nodes)
                if blocked_by(nodes, nid, closed)}

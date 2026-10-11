@@ -451,7 +451,7 @@ class MachineCheckGuardTest(DisflowTestCase):
     """本仓的**可执行判据脚本**必须当场 exit 0。
 
     为什么要把这两个脚本拉进 unittest（实测事故，本节点成立的理由）：
-    `scripts/fr_check.py`（29 FR + 7 NFR）与 `scripts/goal_check.py`（病根/保留项/目标）
+    `scripts/fr_check.py`（32 FR + 7 NFR）与 `scripts/goal_check.py`（病根/保留项/目标）
     **不在** `unittest discover` 的覆盖里。节点 `n7-accounting` 给 CLI 加了「`done` 前先
     `collect`」契约，却漏改 `fr_check.py` 的 FR-18/FR-20 探针 —— 两个机检脚本红了约 40 分钟：
     n7 的验收（只跑 unittest 与自举探针）与全量 unittest 都看不见它。守卫在此，
@@ -471,7 +471,7 @@ class MachineCheckGuardTest(DisflowTestCase):
             f"尾部：\n{(proc.stdout + proc.stderr)[-1500:]}")
 
     def test_fr_check_passes_on_the_current_tree(self):
-        """`python3 scripts/fr_check.py`（29 FR + 7 NFR 逐条机检）必须全过。"""
+        """`python3 scripts/fr_check.py`（32 FR + 7 NFR 逐条机检）必须全过。"""
         self._run_machine_check("fr_check.py")
 
     def test_goal_check_passes_on_the_current_tree(self):
