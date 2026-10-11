@@ -14,21 +14,21 @@
       "path": "docs/design.md",
       "purpose": "实现契约：节点字段 / 事件 / 门 / 投影语义（改实现前先看它）",
       "tier": "asserted",
-      "premises": ["pkg"]
+      "premises": ["requirements", "pkg"]
     },
     "architecture": {
       "type": "doc",
       "path": "docs/architecture.md",
       "purpose": "按实现画的架构图（events→state→树/图/看板/分发/自检）",
       "tier": "asserted",
-      "premises": ["pkg"]
+      "premises": ["pkg", "design"]
     },
     "dev-board": {
       "type": "board",
       "path": "docs/dev-board.md",
       "purpose": "开发看板 + 逐轮 fresh-context 独立验证记录",
       "tier": "asserted",
-      "premises": ["pkg", "tests"]
+      "premises": ["requirements", "pkg", "tests"]
     },
     "backlog": {
       "type": "doc",
@@ -79,7 +79,7 @@
       "purpose": "验收测试套件：门拒收 / 投影一致 / 分层自检 / CLI 回归",
       "tier": "verified",
       "evidence": "python3 -m unittest discover -s tests -t tests",
-      "premises": ["pkg"]
+      "premises": ["requirements", "pkg"]
     },
     "scripts": {
       "type": "script",

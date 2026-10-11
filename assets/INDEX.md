@@ -25,7 +25,7 @@
 
 | id | 依据 stale_basis | 说明 |
 | --- | --- | --- |
-| `architecture` | `pkg` | 按实现画的架构图（events→state→树/图/看板/分发/自检） |
+| `architecture` | `pkg`, `design` | 按实现画的架构图（events→state→树/图/看板/分发/自检） |
 | `design` | `pkg` | 实现契约：节点字段 / 事件 / 门 / 投影语义（改实现前先看它） |
 | `dev-board` | `pkg`, `tests` | 开发看板 + 逐轮 fresh-context 独立验证记录 |
 | `fr-gap` | `pkg`, `scripts` | 需求覆盖机检报告（由 scripts/fr_check.py 生成） |
@@ -38,6 +38,8 @@
 
 | 依据 | 依赖它的资产 |
 | --- | --- |
+| `design` | `architecture` |
 | `pkg` | `architecture`, `design`, `dev-board`, `fr-gap`, `lessons`, `readme`, `scripts`, `tests` |
+| `requirements` | `design`, `dev-board`, `tests` |
 | `scripts` | `fr-gap` |
 | `tests` | `dev-board` |
