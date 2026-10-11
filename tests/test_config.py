@@ -10,8 +10,12 @@
 2. **优先级**：内建默认 < `disflow.json` < 显式参数/节点声明。
 3. **响亮报错**：未知键、类型不对都报错并列允许的键——不静默忽略
    （与节点字段闭集同一个纪律）。
-4. **`stages`/`roles` 可配，但只在写时校验**：reducer 不能依赖配置，
+4. **`roles` 可配，但只在写时校验**：reducer 不能依赖配置，
    否则换台机器（或改了配置）重放旧事件会失败——事件流就不可重放了。
+5. **看板定义在另一个独立文件 `boards.json`**（2026-10-11 用户裁决）：
+   板会**长大**（要做动态看板），且变更节奏与引擎参数不同 ⇒ 单独一个文件。
+   `Config.stages` 仍在，但已是**从 `boards` 派生的属性**；
+   `disflow.json` 的 `stages` 键**已退役**，写了**响亮报错**并给迁移指引（不静默回落＝不造双源）。
 """
 from __future__ import annotations
 
@@ -22,7 +26,9 @@ import unittest
 
 from base import DisflowTestCase, acceptance, git_repo, touch
 
+from disflow import boards as boards_mod
 from disflow import config, gates, store, views
+from disflow.boards import DEFAULT_BOARDS, Board, BoardsError
 from disflow.config import Config, ConfigError
 from disflow.engine import Engine, EngineError, GateReject
 from disflow.spec import ROLES, SIZE_BUDGET_DEFAULT, STAGES
@@ -31,6 +37,13 @@ from disflow.state import project
 
 def write_config(test: DisflowTestCase, payload: object) -> str:
     path = os.path.join(test.tmp, config.CONFIG_BASENAME)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    return path
+
+
+def write_boards(test: DisflowTestCase, payload: object) -> str:
+    path = os.path.join(test.tmp, boards_mod.BOARDS_BASENAME)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle)
     return path
@@ -99,15 +112,19 @@ class ConfigFileTest(DisflowTestCase):
     def test_file_overrides_builtin_defaults(self):
         write_config(self, {"acceptance_timeout": 300, "size_budget": 42,
                             "lease_ttl": 60, "output_tail": 99,
-                            "walk_ignore": ["node_modules"], "stages": ["a", "b"],
+                            "walk_ignore": ["node_modules"],
                             "roles": ["r1"], "git_timeout": 5})
+        write_boards(self, {"boards": [{"id": "a", "label": "甲"}, "b"]})
         loaded = config.load(self.tmp)
         self.assertEqual(loaded.acceptance_timeout, 300)
         self.assertEqual(loaded.size_budget, 42)
         self.assertEqual(loaded.lease_ttl, 60)
         self.assertEqual(loaded.output_tail, 99)
         self.assertEqual(loaded.walk_ignore, ("node_modules",))
-        self.assertEqual(loaded.stages, ("a", "b"))
+        self.assertEqual(loaded.stages, ("a", "b"), "stages 由 boards 派生")
+        self.assertEqual(loaded.boards, (Board("a", "甲"), Board("b", "b")),
+                         "label 缺省回落成 id")
+        self.assertEqual(loaded.labels, {"a": "甲", "b": "b"})
         self.assertEqual(loaded.roles, ("r1",))
         self.assertEqual(loaded.git_timeout, 5)
 
@@ -131,13 +148,26 @@ class ConfigFileTest(DisflowTestCase):
         for payload, expect in (({"size_budget": "大"}, "应为数字"),
                                 ({"size_budget": True}, "应为数字"),
                                 ({"size_budget": 0}, "应为正数"),
-                                ({"stages": 5}, "字符串数组"),
                                 ({"walk_ignore": [1, 2]}, "字符串数组")):
             with self.subTest(payload=payload):
                 write_config(self, payload)
                 with self.assertRaises(ConfigError) as ctx:
                     config.load(self.tmp)
                 self.assertIn(expect, str(ctx.exception))
+
+    def test_retired_stages_key_is_rejected_with_a_migration_hint(self):
+        """`stages` 已迁到 `boards.json`：写了必须**响亮报错**，不静默回落。
+
+        为何不回落（判据不是洁癖）：用户在 disflow.json 里改 `stages` 却以为生效了，
+        而板实际由 boards.json 决定 —— **静默失效**比报错贵得多，且它正是双源的入口。
+        """
+        write_config(self, {"stages": ["a", "b"]})
+        with self.assertRaises(ConfigError) as ctx:
+            config.load(self.tmp)
+        message = str(ctx.exception)
+        self.assertIn("已退役", message)
+        self.assertIn("boards.json", message, "必须给出迁移到哪")
+        self.assertNotIn("未知配置键", message, "退役键要报迁移指引，不是笼统的『拼错了』")
 
     def test_malformed_json_is_rejected_not_ignored(self):
         with open(os.path.join(self.tmp, config.CONFIG_BASENAME), "w", encoding="utf-8") as handle:
@@ -295,7 +325,7 @@ class VocabularyValidationTest(DisflowTestCase):
                                          "stage": "audti"}])
         message = str(ctx.exception)
         self.assertIn("audti", message)
-        self.assertIn("disflow.json", message, "报错要指出出路")
+        self.assertIn("boards.json", message, "报错要指出出路（板定义在 boards.json）")
         # 拒收必须不落事件
         self.assertEqual(engine.load()["trees"]["t"]["nodes"].keys(), {"root"})
 
@@ -316,8 +346,9 @@ class VocabularyValidationTest(DisflowTestCase):
         self.assertIn("disflow.json", str(ctx.exception))
 
     def test_custom_stage_and_role_allowed_via_config(self):
-        """换个项目看板列本来就该不一样 ⇒ 可配。"""
-        cfg = Config(stages=STAGES + ("blocked",), roles=ROLES + ("sre",))
+        """换个项目看板定义本来就该不一样 ⇒ 可配（板定义走 boards.json）。"""
+        cfg = Config(boards=DEFAULT_BOARDS + (Board("blocked", "阻塞"),),
+                     roles=ROLES + ("sre",))
         engine = Engine(cwd=self.tmp, cfg=cfg)
         engine.init_tree("t", "g")
         engine.expand("t", "root", [{"id": "n1", "goal": "g", "acceptance": acceptance(),

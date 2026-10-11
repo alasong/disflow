@@ -25,11 +25,11 @@ from contextlib import redirect_stderr, redirect_stdout
 from base import DisflowTestCase, acceptance
 
 from disflow import spec, state, store
+from disflow.boards import DEFAULT_BOARDS, Board
 from disflow.cli import main
 from disflow.config import Config
 from disflow.engine import Engine, EngineError
 from disflow.ready import is_stuck, ready_tasks
-from disflow.spec import STAGES
 from disflow.state import project
 from disflow.views import board_lines
 
@@ -98,7 +98,7 @@ class StageChangeTest(DisflowTestCase):
 
     def test_closed_set_is_config_driven(self):
         """自定义看板列照旧走配置——与 `expand` 的 stage 校验同源。"""
-        cfg = Config(stages=STAGES + ("blocked",))
+        cfg = Config(boards=DEFAULT_BOARDS + (Board("blocked", "阻塞"),))
         engine = Engine(cwd=self.tmp, cfg=cfg)
         engine.init_tree("t", "g")
         engine.expand("t", "root", [{"id": "n", "goal": "g", "acceptance": acceptance()}])

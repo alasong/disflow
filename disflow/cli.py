@@ -18,7 +18,9 @@ import os
 import sys
 import time
 
+from . import boards as boards_mod
 from . import config, graph, metrics, store, views, worktree
+from .boards import Board
 from .engine import Engine, EngineError, GateReject
 from .import_mgt import apply_import, build_import, load_mgt
 from .metrics import parse_deadline
@@ -39,9 +41,30 @@ def _loads(text: str):
 
 # ── 命令实现 ──────────────────────────────────────────────────────────────
 
+def _boards_from_arg(spec: str) -> tuple[Board, ...]:
+    """把 `--boards` 参数变成板定义：逗号分隔的 id，或一个 JSON 文件路径。
+
+    两种都收（简单场景不必写文件）：
+      --boards '需求,设计,开发,验证'        # 纯 id 列表
+      --boards path/to/boards.json         # 与独立文件同格式（{"boards": [...]})
+    形状/保留名/重复都走 `boards.parse`——**响亮拒收**，不猜。
+    """
+    text = spec.strip()
+    if os.path.isfile(text):
+        with open(text, encoding="utf-8") as handle:
+            raw = json.load(handle)
+        return boards_mod.parse(raw, text)
+    ids = [piece.strip() for piece in text.split(",") if piece.strip()]
+    return boards_mod.parse({"boards": ids}, "--boards")
+
+
 def cmd_init(engine: Engine, args) -> int:
-    engine.init_tree(args.tree, args.goal)
-    print(f"✓ 建树 {args.tree}：{args.goal}")
+    chosen: tuple[Board, ...] = ()
+    if getattr(args, "boards", None):
+        chosen = _boards_from_arg(args.boards)
+    engine.init_tree(args.tree, args.goal, boards=chosen)
+    extra = f"（{len(chosen)} 块板）" if chosen else ""
+    print(f"✓ 建树 {args.tree}：{args.goal}{extra}")
     return 0
 
 
@@ -136,7 +159,10 @@ def cmd_done(engine: Engine, args) -> int:
     # 伪造一份自报），而事故发生在**走 CLI 的宿主**——它的 collect 失败时 done 静默落盘，
     # 于是 collect（worker 上报 block 的唯一通道，FR-15）形同虚设、树上查不到谁干了什么。
     collected = _has_collected(engine, args.tree, args.node)
-    if collected is False and not no_result:
+    # `_has_collected` 返回 `bool | None`：None = 树/节点不存在（交给门报）。
+    # 写成 `is not None and not collected` 而不是 `is False`：语义相同（只有 False 才拦），
+    # 但不触发 linter 的「字面量恒等」规则。
+    if collected is not None and not collected and not no_result:
         print(f"✗ 拒收 {args.node}：本节点没有已落盘的 collect 结果——", file=sys.stderr)
         print("  这是宿主循环契约（不是门）：worker 的结果要先经 collect 落盘，"
               "否则树的读者看不出「谁干了什么」、blocked 提问也无处留痕。", file=sys.stderr)
@@ -162,7 +188,7 @@ def cmd_done(engine: Engine, args) -> int:
         print(f"✓ 预演通过：{args.node} 的验收/作用域/规模门均会过（**未落事件**）")
     else:
         print(f"✓ {args.node} done（证据已自算落盘）")
-    if collected is False:
+    if collected is not None and not collected:
         # 破例已落进事件（evidence.no_result）；stdout 再明说一句：绝不静默。
         print(f"⚠️ {args.node} 无 worker 结果（--no-result 破例：{no_result}）")
     if vacuous:
@@ -433,11 +459,18 @@ def cmd_doctor(engine: Engine, args) -> int:
             print("  （另有需人判断项，因本轮已有故障而不单独报；见 exit 0 时的输出）",
                   file=sys.stderr)
         return 1
-    # 全绿时把“这些值从哪来”报出来：配置是独立文件，改了它行为会变，所以得看得见
-    cfg_path = config.config_path(engine.cwd)
-    print(f"配置：{cfg_path}" + ("（存在）" if os.path.isfile(cfg_path) else "（无 → 全用内建默认）"))
-    for key, value, _source in config.describe(engine.cfg, engine.cwd):
-        print(f"  {key} = {value}")
+    # 全绿时把“这些值从哪来”报出来：配置是独立文件，改了它行为会变，所以得看得见。
+    # **逐键报来源**（两个配置文件了）：板定义在 `boards.json`，引擎参数在 `disflow.json`
+    # —— 报一个笼统路径会让读者以为板也住在 disflow.json 里。按来源**分组**打印，
+    # 免得同一行长路径重复 9 遍。
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for key, value, source in config.describe(engine.cfg, engine.cwd):
+        groups.setdefault(source, []).append((key, value))
+    print("配置（逐键报来源）：")
+    for source, items in groups.items():
+        print(f"  {source}")
+        for key, value in items:
+            print(f"    {key} = {value}")
     if worktree_advisory is not None or advisories:
         # **不计入退出码**，也不叫“故障”：——租约条目是「worker 崩了」还是「人在正常干活」
         # doctor 分不出；worktree 条目是出厂默认布局下的功能可用性限制。两条都不假装知道，
@@ -454,17 +487,26 @@ def cmd_doctor(engine: Engine, args) -> int:
 
 
 def cmd_board(engine: Engine, args) -> int:
-    # 列定义单一来源：列 = 解析后的配置（`disflow.json` 的 "stages"），不在视图里另存抄本
-    stages = engine.cfg.stages
+    # 列定义的**单一来源 = 该树的板集**（`tree.init`/`tree.boards` 事件携带 → 投影携带）。
+    # 逐树覆盖后，同一进程里不同树可以有不同的板——用进程级 `cfg.stages` 会张冠李戴。
+    # 旧事件流（不带 boards）由 `_tree_boards` 回落 cfg ⇒ 兼容。
+    tree = engine.tree(args.tree)
+    tree_boards = engine._tree_boards(tree)
+    stages = tuple(board.id for board in tree_boards)
+    labels = {board.id: board.label for board in tree_boards}
     if args.stage is not None and args.stage not in stages:
         # 非法列名**响亮拒收**（退出码 2 = 用法错误，与 argparse 同款）：放行会打出
         # `[bogus] 0/0` —— 读者会当成「这一列是空的」，实际是**拼错了**（宽错）。
-        # 为何不用 argparse 的 `choices=`：合法列来自**运行期解析的配置**（`disflow.json` 的
-        # `stages`），parser 在解析配置之前就建好了；写死一份字面量就是**第二份列定义**
-        # （两面分叉），自定义列也会被误拒。
+        # 为何不用 argparse 的 `choices=`：合法列来自**运行期解析的配置**（`boards.json`
+        # 的板 id），parser 在解析配置之前就建好了；写死一份字面量就是**第二份列定义**
+        # （两面分叉），自定义板也会被误拒。
         print(f"✗ --stage 取值非法：{args.stage!r}（允许：{list(stages)}）", file=sys.stderr)
         return 2
-    tree = engine.tree(args.tree)
+    if args.by == "board" and args.stage is not None:
+        # 四块板**已经**按阶段分板，再选一列是用法错误：放行会打出「只有一块板」的版面，
+        # 读者会以为其余三块板丢了（宽错）。响亮拒收，退出码 2 与 argparse 同款。
+        print("✗ --by board 与 --stage 互斥（四块板已按阶段分板）", file=sys.stderr)
+        return 2
     # 默认只列「运行中 + 待完成」（用户 2026-10-11：要清晰干净的视图）；`--all` 展开终态。
     # 空列默认不铺版面（`--all-columns` 铺；`--json` 恒铺 = 机器看事实）；但**事实不丢**：
     # 表头的「列」摘要把每一列（含折叠掉的空列）都报出来。
@@ -475,6 +517,10 @@ def cmd_board(engine: Engine, args) -> int:
     if args.json:
         # 机器视图 = **事实全量**：全部列 + 全部状态（不受 --all/--all-columns 影响；要过滤由消费者做）。
         # 人读态是同一份布局的**渲染**（默认折叠终态/空列）——“同源”指同一实现，不是同一子集。
+        if args.by == "board":
+            _dump(views.boards_layout(tree, stages, labels=labels,
+                                      **{**kwargs, "active_only": False, "empty_boards": True}))
+            return 0
         _dump(views.board_layout(tree, args.stage,
                                  **{**kwargs, "active_only": False, "empty_columns": True}))
         return 0
@@ -491,7 +537,17 @@ def cmd_board(engine: Engine, args) -> int:
     folded = "" if (args.all or not tally) else "    （终态折叠：--all 展开）"
     print("状态 " + (" · ".join(f"{label} {n}" for label, n in tally.items()) or "（无）") + folded)
     print()
-    body = views.board_lines(tree, args.stage, **kwargs)
+    if args.by == "board":
+        # 四块板：同一份布局换一种分组（`boards_layout` 直接消费 `board_layout` 的列）。
+        # **空板恒铺**（与列形态的「干净优先」相反）：四块板的「四」是**结构事实**——
+        # 折叠掉空板，读者就看不见「需求→设计→开发→验证」这条流程本身，
+        # 而「需求板是空的」正是他此刻最该看到的那条事实。故不受 `--all-columns` 影响。
+        body = views.boards_lines(tree, stages, labels=labels,
+                                  closed=engine.closed_trees(),
+                                  tree_name=args.tree, active_only=active_only,
+                                  empty_boards=True)
+    else:
+        body = views.board_lines(tree, args.stage, **kwargs)
     for line in body:
         print(line)
     if not body and not args.all:
@@ -922,6 +978,9 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("tree")
     node.add_argument("--goal", required=True,
                       help="树的总体目标（必填；一句话说清要达成什么）")
+    node.add_argument("--boards", default=None,
+                      help="该树的板定义（逗号分隔的 id，或 boards.json 路径）——"
+                           "省略则用项目级 boards.json / 内建默认；给这个 = 逐树覆盖")
 
     node = add("goal", cmd_goal)
     node.add_argument("tree")
@@ -1036,7 +1095,7 @@ def build_parser() -> argparse.ArgumentParser:
     node = add("board", cmd_board)
     node.add_argument("tree")
     node.add_argument("--stage", default=None,
-                      help="只显示该阶段列（如 dev；必须在配置的 stages 内，非法列名退出码 2）；"
+                      help="只显示该阶段列（如 dev；必须是 boards.json 里的一块板，非法列名退出码 2）；"
                            "省略=配置里的全部阶段列")
     node.add_argument("--all", action="store_true", dest="all",
                       help="展开终态（✓ 完成 / — 跳过 / ✗ 失败）；默认只列「运行中 + 待完成」"
@@ -1046,6 +1105,10 @@ def build_parser() -> argparse.ArgumentParser:
                            "不占版面）；`--json` 恒为全列")
     node.add_argument("--json", action="store_true",
                       help="机器可读输出（与人读态同源：同一份布局，含列/分组/父子/深度）")
+    node.add_argument("--by", choices=("column", "board"), default="column",
+                      help="分组方式：column=一块板 × 四个阶段列（默认）；"
+                           "board=四块板 × 一个阶段（板头报上游完成度，即板间工作流）；"
+                           "board 与 --stage 互斥")
 
     node = add("tree", cmd_tree)
     node.add_argument("tree")
@@ -1071,7 +1134,7 @@ def build_parser() -> argparse.ArgumentParser:
     node = add("stage", cmd_stage)
     node.add_argument("tree")
     node.add_argument("node")
-    node.add_argument("stage", help="新的看板列（必须在配置的 stages 闭集内）")
+    node.add_argument("stage", help="新的看板列（必须是 boards.json 里的板 id）")
     node.add_argument("--reason", required=True,
                       help="为何改列（必填；记入 stage_log，可审计）")
     node.add_argument("--holder", default="",

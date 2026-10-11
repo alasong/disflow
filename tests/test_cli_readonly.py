@@ -217,23 +217,45 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         headers = [line for line in out2.splitlines() if line.startswith("[")]
         self.assertEqual(headers, ["[req] 0/0", "[design] 0/0", "[dev] 0/1", "[verify] 0/1"])
 
-    def test_board_columns_come_from_the_project_config(self):
-        """列定义**单一来源**：CLI 的列 = 解析后的配置（`disflow.json` 的 `stages`）。"""
-        self._seed()
+    def test_board_columns_come_from_the_trees_boards(self):
+        """列定义**单一来源** = **该树**的板集（`tree.init` 时从配置播种进事件流）。
+
+        逐树覆盖（2026-10-11）：板定义随树走，进程级 `boards.json` 只是**建树时的播种值**。
+        """
+        # 用 `$DISFLOW_BOARDS` 指到临时文件：CLI 的 cwd 是仓根（不是 self.tmp），
+        # 写 `<cwd>/boards.json` 会污染仓库。板定义已从 `disflow.json` 的 `stages` 搬走。
         path = os.path.join(self.tmp, "board-config.json")
         with open(path, "w", encoding="utf-8") as handle:
-            json.dump({"stages": ["todo", "doing"]}, handle)
-        os.environ["DISFLOW_CONFIG"] = path
-        self.addCleanup(os.environ.pop, "DISFLOW_CONFIG", None)
+            json.dump({"boards": ["todo", "doing"]}, handle)
+        os.environ["DISFLOW_BOARDS"] = path
+        self.addCleanup(os.environ.pop, "DISFLOW_BOARDS", None)
+        self._run(["init", "t", "--goal", "播种板"])
         code, out, _err = self._run(["board", "t"])
         self.assertEqual(code, 0)
         summary = next(line for line in out.splitlines() if line.startswith("列 "))
         self.assertTrue(summary.startswith("列 todo 0/0 · doing 0/0"),
-                        f"列定义/顺序必须跟着配置走（非规范历史列追加在后）：{summary!r}")
+                        f"列定义/顺序跟着**该树**的板集走：{summary!r}")
         code2, out2, _err2 = self._run(["board", "t", "--all-columns"])
         self.assertEqual(code2, 0)
         headers = [line for line in out2.splitlines() if line.startswith("[")]
         self.assertEqual(headers[:2], ["[todo] 0/0", "[doing] 0/0"])
+
+    def test_board_columns_ignore_a_later_config_change(self):
+        """改 `boards.json` **不**追溯改变旧树的列 —— 板是事件里的事实（可重放）。
+
+        这正是逐树看板进事件流的理由：若列由**进程级配置**决定，同一棵树在不同
+        机器/时刻会渲染出不同的列 ⇒ 事件流不可重放。
+        """
+        self._seed()                                  # 内建四板建树
+        path = os.path.join(self.tmp, "board-config.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"boards": ["todo", "doing"]}, handle)
+        os.environ["DISFLOW_BOARDS"] = path
+        self.addCleanup(os.environ.pop, "DISFLOW_BOARDS", None)
+        _code, out, _err = self._run(["board", "t"])
+        summary = next(line for line in out.splitlines() if line.startswith("列 "))
+        self.assertTrue(summary.startswith("列 req 0/0 · design 0/0 · dev 0/1 · verify 0/1"),
+                        f"旧树读数不该被配置改动改掉：{summary!r}")
 
     def test_board_empty_legal_column_prints_zero_and_exits_zero(self):
         """合法但**为空**的列：打 `0/0`、退出码 0（空列是事实，不是错误）。"""

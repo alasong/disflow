@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from . import graph
 from .model import new_node, next_id, validate_node_spec, validate_points
+from .spec import DEFAULT_STAGE, ENTRY_STAGE
 
 ROOT_ID = "root"
 
@@ -81,7 +82,7 @@ def _tree(state: dict, name: str) -> dict:
     # 不是可推导值。
     return state["trees"].setdefault(
         name, {"goal": "", "root": None, "nodes": {}, "assets": {},
-               "deadline": None})
+               "deadline": None, "boards": []})
 
 
 def _node(state: dict, tree_name: str, node_id: str) -> dict:
@@ -95,11 +96,29 @@ def _node(state: dict, tree_name: str, node_id: str) -> dict:
 def _on_tree_init(state: dict, event: dict) -> None:
     tree = _tree(state, event["slug"])
     tree["goal"] = event.get("goal", "")
+    # 板定义**由写时携带**（`Engine.init_tree` 从 cfg.boards 播种）：板随配置/树变，
+    # 而 reducer 不能读配置（一读就不可重放）。旧事件流不带它 ⇒ 投影为空 ⇒ 读路径回落 cfg。
+    if event.get("boards"):
+        tree["boards"] = list(event["boards"])
     if tree["root"] is None:
         tree["root"] = ROOT_ID
+        # `stage` 由**写时**给出（`Engine.init_tree` 写 `cfg.entry_stage`）：板定义可配后，
+        # 入口板随 boards.json 变，而 reducer 不能读配置（一读事件流就不可重放）。
+        # 回落 `ENTRY_STAGE` 只服务**早期事件流**（那时的 `tree.init` 不带 stage 字段）——
+        # 它的值冻结为当时的内建入口板，改它等于改历史的重放结果。
         tree["nodes"][ROOT_ID] = new_node(
-            ROOT_ID, parent=None, kind="container", stage="req", role="pm",
+            ROOT_ID, parent=None, kind="container",
+            stage=event.get("stage") or ENTRY_STAGE, role="pm",
             goal=tree["goal"])
+
+
+def _on_tree_boards(state: dict, event: dict) -> None:
+    """改该树的板定义（`tree.boards` 事件）——投影只赋值、**不校验**（校验在写时）。
+
+    与 `tree.deadline` 同一分界：reducer 一依赖配置/校验，事件流就不可重放了。
+    """
+    tree = _tree(state, event["slug"])
+    tree["boards"] = list(event.get("boards") or [])
 
 
 def _on_tree_goal(state: dict, event: dict) -> None:
@@ -134,7 +153,9 @@ def _on_node_expand(state: dict, event: dict) -> None:
             raise ValueError(f"节点 id 已存在：{node_id}")
         tree["nodes"][node_id] = new_node(
             node_id, parent=parent["id"],
-            kind=spec.get("kind", "task"), stage=spec.get("stage", "dev"),
+            # 同上：默认板由写时补（`Engine.expand` → `_with_default_stage`）；这里的
+            # `DEFAULT_STAGE` 只兜**早期事件流**（`node.expand` 里子节点没写 stage）。
+            kind=spec.get("kind", "task"), stage=spec.get("stage") or DEFAULT_STAGE,
             role=spec.get("role", "dev"), goal=spec.get("goal", ""),
             context=spec.get("context"), entry=spec.get("entry", ""),
             acceptance=spec.get("acceptance"),
@@ -372,6 +393,7 @@ _HANDLERS = {
     "tree.init": _on_tree_init,
     "tree.goal": _on_tree_goal,
     "tree.deadline": _on_tree_deadline,
+    "tree.boards": _on_tree_boards,
     "node.expand": _on_node_expand,
     "node.require": _on_node_require,
     "node.unrequire": _on_node_unrequire,

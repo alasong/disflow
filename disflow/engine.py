@@ -10,6 +10,9 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from . import config, gates, graph, store, worktree
+from .boards import dump as boards_dump
+from .boards import from_projection as boards_from_projection
+from .boards import parse as parse_boards
 from .config import Config
 from .core import RUNNING
 from .dispatch import dispatch_plan, handoff_brief, result_contract, validate_result
@@ -24,8 +27,26 @@ from .ready import (
     ready_tasks,
     running_tasks,
 )
-from .spec import SPEC
+from .spec import DEFAULT_STAGE, SPEC
 from .state import project
+
+
+def _with_default_stage(children: list[dict], default: str) -> list[dict]:
+    """给**没写 `stage`** 的子节点补上默认板；写了的一律原样（不覆盖显式声明）。
+
+    为何在**写时**补而不是留在 reducer 的 `spec.get("stage", "dev")`：默认板是**策略**，
+    随 `boards.json` 变；reducer 一读配置，事件流就不可重放了（见 `_validate_vocabulary`
+    的 docstring）。写时补齐 ⇒ 事件里永远是显式值，reducer 那份 `"dev"` 只剩重放旧流的兜底。
+
+    为何要补：不补的话，自定义板集下写死的 `"dev"` 会让节点落在一块**不存在的板**上 ——
+    写时校验看不见它（`_validate_vocabulary` 只在键存在时校验），视图只能把它当
+    「非规范列」追加到末尾。一个静默错位，正是本次要修掉的那类 bug。
+
+    `stage` 键在但值为 `None` 的**不算没写**（保持与 reducer `spec.get("stage", ...)`
+    同样的语义：只有键缺失才走默认）。
+    """
+    return [{**child} if "stage" in child else {**child, "stage": default}
+            for child in children]
 
 
 def _make_lease(holder: str, ttl: int) -> dict:
@@ -191,11 +212,50 @@ class Engine:
 
     # ── 树 ────────────────────────────────────────────────────────────────
 
-    def init_tree(self, tree: str, goal: str) -> dict:
+    def init_tree(self, tree: str, goal: str, boards: tuple = ()) -> dict:
         # 写时闸门：树名会构成 worktree 路径段，路径形名字一律拒收（不落事件）。
         validate_path_name(tree, what="树名")
+        # 板定义与 root 的 `stage` 都**写进事件**（而不是留在 reducer 里写死）：板集可配后，
+        # 入口板随配置变，而 reducer 一读配置事件流就不可重放了。写时补齐 ⇒ 事件里永远是
+        # 显式值。**逐树覆盖**：`boards` 给了就用它（该树自己的板集），否则用进程级
+        # `cfg.boards`（项目级播种）。`state._on_tree_init` 那份 `"req"` 只剩重放旧流的兜底。
+        chosen = tuple(boards) if boards else self.cfg.boards
         return self._write("tree.init", tree=tree, existing=False,
-                           prepare=lambda _: {"goal": goal})
+                           prepare=lambda _: {"goal": goal, "stage": chosen[0].id,
+                                              "boards": boards_dump(chosen)})
+
+    def _tree_boards(self, tree_state: dict) -> tuple:
+        """该树的板定义：**投影优先**（事件携带 = 该树的事实），缺失回落 `cfg.boards`。
+
+        为何投影优先：板定义随 `tree.init`/`tree.boards` 事件进了事件流 ⇒ 每棵树有自己的
+        板集，且重放时与配置文件无关（可重放）。回落 cfg 只服务**旧事件流**（那时不带 boards）。
+        """
+        return boards_from_projection(tree_state.get("boards")) or self.cfg.boards
+
+    def _tree_stages(self, tree_state: dict) -> tuple[str, ...]:
+        """该树的板 id 列表 = 该树里 `stage` 取值的闭集（写时校验用）。"""
+        return tuple(board.id for board in self._tree_boards(tree_state))
+
+    def _tree_default_stage(self, tree_state: dict) -> str:
+        """该树里「没声明 `stage` 的任务」落的板：内建默认板在则用它，否则回落入口板。"""
+        ids = self._tree_stages(tree_state)
+        return DEFAULT_STAGE if DEFAULT_STAGE in ids else ids[0]
+
+    def set_boards(self, tree: str, boards: tuple, *, reason: str = "") -> dict:
+        """改该树的板定义（`tree.boards` 事件）——`set_stage` 的**树级同形补口**。
+
+        为何要有：`boards.json` 是**进程级**的（全项目一份），要「逐树覆盖」就得有个
+        写事件的口子——否则「同一棵树在不同机器上列不同」会让重放不可复现。板定义进
+        事件流后，它成为该树的**事实**，与配置文件解耦。
+
+        校验同 `boards.json`（保留 id / 重复 id / 空）吗？**是**——写时拒绝，不静默。
+        """
+        if not str(reason or "").strip():
+            raise EngineError("boards 必须给 --reason：为何改板定义（记入事件，可审计）")
+        chosen = parse_boards({"boards": boards_dump(tuple(boards))})
+        return self._write("tree.boards", tree=tree,
+                           prepare=lambda _: {"boards": boards_dump(chosen),
+                                              "reason": reason})
 
     def set_goal(self, tree: str, goal: str) -> dict:
         return self._write("tree.goal", tree=tree, prepare=lambda _: {"goal": goal})
@@ -211,35 +271,41 @@ class Engine:
 
     # ── 节点与图 ──────────────────────────────────────────────────────────
 
-    def _validate_stage(self, node_id: str, stage: object) -> None:
-        """`stage` 取值校验——**写时**，用解析后的配置（闭集）。
+    def _validate_stage(self, node_id: str, stage: object, allowed: tuple[str, ...]) -> None:
+        """`stage` 取值校验——**写时**，用**该树**的板集（闭集）。
 
         判据与 `_validate_vocabulary` 对 `stage` 的那一条**同款同形**：取值必须在
-        `cfg.stages` 内，否则响亮拒收并报出允许的取值。`set_stage`（改列）与 `expand`
-        （建节点）必须用同一套判据，否则错别字能绕过改列那道口子（建时拦得住、改时放进来）。
-        """
-        if str(stage) not in self.cfg.stages:
-            raise EngineError(
-                f"{node_id}: stage 取值非法：{stage!r}（允许：{list(self.cfg.stages)}）"
-                "——自定义看板列请写进 disflow.json 的 \"stages\"")
+        `allowed`（该树的板 id）内，否则响亮拒收并报出允许的取值。`set_stage`（改列）与
+        `expand`（建节点）必须用同一套判据，否则错别字能绕过改列那道口子。
 
-    def _validate_vocabulary(self, children: list[dict]) -> None:
+        为何用「该树的板集」而不是 `cfg.stages`：逐树覆盖后，同一进程里不同树可以有不同的
+        板——用进程级配置校验会让 A 树的合法列被 B 树的字典拒掉。
+        """
+        if str(stage) not in allowed:
+            raise EngineError(
+                f"{node_id}: stage 取值非法：{stage!r}（该树允许：{list(allowed)}）"
+                "——自定义看板请写进该树的 boards（disflow init --boards / boards.json）")
+
+    def _validate_vocabulary(self, children: list[dict], allowed_stages: tuple[str, ...]) -> None:
         """`stage` / `role` 取值校验——**写时**，用解析后的配置。
 
         为何只在写时、不在 reducer 里校验：reducer 一依赖配置，事件流就**不可重放**了
-        ——换台机器或改了 `stages`，重放旧事件会直接失败。所以分两处：
+        ——换台机器或改了 `boards.json`，重放旧事件会直接失败。所以分两处：
           - **写时**（这里）：挡住错别字，报出允许的取值；
           - **读时**（`views.py`）：对未知 stage **容忍**（`order += sorted(...)`）——
             事件流可能来自更新的版本 / 不同的配置，视图不能崩。
         之前两边都没有：`stage: "audti"` 会静默多出一个看板列。
+
+        `allowed_stages` 由调用方传**该树**的板 id（逐树覆盖后不同树可以不同），
+        不再一律用进程级 `cfg.stages`。
         """
         for child in children:
             node_id = child.get("id", "?")
             stage = child.get("stage")
-            if stage is not None and str(stage) not in self.cfg.stages:
+            if stage is not None and str(stage) not in allowed_stages:
                 raise EngineError(
-                    f"{node_id}: stage 取值非法：{stage!r}（允许：{list(self.cfg.stages)}）"
-                    "——自定义看板列请写进 disflow.json 的 \"stages\"")
+                    f"{node_id}: stage 取值非法：{stage!r}（该树允许：{list(allowed_stages)}）"
+                    "——自定义看板请写进该树的 boards（disflow init --boards / boards.json）")
             role = child.get("role")
             if role is not None and str(role) not in self.cfg.roles:
                 raise EngineError(
@@ -256,15 +322,19 @@ class Engine:
         任务 = 让该信号失真而不自知（消费方会基于一个未真正完成的上游开工）。要加就先
         显式重开（`disflow reopen`）——报错文本直接给出该命令，不让人猜。
         """
+        # 未声明 `stage` 的子节点补上默认板 —— 用**该树自己的**默认板（默认随树的板集变）。
+        # 补齐在 `prepare`（能拿到当前树）而不是这里（拿不到）——否则自定义板集下写死的
+        # 默认板会落在一块不存在的板上。`guard` 先校验**显式**值（未声明的留给 prepare）。
         def guard(t: dict) -> None:
             self._need(t, parent)
             if t.get("closed"):
                 raise EngineError(
                     f"{tree} 已关闭（tree.close）：在关闭后挂任务会让 awaits 的完成信号失真——\n"
                     f"  要接着干就先显式重开：disflow reopen {tree} --reason '<为何重开>'")
-            self._validate_vocabulary(children)
+            self._validate_vocabulary(children, self._tree_stages(t))
         return self._write("node.expand", tree=tree, node=parent, guard=guard,
-                           prepare=lambda _: {"children": children, "holder": holder})
+                           prepare=lambda t: {"children": _with_default_stage(
+                               children, self._tree_default_stage(t)), "holder": holder})
 
     def require(self, tree: str, node: str, dep: str) -> dict:
         def guard(t: dict) -> None:
@@ -613,7 +683,7 @@ class Engine:
                     f"（收尾态 {_STAGE_FROZEN} 是历史记录，改列等于改写历史）。\n"
                     f"  要改先 reopen：failed 可 `disflow retry {tree} {node}` 放回 pending 再改；"
                     "done/skipped 无重开路径，确需调整请另起节点。")
-            self._validate_stage(node, stage)
+            self._validate_stage(node, stage, self._tree_stages(t))
         return self._write("node.stage", tree=tree, node=node, guard=guard,
                            prepare=lambda _: {"stage": str(stage), "reason": reason,
                                               "holder": holder})

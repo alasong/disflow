@@ -210,18 +210,20 @@ disflow 决定，**无硬编码列表**。
 
 | 项 | 实测 |
 | --- | --- |
-| 配置位置 | `<项目根>/disflow.json`，**与状态目录是兄弟**（`$DISFLOW_CONFIG` 可指别处） |
-| 为何要独立 | 配置是**策略**（人写、进版本库、要 review），状态是**派生**（可由 rebuild 从事件重建）——放一起的话「删 `.disflow/` 重置」会**静默带走策略** |
-| 优先级 | 内建默认 < `disflow.json` < 显式参数/节点声明 |
-| 报错 | 未知键/类型错 **报错**并列允许的键（不静默忽略） |
-| 可见 | `doctor` 全绿时报出 8 个键的实际取值与来源 |
+| 配置位置 | 引擎参数：`<项目根>/disflow.json`；看板定义：`<项目根>/boards.json` —— 都与状态目录是**兄弟**（`$DISFLOW_CONFIG` / `$DISFLOW_BOARDS` 可指别处） |
+| 为何要独立 | 配置是**策略**（人写、进版本库、要 review），状态是**派生**（可由 rebuild 从事件重建）——放一起的话「删 `.disflow/` 重置」会**静默带走策略**；板定义再单独一个文件，因为它会**长大**（动态建板）且变更节奏不同 |
+| 优先级 | 内建默认 < `boards.json` / `disflow.json` < 显式参数/节点声明 |
+| 报错 | 未知键/类型错 **报错**并列允许的键（不静默忽略）；`disflow.json` 的 `stages` **已退役**，写了报错 + 迁移指引 |
+| 可见 | `doctor` 全绿时**按来源分组**报出每个键的实际取值（两个配置文件了，来源不再唯一） |
 
 **修的最尖锐一条**：验收超时 `DEFAULT_TIMEOUT=120` 曾是模块常量，节点声明不了 ⇒
 跑 >2 分钟的验收**这道门永远过不去**，唯一出路是写 `waiver`——等于**把门关掉**。
 现在：`acceptance.timeout`（节点） > `acceptance_timeout`（项目）。
 
 **其余可配**：`git_timeout`、`output_tail`、`walk_ignore`（指纹递归剪枝）、
-`size_budget`、`lease_ttl`、`stages`、`roles`。
+`size_budget`、`lease_ttl`、`roles`、`question_policy`；看板定义（板 id + 标签）在
+`boards.json`，并派生出 `stages` / `entry_stage`（root 落的板）/ `default_stage`（任务没声明
+`stage` 时落的板）。
 
 **边界：机制词汇不进配置**。`EVENT_KINDS`←→`_HANDLERS` 留在代码里，靠
 `test_declarations.py` 做编译/测试期保证；挪进配置就退化成运行期才发现，
@@ -231,11 +233,13 @@ disflow 决定，**无硬编码列表**。
 
 | 时机 | 行为 | 为何 |
 | --- | --- | --- |
-| **写**（`expand`） | 未知值 → 报错，并指出“自定义列请写进 `disflow.json`” | 之前 `stage:"audti"` 会**静默多出一个看板列** |
+| **写**（`expand`） | 未知值 → 报错，并指出“自定义看板请写进 `boards.json`” | 之前 `stage:"audti"` 会**静默多出一个看板列** |
 | **读**（`views.board_lines`） | 未知 stage **容忍**（`order += sorted(...)`） | 事件流可能来自更新的版本/不同配置，视图不能崩 |
 
 **为何 reducer 不校验**：reducer 一依赖配置，事件流就**不可重放**了——换台机器或改了
-`stages`，重放旧事件会直接失败。「事件流不可重放」比「错别字没当场报」严重得多。
+`boards.json`，重放旧事件会直接失败。「事件流不可重放」比「错别字没当场报」严重得多。
+同一条理由推出：默认板（`entry_stage` / `default_stage`）由**写时**落进事件，reducer 里那份
+`"req"`/`"dev"` 只剩**重放旧事件流**的兜底。
 
 **顺带修的映射表**：`import_mgt` 的 `role = todo.get("org")` 是错的——mgt 的 `org` 是
 **自由团队名**（`backend`/`quality-guild`），disflow 的 `role` 是小闭集。

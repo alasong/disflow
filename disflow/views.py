@@ -2,8 +2,12 @@
 
 同一投影的三种渲染 —— 看板（按 stage）/ 树（按 parent）/ 图（按边）。**同源**，不各存一份。
 
-看板 = **阶段列 × 树层级**（2026-10-11 用户要求：「看板的运行视图，能按照阶段列出来，
-并且能按树结构的类别分层」）。布局**只有 `board_layout` 一处实现**：人读态（`board_lines`）
+看板有**两种分组**（2026-10-11 用户裁决「我要的是四个看板」）：
+- `board_layout` / `board_lines` —— **一块板 × 阶段列**：四个阶段是同一块板里的四列。
+- `boards_layout` / `boards_lines` —— **四块板 × 一个阶段**：阶段升格为板与板之间的划分，
+  板头报相邻阶段的完成度（板间工作流）。两者**同一份布局**，后者直接消费前者的列。
+
+布局**只有 `board_layout` 一处实现**：人读态（`board_lines` / `boards_lines`）
 与机器态（`disflow board --json`）都从它渲染。宿主**运行视图**有自己的分列（v10 起它答的是另一个
 问题：**现在谁在跑 / 谁还没做**，见 `.agents/skills/disflow/lanes_watch.py`），但**阶段列名与 goal
 截断仍共用**（列读配置、截断走 `truncate_goal`）。
@@ -17,7 +21,7 @@ from __future__ import annotations
 
 from .dispatch import drive
 from .model import children_of
-from .spec import STAGES
+from .spec import STAGE_LABELS, STAGES
 
 _MARKS = {"done": "✓", "running": "▶", "failed": "✗", "skipped": "—", "pending": "·"}
 _CONTAINER_MARK = "◦"
@@ -151,8 +155,9 @@ def board_layout(tree: dict, stage: str | None = None,
                  empty_columns: bool = True) -> dict:
     """看板布局的**唯一实现**：阶段列 + 列内树层级 + 列内状态分组。
 
-    **列定义单一来源**：`stages`（省略取 `spec.STAGES`；CLI 传解析后的 `cfg.stages`，
-    于是 `disflow.json` 的 `stages` 就是列的唯一来源 —— 视图层不再抄一份字面量）。
+    **列定义单一来源**：`stages`（省略取 `spec.STAGES` 内建默认；CLI 传解析后的 `cfg.stages`，
+    而 `cfg.stages` 由 `boards.json` **派生** —— 板定义住 `disflow/boards.py`，
+    视图层不读文件、也不抄一份字面量）。
 
     **固定列**：按配置顺序**逐列输出全部列**，空列显式显示 `0/0`。
     为何要空列（2026-10-11 用户裁决）：只打「出现过的列」时，`board` 在需求/设计为空的树上
@@ -163,7 +168,8 @@ def board_layout(tree: dict, stage: str | None = None,
     —— 与 `engine._validate_vocabulary` 的「读时容忍」同一条纪律（视图对未知值容忍、不崩），
     但容忍不等于静默隐藏数据。
 
-    **`[req]` 列 = 树自身的目标**：root 是**容器**（`stage=req`，其 `goal` 就是树的目标），
+    **第一列 = 树自身的目标**：root 是**容器**（`stage` = 流程入口板，即板序第一块；
+    内建流程里是 `req`，其 `goal` 就是树的目标），
     它以**结构行**出现，于是需求看得见——改动前 board 明确排除容器（`kind != "task"` 跳过），
     `[req]` 恒 `0/0`，等于把需求藏了。但容器**不是该列的任务行**：表头计数只数任务，
     容器不计入 `done/total`（与 `ready.progress` / `metrics`「容器不量化」同一口径）。
@@ -312,6 +318,105 @@ def board_lines(tree: dict, stage: str | None = None,
     for item in board_rows(tree, stage, stages, closed=closed, tree_name=tree_name,
                            active_only=active_only, empty_columns=empty_columns):
         lines.append(item["text"])
+    return lines
+
+
+def _stage_label(stage: str, labels: dict[str, str] | None = None) -> str:
+    """阶段的人读标签 —— 缺项即回落成阶段名（自定义板不崩，也不另造第二份词表）。
+
+    `labels` 由调用方从**配置**传入（`Config.labels` ← `boards.json`）；省略时用内建默认
+    （`spec.STAGE_LABELS`）—— 视图层不读文件，配置归 `config`/`boards` 两个模块。
+    """
+    table = STAGE_LABELS if labels is None else labels
+    return table.get(stage, stage)
+
+
+def boards_layout(tree: dict, stages: tuple[str, ...] | None = None, *,
+                  labels: dict[str, str] | None = None,
+                  closed: set[str] | frozenset[str] = frozenset(),
+                  tree_name: str = "", active_only: bool = False,
+                  empty_boards: bool = True) -> dict:
+    """**四块板**：一个阶段一块板（板内 = 树层级 + 状态分组）。
+
+    与 `board_layout` 的关系是**同一份布局换一种分组**：阶段在 `board` 里是「板内的列」，
+    在这里是「板与板之间的划分」。数据一个字都不多 —— 本函数**直接消费 `board_layout` 的列**，
+    不重算写面冲突、不另存判据（`board_layout` 仍是布局的**唯一实现**）。
+
+    **板间工作流**：每块板带 `upstream` / `downstream`（相邻阶段的 `done/tasks`）。
+    为何只给**相邻**阶段而不是整条链：整条链会让板头变成长表格，而读者只关心
+    「我上一关过了没」——上游没过，本板的活就还没轮到（可派性由 `dispatch.drive` 判定，
+    这里只**显示**，不参与判定）。
+
+    **板名从配置来**：`labels`（`Config.labels` ← `boards.json`）—— 视图不读文件、不硬编码
+    中文名；自定义板缺标签时回落成 id。`empty_boards=False` 只影响**渲染层**，机器态恒为全量。
+    """
+    layout = board_layout(tree, None, stages, closed=closed, tree_name=tree_name,
+                          active_only=active_only, empty_columns=True)
+    columns = layout["columns"]
+    total = len(columns)
+
+    def _peer(column: dict) -> dict:
+        return {"stage": column["stage"], "label": _stage_label(column["stage"], labels),
+                "done": column["done"], "tasks": column["tasks"]}
+
+    boards: list[dict] = []
+    for index, column in enumerate(columns):
+        boards.append({
+            "stage": column["stage"],
+            "label": _stage_label(column["stage"], labels),
+            "index": index + 1,
+            "total_boards": total,
+            "canonical": column["canonical"],
+            "tasks": column["tasks"],
+            "done": column["done"],
+            "upstream": _peer(columns[index - 1]) if index > 0 else None,
+            "downstream": _peer(columns[index + 1]) if index + 1 < total else None,
+            "groups": column["groups"],
+        })
+    if not empty_boards:
+        boards = [b for b in boards if b["tasks"]]
+    return {"tree": layout["tree"], "root": layout["root"], "goal": layout["goal"],
+            "boards": boards}
+
+
+def board_head(board: dict) -> str:
+    """板头（**唯一实现**）：序号 + 标签 + 阶段名 + 完成度 + 上游完成度。"""
+    flow = ""
+    if board["upstream"]:
+        flow = f"  ← {board['upstream']['label']} {board['upstream']['done']}/{board['upstream']['tasks']}"
+    return (f"══ 板 {board['index']}/{board['total_boards']} · {board['label']} "
+            f"[{board['stage']}] {board['done']}/{board['tasks']} ══{flow}")
+
+
+def boards_lines(tree: dict, stages: tuple[str, ...] | None = None, *,
+                 labels: dict[str, str] | None = None,
+                 closed: set[str] | frozenset[str] = frozenset(),
+                 tree_name: str = "", active_only: bool = False,
+                 empty_boards: bool = True) -> list[str]:
+    """人读态：**四块板**（一块板一个阶段）—— 与 `board --by board --json` 同源。
+
+    行形状：板头 `══ 板 N/M · <标签> [<stage>] done/total ══  ← <上游> d/t`
+    → 组标签 → 行。行本身**复用 `_row_line`**（与 `board` 同一个渲染，不另写一份缩进/截断）。
+
+    板间用空行隔开：四块板是一个**流程**，不是四个挤在一起的段落。
+    """
+    layout = boards_layout(tree, stages, labels=labels, closed=closed, tree_name=tree_name,
+                           active_only=active_only, empty_boards=empty_boards)
+    lines: list[str] = []
+    for board in layout["boards"]:
+        if lines:
+            lines.append("")
+        lines.append(board_head(board))
+        shown = [group for group in board["groups"] if group["rows"]]
+        if not shown:
+            # 空板要说清是**真没有任务**还是**被终态折叠**——两者长得一样但意思相反。
+            lines.append("  （空 —— 本阶段还没有任务）" if not board["tasks"]
+                         else "  （终态折叠：--all 展开）")
+            continue
+        for group in shown:
+            lines.append(group["label"])
+            for row in group["rows"]:
+                lines.append(_row_line(row, group))
     return lines
 
 

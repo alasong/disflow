@@ -430,7 +430,7 @@ disflow graph <tree> [--dot]                # 图：requires/relates
 
 | 布局判据 | 行为 |
 | --- | --- |
-| **列** | 配置顺序（`spec.STAGES` → `disflow.json` 的 `stages`）**逐列全出**，空列显式 `0/0`；非规范 stage 追加末尾并标注（读时容忍 ≠ 静默隐藏） |
+| **列** | 配置顺序（`boards.json` 的板序；缺失 = 内建 `spec.STAGES`）**逐列全出**，空列显式 `0/0`；非规范 stage 追加末尾并标注（读时容忍 ≠ 静默隐藏） |
 | **列内层级** | 容器（`kind=container`）是**结构行**（`◦`），任务按 `parent` 缩进；深度按**列内**祖先链算——祖先不在本列时子节点照旧出现（不丢、不负缩进） |
 | **`[req]` 列** | 显示**树自身的目标**（root 容器的 `goal`）；容器**不计入** `done/total`（与 `ready.progress`「容器不量化」同一口径） |
 | **列内状态分组** | `▶ 运行中(holder)` / `· 可派` / `· 待前置(缺哪个 requires)` / `· 被在跑挡住(与谁、重叠路径)` / `✓ 完成` / `— 跳过` / `✗ 失败`——某组只要有一个节点就必须出现 |
@@ -447,6 +447,25 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
 ```
 
 > 当前实现：多棵树共享一个状态目录（`trees` 映射）。**物理隔离**可用 `DISFLOW_STATE_DIR` 给每棵树独立的事件流。
+
+### 6.1 逐树看板：板定义进事件流（2026-10-11，D4 后半）
+
+**板是策略，但「该树有哪些板」是事实**。`boards.json` 是**进程级**的（全项目一份，同一棵树在
+不同机器上可能读到不同值）。若列由配置文件决定，重放旧事件流会渲染出不同的列 ⇒ **事件流
+不可重放**。故：板定义随 `tree.init` / `tree.boards` 写进事件，投影携带（`tree["boards"]`）
+——它成为该树的**事实**，与文件解耦。
+
+| 环节 | 行为 |
+| --- | --- |
+| **播种** | `Engine.init_tree` 从 `cfg.boards` 写 `tree.init` 的 `boards`（**建树时**的快照）；CLI `init --boards '<ids>'` / `init --boards <file>` 可给该树**单独**的板集（逐树覆盖） |
+| **读取** | `views`/`cli`/`engine` 一律读**该树**的板集（`Engine._tree_boards`）；缺失（旧事件流）回落 `cfg.boards` |
+| **校验** | `stage` 写时闭集 = **该树**的板 id（不是进程级 `cfg.stages`）⇒ 甲树的合法列不会被乙树的字典拒掉 |
+| **默认板** | 任务没声明 `stage` ⇒ 该树里 `dev` 在则用它，否则**入口板**（板序第一块）；补默认发生在 `prepare`（能拿到该树）而非调用前 |
+| **改板** | `Engine.set_boards`（`tree.boards` 事件 + 理由；**暂无 CLI 动词**）——**不**追溯改写已有节点的 `stage`（节点的列是它自己的事实；旧列按「读时容忍」作非规范列显示） |
+| **重放** | 换 `boards.json` 后，旧树读数**逐字节不变**；新树才拿新配置（`tests/test_boards_per_tree.py` 钉住） |
+
+**为何不做「按树放一个 `boards.json` 文件」**：那还是**进程级**读取——同一棵树在不同机器/
+时刻读到不同文件，重放照样不可复现。判据是**可重放**，不是「文件放哪」。
 
 ---
 
@@ -779,9 +798,15 @@ disflow doctor                                     # 自检
 - **重置不丢**：删掉状态目录后配置照旧生效。
 - 生产默认下二者是**兄弟**（`disflow.json` vs `.disflow/`），不是子文件。
 
-**优先级**：内建默认 < `disflow.json`（`$DISFLOW_CONFIG` 可指别处）< 显式参数/节点声明。
+**优先级**：内建默认 < `boards.json` / `disflow.json`（`$DISFLOW_CONFIG` / `$DISFLOW_BOARDS`
+可指别处）< 显式参数/节点声明。
 
-| 键 | 默认 | 节点级覆盖 |
+**两个配置文件，互不为前提**：引擎参数住 `disflow.json`，**看板定义住 `boards.json`**
+（板 id 即 `stage` 取值闭集）。分开的理由：板定义会**长大**（动态建板），变更节奏与
+引擎参数（超时/预算/租约）不同。`disflow.json` 的 `stages` 键**已退役**（写了响亮报错 +
+迁移指引，不静默回落——回落就是「同一件事两处定义」）。
+
+| 键（`disflow.json`） | 默认 | 节点级覆盖 |
 | --- | --- | --- |
 | `acceptance_timeout` | 120 | `acceptance.timeout` |
 | `git_timeout` | 20 | — |
@@ -789,8 +814,25 @@ disflow doctor                                     # 自检
 | `walk_ignore` | `.git`/`node_modules`/`__pycache__` 等 | — |
 | `size_budget` | 400 | `context.size_budget` |
 | `lease_ttl` | 900 | `start --ttl` |
-| `stages` | `req/design/dev/verify` | — |
 | `roles` | `dev/qa/pm` | — |
+| `question_policy` | 见 `spec.QUESTION_POLICY_DEFAULT` | `context.question_policy` |
+
+| 键（`boards.json`） | 默认 | 说明 |
+| --- | --- | --- |
+| `boards` | `req/design/dev/verify` | 板数组；顺序 = 板序 = 流程顺序；条目可写 `{"id","label"}` 或纯 `"id"`（label 回落成 id）；`done` 是**节点状态**不是板，写了拒收 |
+
+**板定义派生出三个值**（`Config` 的派生属性，不另存字段 ⇒ 不可能分叉）：
+`stages`（板 id 列表 = `stage` 取值闭集）、`entry_stage`（板序第一块 = root 容器落的板）、
+`default_stage`（任务没声明 `stage` 时落的板：`dev` 还在板集里就用 `dev`，否则回落入口板）。
+为何默认板不能在 reducer 里写死：板集可配后，写死的 `"dev"` 会让节点落在**一块不存在的板**上
+——写时校验看不见它（只在键存在时校验），视图只能把它当「非规范列」追加，**静默错位**。
+故由 `Engine.init_tree` / `Engine.expand` **写时**落进事件（`tree.init` 带 `stage`、
+`node.expand` 的子节点补 `stage`）；reducer 里那份 `"req"`/`"dev"` 只剩**重放旧事件流**的兜底。
+
+**板定义本身也进事件流**（§6.1，2026-10-11）：`Engine.init_tree` 把 `cfg.boards` 的快照写进
+`tree.init` 的 `boards`（逐树覆盖 = `init --boards '<ids>'` / `set_boards`）；此后该树的
+**列 / `stage` 写时校验 / 默认板** 全读**投影里的板集**（`Engine._tree_boards`；缺失回落 cfg）。
+于是换 `boards.json` **不改旧树读数** ⇒ 可重放（`tests/test_boards_per_tree.py` 钉住）。
 
 **边界一：机制词汇不进配置**。`EVENT_KINDS`←→`_HANDLERS`、`KINDS`、`STORED_STATUS` 留在
 代码里，靠 `tests/test_declarations.py` 做**编译/测试期**保证；挪进配置就退化成**运行期**才发现，
@@ -800,15 +842,16 @@ disflow doctor                                     # 自检
 
 | 时机 | 行为 | 为何 |
 | --- | --- | --- |
-| **写**（`expand`） | 未知值 → 报错，并指出“若这是自定义列，写进 `disflow.json`” | 挡住错别字（之前 `stage:"audti"` 会**静默多出一个看板列**） |
+| **写**（`expand` / `stage`） | 未知值 → 报错，并指出“自定义看板请写进**该树的** boards（`disflow init --boards` / `boards.json`）” | 挡住错别字（之前 `stage:"audti"` 会**静默多出一个看板列**）；闭集是**该树**的板 id，不是进程级 `cfg.stages` |
 | **读**（`views.board_layout`） | 未知 stage **容忍**（追加在末尾并标注「非规范列」） | 事件流可能来自更新的版本/不同配置，视图不能崩 |
 
 **为何 reducer 不校验**：reducer 一依赖配置，事件流就**不可重放**了——换台机器或改了
-`stages`，重放旧事件会直接失败。「事件流不可重放」比「错别字没当场报」严重得多。
+`boards.json`，重放旧事件会直接失败。「事件流不可重放」比「错别字没当场报」严重得多。
 测试 `test_unknown_stage_from_another_writer_replays_and_renders` 钉住了这条。
 
-**配置在 `doctor` 里可见**（全绿时列出 8 个键的实际取值与来源；失败时只把路径并进 stderr 报告，
-保持“失败时 stdout 干净”的既有契约）：配置改了行为就变，那就得看得见。
+**配置在 `doctor` 里可见**（全绿时按来源**分组**列出每个键的实际取值——两个配置文件了，
+来源不再唯一；失败时只把路径并进 stderr 报告，保持“失败时 stdout 干净”的既有契约）：
+配置改了行为就变，那就得看得见。
 
 ---
 

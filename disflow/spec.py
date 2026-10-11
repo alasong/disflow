@@ -15,11 +15,38 @@ SPEC: dict = {
     }
 }
 
-# 看板列（stage）—— 仅用于视图分组，不参与就绪判定。
+# 看板定义（stage）的**内建默认**。**权威来源已搬到独立文件 `boards.json`**
+# （见 `disflow/boards.py`）：`Config.boards` 从那里读，`Config.stages` 由它派生。
+# 这里保留一份是为了「零配置可用」——两个文件都不存在时用这套。
+#
 # **四个阶段**（需求 → 设计 → 开发 → 验证），与设计原文的阶段图同形。
-# `done` **不是列**：它是节点**状态**（`core.TERMINAL`），与阶段是两个轴——留着它会造出一个
-# 永远为空、且与状态同名的列（大半节点状态是 done，列里却是 0）。凡是「干完了」用 status 表达。
+# `done` **不是板**：它是节点**状态**（`core.TERMINAL`），与阶段是两个轴——留着它会造出一个
+# 永远为空、且与状态同名的板（大半节点状态是 done，板里却是 0）。凡是「干完了」用 status 表达。
+# （`boards.py` 把这条变成机检：`RESERVED_IDS`，写进 boards.json 即拒收。）
 STAGES: tuple[str, ...] = ("req", "design", "dev", "verify")
+
+# 板的人读标签的**内建默认**（同上，权威来源是 boards.json 的 `label`）。
+# 缺项**回落成板 id 本身** —— 自定义板不会因为少一条标签就崩，也不逼使用者补一份标签表。
+# 机器态（`--json`）不带标签：标签是**渲染**的事，不是事实。
+STAGE_LABELS: dict[str, str] = {
+    "req": "需求",
+    "design": "设计",
+    "dev": "开发",
+    "verify": "验证",
+}
+
+# `stage` 的**两个内建默认**（都只在上面这套内建板里有意义；自定义 boards.json 时由
+# `Config.entry_stage` / `Config.default_stage` 从板序**派生**，见 `disflow/config.py`）。
+#
+# 为何要分开两个名字：它们回答的是两个不同的问题 ——
+#   - `ENTRY_STAGE`：**root 容器**落在哪块板。root 是树的自身目标，按流程语义该在**入口**。
+#   - `DEFAULT_STAGE`：**任务**没声明 `stage` 时落在哪块板。内建流程里是「开发」
+#     （大多数节点是干活的），这个选择**不是**从板序能推出来的 —— 所以它是个显式策略值。
+# 两者的**唯一权威**是 `boards.json`；这里这份是「两个文件都不存在」时的回落。
+# 注意：`state.py` 的 reducer 只把这两个名字当**重放旧事件流的兜底**（早期 `tree.init`
+# 不带 stage 字段），改它们会改变历史事件的重放结果 —— 不要为了让新配置生效而改这里。
+ENTRY_STAGE: str = STAGES[0]
+DEFAULT_STAGE: str = "dev"
 
 # 负责方（role）—— 与 stage 独立
 ROLES: tuple[str, ...] = ("dev", "qa", "pm")
@@ -53,7 +80,7 @@ SEDIMENT_ENTRIES: tuple[str, ...] = ("reflect", "standardize")
 
 # 事件 kind 闭集（投影 reducer 只认这些；出现未知 kind 即报错）
 EVENT_KINDS: tuple[str, ...] = (
-    "tree.init", "tree.goal", "tree.deadline",
+    "tree.init", "tree.goal", "tree.deadline", "tree.boards",
     "node.expand", "node.require", "node.unrequire", "node.relate", "node.unrelate",
     "node.import",
     "node.context",

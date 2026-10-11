@@ -154,8 +154,8 @@ MUTATIONS: list[Mutation] = [
      '    declared = None',
      "test_config.py"),
     ("配置文件被完全忽略（永远出厂默认）", "disflow/config.py",
-     '    path = config_path(cwd)\n    if not os.path.isfile(path):',
-     '    path = config_path(cwd)\n    if True:',
+     '    boards = load_boards(cwd)\n    if not os.path.isfile(path):',
+     '    boards = load_boards(cwd)\n    if True:',
      "test_config.py"),
     ("未知配置键被静默忽略", "disflow/config.py",
      '    unknown = sorted(set(raw) - set(_VALIDATORS))',
@@ -170,7 +170,7 @@ MUTATIONS: list[Mutation] = [
      '            pass',
      "test_config.py"),
     ("stage 写时校验被移除（错别字静默多出一列）", "disflow/engine.py",
-     '            if stage is not None and str(stage) not in self.cfg.stages:',
+     '            if stage is not None and str(stage) not in allowed_stages:',
      '            if False:',
      "test_config.py"),
     ("配置路径跟着状态目录走（不再独立）", "disflow/config.py",
@@ -364,8 +364,10 @@ MUTATIONS: list[Mutation] = [
      '',
      "test_reopen.py"),
     ("expand 事件不带 holder（则谁挂的无从追溯）", "disflow/engine.py",
-     '                           prepare=lambda _: {"children": children, "holder": holder})',
-     '                           prepare=lambda _: {"children": children})',
+     '                           prepare=lambda t: {"children": _with_default_stage(\n'
+     '                               children, self._tree_default_stage(t)), "holder": holder})',
+     '                           prepare=lambda t: {"children": _with_default_stage(\n'
+     '                               children, self._tree_default_stage(t))})',
      "test_reopen.py"),
 
     # ── FR-15 提问纪律：brief 三样之一 + 让「我要问」报得出来 ───────────────
