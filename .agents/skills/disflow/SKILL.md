@@ -165,6 +165,31 @@ $D worktree reap <tree>            # **只打印命令，永不执行**
 
 ⚠ `worktree` 要求 **state dir 在仓外**，否则守卫按设计拒收（worktree 路径会落进仓里）。
 
+### 6.1 顺序约束：**先 `worktree apply`，后 `start`**（实测踩到，会白干一输）
+
+```bash
+$D worktree apply <tree>          # ① 先建 worktree
+$D start <tree> <node> --holder H # ② 再开工（基线会取 worktree 里的内容）
+# worker 在 worktree 里干活…
+$D collect <tree> <node> --result '…'
+$D done <tree> <node>
+```
+
+**反了会怎样**：先 `start` 后 `apply` ⇒ `done` 时门**拒收**：
+
+```text
+✗ <node> 的开工基线取自 '<主仓>'，而本节点现有 worktree '<仓外路径>'——
+  基线不在门的目录里，门会空洞通过。
+  补救：disflow reopen <tree> --reason '…' 后重新 start（先 disflow retry <tree> <node>）
+```
+
+门是对的：基线是**内容指纹**，取自 `start` 时门的目录。目录不对 ⇒ 指纹无意义。
+
+**另一个同类坑**（开门后改文件再 `retry` + `start`）：基线会把「已改的它」收进去，
+于是 `done` 报 `⚠️ 门空洞通过（introduced 为空）`。**不是 bug**——
+判据是「开工**后**变了没有」，你在开工前就改完了，等价于没改。
+要拿到有效证据，就 **`start` 之后再动文件**。
+
 ## 7 派活时给 worker 配能力（`role` **不带能力**）
 
 **先看清一件事**：`role` 只是个**标签**（dev/qa/pm），`brief` 里**没有任何**能力字段。
