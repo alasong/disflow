@@ -19,13 +19,34 @@
 # 退出码：原样透传 disflow 的（0 通过 / 1 不过 / 2 环境不满足）。
 set -eu
 
+# 0) 解析软链：`$0` 指向的可能是链接，而不是真脚本。
+#    为何必须有这一步（实测踩到，后果是「装了启动器却报找不到包」）：
+#    文档教的是 `ln -s <仓>/scripts/disflow-shim.sh ~/bin/disflow`。
+#    若直接 `dirname "$0"`，得到的是 **~/bin**（链接所在目录），再取上一级
+#    ⇒ `$HOME/disflow`——一个不存在的位置。必须在推导仓根**之前**先解链。
+#    POSIX 没有 `readlink -f`，所以：优先用它；不行就手动循环解链（常见场景够用）。
+self=$0
+if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
+    self=$(readlink -f "$0")
+else
+    n=0
+    while [ -L "$self" ] && [ "$n" -lt 40 ]; do
+        target=$(readlink "$self")
+        case $target in
+            /*) self=$target ;;
+            *)  self=$(dirname -- "$self")/$target ;;
+        esac
+        n=$((n + 1))
+    done
+fi
+
 # 1) 定位 disflow 代码。优先 $DISFLOW_SRC；否则取本脚本所在仓的根（scripts/ 的上一级）。
 if [ -n "${DISFLOW_SRC:-}" ]; then
     src=$DISFLOW_SRC
 else
-    # 取本脚本所在目录的父目录（即 clone 的 disflow 仓根）。
-    # 用 subshell + `unset CDPATH` 代替 `CDPATH= cd`——后者是 POSIX 惯用法但可读性差（shellcheck SC1007）。
-    script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+    # 取本脚本所在目录的父目录（即 clone 的 disflow 仓根）。已是**解链后的**路径。
+    # 用 subshell 清空 CDPATH，避免它把相对路径打印出来污染取值。
+    script_dir=$(CDPATH='' cd -- "$(dirname -- "$self")" && pwd)
     src=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 fi
 if [ ! -d "$src/disflow" ]; then

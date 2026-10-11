@@ -78,6 +78,26 @@ class ShimTest(DisflowTestCase):
         self.assertIn("demo", proc.stdout, "子目录里应看到同一棵树的树列表")
         self.assertEqual(len(os.listdir(self.home)), 1, "不得为子目录另建状态目录")
 
+    def test_works_when_invoked_through_a_symlink(self):
+        """经过**软链**调用时也要能找到 disflow 包。
+
+        为何是硬判据（实测踩到，后果很重）：文档教的装法就是软链——
+        `ln -s <仓>/scripts/disflow-shim.sh ~/bin/disflow`。若脚本直接
+        `dirname "$0"`，拿到的是 **~/bin**（链所在目录），再取上一级得 `$HOME/disflow`
+        ——一个不存在的位置 ⇒ **「装了启动器却报找不到包」**。
+        必须先解链再推导仓根，POSIX 下没有 `readlink -f`，所以有回落逻辑。
+        """
+        link = os.path.join(self.home, "disflow-link")
+        os.symlink(SHIM, link)
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        env["DISFLOW_HOME"] = self.home
+        proc = subprocess.run([link, "doctor"], cwd=self.proj, env=env,
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("doctor 全绿", proc.stdout + proc.stderr)
+        self.assertNotIn("找不到 disflow 包", proc.stderr + proc.stdout,
+                         "软链场景下不得报找不到包")
+
     def test_missing_source_is_reported_with_a_fix(self):
         """源码路径不存在时**响亮报错 + 给修法**（不静默、不猜别处）。"""
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}

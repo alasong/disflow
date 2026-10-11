@@ -27,6 +27,28 @@ disflow host-next 我的树                      # 给出可照抄的 start/coll
 > 放在**仓外**是硬要求：仓内状态目录会被 git 追踪 ⇒ 污染改动集、worktree 不可用。
 > 在项目的**任何子目录**跑都落到同一状态目录（按仓根算，不按 cwd）。
 
+**让 AI 在别的项目里也知道怎么用**（skill 按**引用**注入，不复制）：
+
+```bash
+ln -s /改成你 clone 的 disflow 路径/.agents/skills/disflow ~/.agents/skills/disflow
+```
+
+> **为何要用软链而不是拷**：skills 是「**两阶段加载**」——启动时只把每个 skill 的
+> `name` + `description` + 路径放进 system prompt，**命中时才读全文**（不占常驻上下文）。
+> 软链指向仓内 ⇒ 改仓即生效，不会出现「手册改了但副本没同步」。
+>
+> **为何不能只靠仓内的 `.agents/skills/`**：项目级 skill 从 cwd 向上找、
+> **止于仓根** ⇒ 在**别的项目**工作时发现不到它。要跨项目可见，就必须放进
+> `~/.agents/skills/` 或 `~/.pi/agent/skills/`（pi 官方支持两个）。
+>
+> **提示（本机特有）**：若你在用 fat3 那套装配工具，它会扫 `~/.pi/agent/skills/`
+> 并对不在白名单里的条目报 `DRIFT`；`~/.agents/skills/` **不在它的管辖范围**
+> （fat3 `deploy-targets.json` 原话：「pi 官方支持两者，本机用后者」）。
+> 所以**优先用 `~/.agents/skills/`**，避开那道门。
+>
+> 验证（别只信"建了软链"）：在**任意非 disflow 目录**里运行 pi 并问它有哪些 skill——
+> 能列出 `disflow` 才算生效（实测在 `/tmp` 里得到确认）。
+
 **准备**——注意两点：`.gitignore` 与**配置文件**。状态目录必须被忽略，否则它会以
 「未跟踪目录」的身份被改动归因当成“本节点引入的改动”。配置文件（可选）必须
 **在第一次 `start` 之前**就位（或提交进仓库）——`start` 会拍下基线快照，
@@ -345,7 +367,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 882 passed（零第三方依赖）——**数字口径基准**（当场装载数，与并发无关）
+python3 -m unittest discover -s tests -t tests    # 883 passed（零第三方依赖）——**数字口径基准**（当场装载数，与并发无关）
 python3 scripts/finish.py                          # 收尾门：全量（**恒并行**）+ 资产 check（退出码当门）
 python3 scripts/finish.py --jobs 1                 # 单进程跑同一套（调试用；不再退回 direct discover）
 python3 scripts/finish.py --changed                # 迭代用：门只跑改动子集（**收尾仍须**跑不带它的）

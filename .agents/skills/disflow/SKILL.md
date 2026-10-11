@@ -17,11 +17,26 @@ disflow 算出 ready_wave  →  你 spawn 一个 subagent 干那个节点  →  
 
 ## 0 环境（一次）
 
+**首选：用启动器**——它自动推导下面两条，并保证状态目录在**仓外**：
+
 ```bash
-export PYTHONPATH=<本仓的绝对路径>          # 本仓根
-export DISFLOW_STATE_DIR=<仓外的目录>        # ⚠ 想用 worktree 隔离时必须放仓外，见 §6
+ln -s <disflow 仓的绝对路径>/scripts/disflow-shim.sh ~/bin/disflow   # 装一次
+D=disflow                             # 之后在本仓/任何项目里都能用
+```
+
+<details>
+<summary>手工方式（不想装启动器时）</summary>
+
+```bash
+export PYTHONPATH=<disflow 仓的绝对路径>     # 让 python -m disflow 能找到包
+export DISFLOW_STATE_DIR=<仓外的目录>        # ⚠ 仓内会污染改动集、worktree 不可用，见 §6
 D="python3 -m disflow.cli"
 ```
+
+**两者的差别**：启动器按 **git 仓根**算哈希 ⇒ 同一项目在**任何子目录**调用都落到
+**同一个**状态目录；手工方式要自己保证这一点（否则换个目录就像换了个项目）。
+
+</details>
 
 零依赖、纯标准库。状态是 `events.jsonl`（唯一真相）+ `state.json`（可重放的投影）。
 
