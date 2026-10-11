@@ -222,6 +222,43 @@ def topo_order(assets: dict[str, dict]) -> list[str]:
     return order
 
 
+def changed_files() -> list[str]:
+    """当前工作区的改动路径（git status；与 `test_changed.py` 同源口径）。"""
+    files: list[str] = []
+    for line in _git("status", "--porcelain").splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip()
+        if " -> " in path:               # 改名：取新名
+            path = path.split(" -> ", 1)[1]
+        files.append(path.strip('"'))
+    return sorted(set(files))
+
+
+def assets_for_paths(assets: dict[str, dict], paths: list[str]) -> list[str]:
+    """改动路径命中的资产：任一方是对方的路径前缀（目录内 / 目录本身）。"""
+    hits: list[str] = []
+    for aid, a in assets.items():
+        p = a["path"].rstrip("/")
+        for raw in paths:
+            q = raw.strip().rstrip("/")
+            if not q:
+                continue
+            if q == p or q.startswith(p + "/") or p.startswith(q + "/"):
+                hits.append(aid)
+                break
+    return sorted(hits)
+
+
+def refresh_plan(assets: dict[str, dict], paths: list[str]) -> list[tuple[str, str]]:
+    """刷新计划：改到的资产 ∪ 其下游（impact 闭包），按拓扑序（依据先）。"""
+    reasons: dict[str, str] = dict.fromkeys(assets_for_paths(assets, paths), "改动命中")
+    for h in list(reasons):
+        for d in reverse_impact(assets, h):
+            reasons.setdefault(d, f"下游（依据 {h}）")
+    return [(aid, reasons[aid]) for aid in topo_order(assets) if aid in reasons]
+
+
 def reverse_impact(assets: dict[str, dict], target: str) -> list[str]:
     """谁（传递地）把 target 当依据——改 target 后要复查的面。"""
     direct: dict[str, set[str]] = defaultdict(set)
@@ -309,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
     imp = sub.add_parser("impact", parents=[common], help="反查依赖指定资产的面")
     imp.add_argument("id")
     sub.add_parser("order", parents=[common], help="刷新顺序（依据先的拓扑序）")
+    pl = sub.add_parser("plan", parents=[common], help="改动路径 → 要刷新的资产（拓扑序）")
+    pl.add_argument("paths", nargs="*", help="改动路径；省略则取 git 工作区改动")
     args = parser.parse_args(argv)
 
     global ROOT
@@ -336,6 +375,21 @@ def main(argv: list[str] | None = None) -> int:
         for i, aid in enumerate(seq, 1):
             cat = assets[aid].get("category", "")
             print(f"  {i:2}. {aid:14} [{cat}]")
+        return 0
+
+    if args.cmd == "plan":
+        paths = args.paths or changed_files()
+        if not paths:
+            print("工作区无改动；用 `plan <路径…>` 指定")
+            return 0
+        plan = refresh_plan(assets, paths)
+        if not plan:
+            print(f"{len(paths)} 个改动路径未命中任何资产")
+            return 0
+        print(f"要刷新 {len(plan)} 条（依据先）：")
+        for i, (aid, why) in enumerate(plan, 1):
+            print(f"  {i:2}. {aid:14} ← {why}")
+        print("\n按此序跑 scan；收尾跑 check")
         return 0
 
     rows = derive(assets)

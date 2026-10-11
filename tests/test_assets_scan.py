@@ -130,6 +130,17 @@ class StaleRuleTest(unittest.TestCase):
         self.assertLess(order.index("a"), order.index("b"))
         self.assertLess(order.index("b"), order.index("c"))
 
+    def test_plan_is_touched_plus_downstream_in_topo_order(self):
+        """刷新计划 = 命中的资产 ∪ 其下游，按拓扑序；无关资产不进。"""
+        assets = {
+            "a": _asset(type="code", path="pkg/", premises=[]),
+            "b": _asset(path="docs/b.md", premises=["a"]),
+            "c": _asset(path="docs/c.md", premises=[]),
+        }
+        plan = self.scan.refresh_plan(assets, ["pkg/x.py"])
+        ids = [aid for aid, _ in plan]
+        self.assertEqual(ids, ["a", "b"])
+
 
 class IndexSyncTest(unittest.TestCase):
     """生成索引与手写注册表不许漂移（只比稳定字段）。"""
