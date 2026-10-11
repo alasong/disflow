@@ -17,7 +17,9 @@ disflow 算出 ready_wave  →  你 spawn 一个 subagent 干那个节点  →  
 
 ## 0 环境（一次）
 
-**首选：用启动器**——它自动推导下面两条，并保证状态目录在**仓外**：
+### 0.1 装 CLI（启动器）
+
+**首选启动器**——它自动推导下面两条，并保证状态目录在**仓外**：
 
 ```bash
 ln -s <disflow 仓的绝对路径>/scripts/disflow-shim.sh ~/bin/disflow   # 装一次
@@ -37,6 +39,35 @@ D="python3 -m disflow.cli"
 **同一个**状态目录；手工方式要自己保证这一点（否则换个目录就像换了个项目）。
 
 </details>
+
+### 0.2 让本 skill 在**别的项目**里也能被读到
+
+**不装这一步的话，你在别的项目里工作时 AI 看不到本手册**：项目级
+`.agents/skills/` 从 cwd 向上找、**止于那个项目的仓根**，永远走不到 disflow 仓。
+
+```bash
+ln -s <disflow 仓的绝对路径>/.agents/skills/disflow ~/.agents/skills/disflow
+```
+
+**不知道 disflow 仓在哪？从本手册自身的位置反推**（软链可解析，不用问人）：
+
+```bash
+# 你正在读的 SKILL.md 就住在这个目录：
+#   <仓根>/.agents/skills/disflow/
+# 所以仓根 = 它往上数三级：
+root=$(cd "$(dirname "$(readlink -f <本 SKILL.md 的路径>)")/../../.." && pwd -P)
+echo "$root"          # 就是 disflow 仓根
+```
+
+> **为何用软链而不是拷贝**：skills 是**两阶段加载**（启动时只放 `name`+`description`+
+> 路径，命中才读全文）⇒ 软链指向仓内，改仓即生效，不会出现「手册改了、副本没同步」。
+>
+> **为何是 `~/.agents/skills/` 而不是 `~/.pi/agent/skills/`**：pi 两个都支持，
+> 但后者可能被外部装配工具（fat3 那套）扫到并报 `DRIFT`（不在它的白名单里）——
+> 实测撞到。`~/.agents/skills/` 不在那个管辖范围，零污染。
+>
+> **验证（别只信“建了软链”）**：在**任意非 disflow 目录**里问 pi 有哪些 skill，
+> 能列出 `disflow` 才算生效。
 
 零依赖、纯标准库。状态是 `events.jsonl`（唯一真相）+ `state.json`（可重放的投影）。
 
