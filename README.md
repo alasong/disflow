@@ -248,6 +248,10 @@ python3 -m disflow.cli close demo          # 需 done 的 evaluate + reflect/sta
 python3 -m disflow.cli trees               # 列出所有树（● = 已 closed）
 python3 -m disflow.cli reap demo           # 回收过期租约（worker 崩溃后的兜底）
 
+# web 入口（本地）：看板 + 资产 + 下发任务
+python3 -m disflow.web                     # 默认 http://127.0.0.1:8765/
+python3 -m disflow.web --port 9000 --cwd /path/to/repo
+
 python3 -m disflow.cli doctor
 ```
 
@@ -326,7 +330,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 807 passed（零第三方依赖）——串行全量，口径基准
+python3 -m unittest discover -s tests -t tests    # 852 passed（零第三方依赖）——串行全量，口径基准
 python3 scripts/finish.py                          # 收尾门：全量 + 资产 check（退出码当门；默认并行，0=自动核数）
 python3 scripts/finish.py --jobs 1                 # 退回串行 discover（与上一行 README 命令逐字一致）
 python3 scripts/test_changed.py --all --jobs 8    # **收尾推荐**：全量 + 并发（96s→33s，2.9×）

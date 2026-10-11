@@ -51,6 +51,11 @@
 | `docs/decisions/0005-看板提升为一等实体.md` | decision | active | 看板从「视图」升为一等实体；树/图是板内维度，分发器/验收器挂在板上 |
 | `docs/decisions/0006-spec-一等公民.md` | decision | active | Spec 升为一等公民（独立实体）；Spec 关联资产（多对多），不是归属 |
 | `docs/decisions/0007-spec-术语-机制模块改vocab.md` | decision | active | 0007：spec 术语收口 —— 机制常量改 `STORAGE`、机制模块改 `vocab`（spec 专指交付规格） |
+| `docs/decisions/0008-看板不做web化.md` | decision | superseded by 0011 | 0008：看板不做 web 化 —— 形态排序/非目标仍有效，「不做」裁决已被 0011 推翻 |
+| `docs/decisions/0011-web入口-实现.md` | decision | active | 0011：web 入口**实现** —— 薄壳只读 + 写面白名单经 `Engine`（锁/门）；12 项真 HTTP 测试 |
+| `docs/decisions/0012-防漂移三门.md` | decision | active | 0012：**防漂移三门**（goal_align/code_quality/verify_real）—— 硬门 + 逃生口，理由过质量门 |
+| `docs/decisions/0009-步骤准入-软门槛.md` | decision | active | 0009：步骤准入**软门槛** —— 允许说明性步骤但必须显式标注「无判据」；skill 要保证准确性必须有可执行入口 |
+| `docs/decisions/0010-kaa融合-声明式.md` | decision | active | 0010：kaa 与 disflow 融合 —— 只取**互补判据**进现有扩展点（`weak_reason`/`claim_mismatch` 已落地），**不做双引擎** |
 
 ## 3. 增 / 改 / 删 的规矩
 

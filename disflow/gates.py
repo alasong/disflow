@@ -26,6 +26,55 @@ def _resolve_timeout(acceptance: dict | None, cfg: Config) -> float:
     return float(cfg.acceptance_timeout)
 
 
+def weak_reason(cfg: Config, reason: str) -> str | None:
+    """理由是不是「写了但等于没写」。返回拒收文案；具体理由返回 None。
+
+    融合自 kaa 的 `gates.weak_reason` —— 本仓原缺此判据，破例通道（`waiver`/
+    `no_result`/`scope_waiver`/`size_waiver`）默许任意非空字符串，于是「无」「不需要」
+    就能把门关掉。这里**不禁止破例**（禁掉会逼人绕过门、造出更坏的假绿），
+    只要求理由**具体到能复查**。
+
+    判据两条：① 去空白后整串命中词表（大小写不敏感）；② 长度 < 2 或纯标点 ——
+    后者防「。」「??」这类符号串钻空子。
+    """
+    text = str(reason or "").strip()
+    if not text:
+        return None                      # 空理由由各自的破例通道自己判（此处不越权）
+    words = {w.strip().lower() for w in (cfg.weak_reasons or ()) if w.strip()}
+    if not words:
+        return None                      # 词表空 = **整个判据关掉**（可配，不是写死）
+    if text.lower() in words:
+        return (f"理由过于笼统：{text!r} 命中敷衍词表 {sorted(words)}。"
+                f"请写清「具体是什么情况、为何豁免、影响面」——理由要具体到能复查。")
+    if len(text) < 2 or not any(ch.isalnum() for ch in text):
+        return f"理由过短或无实质内容：{text!r}（至少要能让人看懂是什么情况）"
+    return None
+
+
+def claim_mismatch(cfg: Config, summary: str, cmd: str) -> str | None:
+    """结果里「声称做了测试」而验收命令不像测试 —— 返回对账信号；否则 None。
+
+    融合自 kaa 的 `gates._claim_patterns` + `test_claim_words` 对账。本仓原缺此判据：
+    worker 写 `summary: "测试通过"`，而 `acceptance.cmd` 是 `true` —— 两条各自合法，
+    门却看不出它们**不是一回事**。
+
+    **信号而非拒收**（与 `vacuous_reasons` 同一纪律）：词表不可能完备，硬拒收会误杀
+    合法形态。本函数只产出文案，由调用方写进 `evidence`，**不参与任何拒绝判定**。
+    """
+    text = str(summary or "")
+    if not text.strip():
+        return None
+    tests = [w for w in (cfg.test_claim_words or ()) if w and w.lower() in text.lower()]
+    passes = [w for w in (cfg.claim_pass_words or ()) if w and w.lower() in text.lower()]
+    if not tests or not passes:
+        return None
+    lower_cmd = str(cmd or "").lower()
+    if any(w.lower() in lower_cmd for w in (cfg.test_claim_words or ()) if w):
+        return None
+    return (f"声称「{'/'.join(tests)} 通过」而验收命令不含测试词：{cmd!r}"
+            f"——两者不是一回事，请把真正的测试命令写进 acceptance.cmd")
+
+
 def _check_expect(returncode: int, output: str, expect: str) -> tuple[bool, str]:
     if expect == "exit0":
         return returncode == 0, f"exit={returncode}（期望 0）"
@@ -38,6 +87,152 @@ def _check_expect(returncode: int, output: str, expect: str) -> tuple[bool, str]
         ok = returncode == 0 and re.search(pattern, output) is not None
         return ok, f"exit={returncode}；期望匹配 /{pattern}/"
     raise ValueError(f"acceptance.expect 非法：{expect!r}（支持 exit0 | contains:… | regex:…）")
+
+
+def _goal_tokens(text: str, cfg: Config) -> set[str]:
+    """把一句目标切成**可比对的内容词**：英文按词、中文按 2-gram，去掉停用词与单字。
+
+    为何中文用 2-gram 而不是分词：本仓**零第三方依赖**（NFR-1），没有分词器；
+    2-gram 不需要词典、跨领域可用，代价是会把「需求分析」切出「需求/求分/分析」——
+    对本用途（有没有**共同词**）完全够用。
+    """
+    import re
+
+    stop = {w.lower() for w in (cfg.goal_stopwords or ())}
+    tokens: set[str] = set()
+    for word in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", text):
+        low = word.lower()
+        if low not in stop:
+            tokens.add(low)
+    for run in re.findall(r"[\u4e00-\u9fff]+", text):
+        if len(run) == 1:
+            continue
+        if run not in stop:
+            tokens.add(run)
+        for i in range(len(run) - 1):
+            gram = run[i:i + 2]
+            # 2-gram 也要过停用词表：跨词边界的碎片（如「做一」「一个」）不是内容词。
+            # 实测踩到：不过滤时「做一个需求分析」与「做一个日志清理」共享「做一」
+            # 就被判为对齐 ⇒ 门形同虚设。
+            if gram not in stop:
+                tokens.add(gram)
+    return tokens
+
+
+def goal_align(cfg: Config, goal: str, claim_text: str) -> str | None:
+    """产出声明是否跟节点目标**相关**（漂移门 1）—— 无关→拒收文案；相关→None。
+
+    为何需要：`scope_check` 拦「改了不该改的文件」、`acceptance` 拦「产出不对」，
+    **两者都不拦跑题** —— 验收命令写 `true` + 改动落在 `touch_plan` 内，两道门全绿，
+    但内容跟目标毫无关系。「做完了但没用」属于漂移，必须在门上拦。
+
+    判据：`goal` 与 `claim_text`（worker 的 summary / 是否真做了）的**内容词交集非空**。
+    为何取「非空」而不取比例：worker 的 summary 本来就是一句话，要求词覆盖度会大量误拒。
+    目标为空 ⇒ 无从比对，放行（不越权，与 `weak_reason` 的空理由同款）。
+    """
+    goal_text = str(goal or "").strip()
+    claim = str(claim_text or "").strip()
+    if not goal_text or not claim:
+        return None                       # 缺一边就无从比 —— 不越权
+    goal_tokens = _goal_tokens(goal_text, cfg)
+    claim_tokens = _goal_tokens(claim_text, cfg)
+    # 任一侧**切不出内容词** ⇒ 无从判定，放行（不越权）。
+    # 实测踩到：短目标（`A1` / `做 A`）经停用词过滤后词集为空 ⇒ 交集必空 ⇒ 即使
+    # 目标与声称**逐字相同**也被判跑题（门变成了噪声，把 10 个合法测试打红）。
+    # 正确边界：「信息不足」与「跑题」是两回事 —— 前者不该拒收。
+    if not goal_tokens or not claim_tokens:
+        return None
+    if goal_tokens & claim_tokens:
+        return None
+    return (f"产出声明与节点目标无共同内容词（疑似跑题）。目标：{goal_text[:60]!r}；"
+            f"声称：{claim[:60]!r}——若确属正常（如纯重构），声明 goal_waiver 破例并写清理由")
+
+
+def _py_file_issues(path: str) -> list[str]:
+    """单个 .py 文件的底线问题（漂移门 2 的实现，纯 AST，不执行）。"""
+    import ast
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"读不了：{exc}"]
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return [f"语法错（ast.parse 失败）：{exc.msg} @line {exc.lineno}"]
+    issues: list[str] = []
+    # 函数级检查（可变默认参）**单独遍历一次**：原先写在 `ast.walk(tree)` 循环里，
+    # 导致每个函数被外层每个 AST 节点各扫一遍 ⇒ 同一问题重复报 24 次（实测）。
+    for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        for default in list(fn.args.defaults) + [d for d in fn.args.kw_defaults if d is not None]:
+            if isinstance(default, (ast.List, ast.Dict, ast.Set)):
+                issues.append(f"line {default.lineno}: {fn.name} 用了可变默认参数（跨调用共享状态）")
+    for node in ast.walk(tree):
+        # 裸 `except:` 或 `except Exception:` 且体里无 raise —— 宽捕获吞掉真错
+        if isinstance(node, ast.ExceptHandler):
+            handler_type = node.type
+            bare = handler_type is None
+            broad = isinstance(handler_type, ast.Name) and handler_type.id in ("Exception", "BaseException")
+            has_raise = any(isinstance(n, ast.Raise) for n in ast.walk(node))
+            if (bare or broad) and not has_raise:
+                if bare:
+                    kind = "裸 except:"
+                elif isinstance(handler_type, ast.Name):
+                    kind = f"except {handler_type.id}:"
+                else:
+                    kind = "宽 except:"
+                issues.append(f"line {node.lineno}: {kind} 且未重新抛出（宽捕获掩盖真错）")
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value == True:  # noqa: E712（AST 常量比对）
+                    issues.append(f"line {node.lineno}: subprocess 用了 shell=True（命令注入面）")
+    return issues
+
+
+def code_quality(cwd: str, changed: list[str] | None, cfg: Config) -> dict:
+    """改动集里的 .py 是否过**代码底线**（漂移门 2）。返回 `{checked, files, issues}`。
+
+    为何需要：disflow 的验收命令可以是「文件包含 X」这类弱判据，语法/危险写法无人管 ——
+    改坏了语法而验收命令恰好不看那处，门就全绿。
+    为何只查四条（见 `vocab.CODE_QUALITY_SUFFIXES` 旁的常量注释）：它们都是**正确性**问题，
+    不是风格 —— 风格门会诱发大量无意义摩擦（kaa 实测：门拦下的多数是无害动作）。
+    非 git / 改动集为空 ⇒ `checked=False`（不假装验过，与 `vacuous_reasons` 同款）。
+    """
+    suffixes = tuple(cfg.code_quality_suffixes or ())
+    if not suffixes:
+        return {"checked": False, "files": [], "issues": []}
+    targets = [p for p in (changed or []) if p.endswith(suffixes)]
+    if not targets:
+        return {"checked": False, "files": [], "issues": []}
+    issues: dict[str, list[str]] = {}
+    seen: list[str] = []
+    for rel in targets:
+        full = os.path.join(cwd, rel)
+        if not os.path.isfile(full):
+            continue                       # 删除的文件不用查
+        seen.append(rel)
+        found = _py_file_issues(full)
+        if found:
+            issues[rel] = found
+    if not seen:
+        # 改动集里虽有 .py 后缀，但**文件都不可读/不存在**（删除或路径错）⇒ 未真验过。
+        # 不假装验过（与 `vacuous_reasons` 同款）。
+        return {"checked": False, "files": [], "issues": {}}
+    return {"checked": True, "files": seen, "issues": issues}
+
+
+def verify_real(cfg: Config, summary: str, cmd: str) -> str | None:
+    """假证据**硬门**（漂移门 3）：声称跑了测试而验收命令不是测试 → 拒收文案。
+
+    与 `claim_mismatch` 的关系：**同一判据的信号版与硬门版**，共用一套词表（不做第二份）。
+    为何要升级成硬门：信号版实测没人看（`claim_mismatch` 只进 evidence）；而「声称测试通过、
+    实际命令是 `true`」让「全绿」直接失真，属于必须拦的那一类。
+    """
+    signal = claim_mismatch(cfg, summary, cmd)
+    if signal is None:
+        return None
+    return (f"{signal}（可声明 claim_waiver 破例，但需写清「为何声称与命令不一致仍可接受」）")
 
 
 def run_acceptance(acceptance: dict | None, cwd: str,
@@ -87,12 +282,24 @@ def head_sha(cwd: str, cfg: Config = DEFAULTS) -> str | None:
     return proc.stdout.strip() or None
 
 
+def _quote_path_off(cwd: str) -> list[str]:
+    """git 的公共前缀参数 —— **关掉路径转义**。
+
+    为何必须关：git 默认 `core.quotepath=true`，会把非 ASCII 路径写成
+    `"docs/0010-kaa\350\236\215\345\220\210.md"`（带引号 + 八进制字节）。
+    实测后果：`test_changed.py` 的改动→测试映射**对中文文件名全部失败** ⇒ 保守退化全量
+    （一次 87s 而非 35s）；门的 `touch_plan` 比对同理会误判（拿转义串跟真路径比）。
+    判据：本仓文档大量中文文件名，这不是边角情况。
+    """
+    return ["git", "-C", cwd, "-c", "core.quotepath=false"]
+
+
 def _committed_files(cwd: str, base_sha: str, cfg: Config = DEFAULTS) -> list[str]:
     """相对 `base_sha` **已提交**的改动路径（`git diff --name-only <sha>`）。
 
     失败（sha 非法 / 非 git 仓）返回空表——不假装有读数，也不让已取到的工作区改动集消失。"""
     try:
-        proc = subprocess.run(["git", "-C", cwd, "diff", "--name-only", base_sha],
+        proc = subprocess.run([*_quote_path_off(cwd), "diff", "--name-only", base_sha],
                               capture_output=True, text=True, timeout=cfg.git_timeout)
     except OSError:
         return []
@@ -118,7 +325,7 @@ def git_changed_files(cwd: str, cfg: Config = DEFAULTS, *,
     if probe.returncode != 0:
         return None
     try:
-        status = subprocess.run(["git", "-C", cwd, "status", "--porcelain"],
+        status = subprocess.run([*_quote_path_off(cwd), "status", "--porcelain"],
                                 capture_output=True, text=True, timeout=cfg.git_timeout)
     except OSError:
         return None

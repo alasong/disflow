@@ -27,8 +27,8 @@ from .ready import (
     ready_tasks,
     running_tasks,
 )
-from .vocab import DEFAULT_STAGE, STORAGE
 from .state import project
+from .vocab import DEFAULT_STAGE, STORAGE
 
 
 def _with_default_stage(children: list[dict], default: str) -> list[dict]:
@@ -524,6 +524,20 @@ class Engine:
             if reason and collected is not None:
                 raise EngineError(
                     f"{node} 已有 collect 结果，--no-result 无意义（只在该节点无结果时才需要破例）")
+            # 理由质量门（融合自 kaa 的 weak_reason）：破例通道**允许**存在，但理由必须具体
+            # 到能复查 —— 否则「无」「不需要」就能把门关掉，与「不静默降级」相冲。
+            if reason:
+                weak = gates.weak_reason(self.cfg, reason)
+                if weak:
+                    raise GateReject([f"no_result 理由不合格：{weak}"],
+                                     {"node": node, "no_result": reason})
+            for wkey in ("scope_waiver", "size_waiver"):
+                wval = str((declarations or {}).get(wkey) or "").strip()
+                if wval:
+                    weak = gates.weak_reason(self.cfg, wval)
+                    if weak:
+                        raise GateReject([f"{wkey} 理由不合格：{weak}"],
+                                         {"node": node, wkey: wval})
             # 门的**所有** IO 统一走同一个目录（有真 worktree 就在 worktree 里，否则 self.cwd）。
             cwd = self._gate_cwd(tree, node)
             workspace = item.get("workspace") or {}
@@ -588,6 +602,16 @@ class Engine:
             # worker 结果的记账（与门的通过/拒收**无关**）：CLI 用它强制宿主循环契约
             # （无 collect ⇒ 拒收），树的读者用它看出「这个节点没 worker 结果」。
             evidence["result_collected"] = collected is not None
+            # 漂移门 2：改动集里的 .py 底线（纯 AST，不执行）——与 acceptance 互补：
+            # 后者管「产出对不对」，它管「产物本身行不行」（语法/宽捕获/可变默认参/shell=True）。
+            quality = gates.code_quality(cwd, introduced, self.cfg)
+            evidence["code_quality"] = quality
+            # 声称 vs 命令的对账（信号版）：**不参与拒收**（硬门版见下方 `verify_real`）
+            claim = gates.claim_mismatch(
+                self.cfg, str((collected or {}).get("summary") or ""),
+                str((acceptance or {}).get("cmd") or ""))
+            if claim:
+                evidence["claim_mismatch"] = claim
             if reason:
                 evidence["no_result"] = reason
             # 破例必须**记入证据**（显式、可审计），而不是默默放行
@@ -614,6 +638,37 @@ class Engine:
                     and not (declarations or {}).get("size_waiver")):
                 missing.append(f"规模超预算：{size['total']} 行 > {budget} 行"
                                f"（可声明 size_waiver 破例）")
+            # ── 漂移门（三道，2026-10-11）─────────────────────────────────
+            # 为何是**硬门**而非信号：漂移（跑题 / 假证据 / 改坏产物）不会在证据里留异常痕迹，
+            # 信号模式下没人会去看（本仓 `claim_mismatch` 进 evidence 后实测无人消费）。
+            # 每道都有**逃生口**，且理由过 `weak_reason` 质量门（敷衍理由拒收）——
+            # 允许破例但不允许「无」把门关掉。
+            summary_text = str((collected or {}).get("summary") or "")
+            goal_w = str((declarations or {}).get("goal_waiver") or "").strip()
+            if not goal_w:
+                drift = gates.goal_align(self.cfg, str(item.get("goal") or ""), summary_text)
+                if drift:
+                    missing.append(f"目标对齐门：{drift}")
+            cq_w = str((declarations or {}).get("code_waiver") or "").strip()
+            if quality["checked"] and quality["issues"] and not cq_w:
+                flat = [f"{rel}: {first}" for rel, found in sorted(quality["issues"].items())
+                        for first in found[:1]]
+                missing.append(f"代码底线门：{flat}（可声明 code_waiver 破例）")
+            claim_w = str((declarations or {}).get("claim_waiver") or "").strip()
+            if not claim_w:
+                fake = gates.verify_real(
+                    self.cfg, summary_text, str((acceptance or {}).get("cmd") or ""))
+                if fake:
+                    missing.append(f"证据真实性门：{fake}")
+            # 三个 waiver 也过质量门（与 no_result / scope_waiver 同款，不做第二套）
+            for wkey, wval in (("goal_waiver", goal_w), ("code_waiver", cq_w),
+                               ("claim_waiver", claim_w)):
+                if wval:
+                    weak = gates.weak_reason(self.cfg, wval)
+                    if weak:
+                        missing.append(f"{wkey} 理由不合格：{weak}")
+                    else:
+                        evidence[wkey] = wval
             if missing:
                 raise GateReject(missing, contract)
             return {"evidence": evidence, "declarations": declarations or {}}

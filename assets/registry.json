@@ -114,7 +114,7 @@
       "type": "code",
       "category": "implementation",
       "path": "disflow/",
-      "purpose": "引擎包：状态/树/图/门/视图/CLI（唯一实现面）",
+      "purpose": "引擎包：状态/树/图/门/视图/CLI + web 入口（唯一实现面）",
       "tier": "verified",
       "evidence": "python3 -m unittest discover -s tests -t tests",
       "premises": []
@@ -123,7 +123,7 @@
       "type": "test",
       "category": "verification",
       "path": "tests/",
-      "purpose": "验收测试套件：门拒收 / 投影一致 / 分层自检 / CLI 回归",
+      "purpose": "验收测试套件：门拒收 / 投影一致 / 分层自检 / CLI 回归 / web 只读性",
       "tier": "verified",
       "evidence": "python3 -m unittest discover -s tests -t tests",
       "premises": [

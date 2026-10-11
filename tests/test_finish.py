@@ -85,5 +85,58 @@ class FinishGateTest(unittest.TestCase):
         self.assertEqual(self.finish._tests_summary(bad), "FAILED（51 文件 · 50 通过 · 1 失败）")
 
 
+class FailureExcerptTest(unittest.TestCase):
+    """失败摘要必须带**详情**（不只是名字）—— 实测踩到：只说 `FAIL: <名字>`
+    时读者得重跑一遍全量（90–103s）才能定位红在哪。判据：摘要里能看到 traceback 与断言行。
+    """
+
+    def setUp(self) -> None:
+        self.finish = _load()
+
+    def test_excerpt_carries_traceback_not_just_the_name(self):
+        out = (
+            "....F\n"
+            "======================================================================\n"
+            "FAIL: test_x (mod.Case.test_x)\n"
+            "----------------------------------------------------------------------\n"
+            "Traceback (most recent call last):\n"
+            '  File "/r/tests/t.py", line 42, in test_x\n'
+            "    self.assertEqual(1, 2)\n"
+            "AssertionError: 1 != 2 : 不同步\n"
+            "\n"
+            "----------------------------------------------------------------------\n"
+            "Ran 830 tests in 103.4s\n\nFAILED (failures=1)\n"
+        )
+        text = "\n".join(self.finish._failure_excerpt(out))
+        self.assertIn("FAIL: test_x", text)
+        self.assertIn("AssertionError: 1 != 2", text)
+        self.assertIn("line 42", text)
+
+    def test_excerpt_handles_multiple_failures(self):
+        out = (
+            "FAIL: test_a (m.A)\n"
+            "AssertionError: a\n"
+            "======================================================================\n"
+            "ERROR: test_b (m.B)\n"
+            "ValueError: b\n"
+            "\n----------------------------------------------------------------------\n"
+            "Ran 2 tests\n\nFAILED\n"
+        )
+        text = "\n".join(self.finish._failure_excerpt(out))
+        self.assertIn("test_a", text)
+        self.assertIn("test_b", text)
+
+    def test_excerpt_is_capped_and_says_so(self):
+        """刷屏保护：超上限要**说明截断**（而不是静默丢），全量在日志里。"""
+        out = "FAIL: test_x (m.X)\n" + "\n".join(f"行{i}" for i in range(200)) + "\n"
+        lines = self.finish._failure_excerpt(out)
+        self.assertLessEqual(len(lines), self.finish._FAILURE_HEAD + 1)
+        self.assertIn("截断", lines[-1])
+
+    def test_clean_output_yields_nothing(self):
+        self.assertEqual(
+            self.finish._failure_excerpt("....\nRan 4 tests\n\nOK\n"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

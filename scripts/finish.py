@@ -86,6 +86,46 @@ def _stale_lines(check_output: str) -> list[str]:
             if ln.startswith(("  - ", "⚠"))]
 
 
+# 失败摘要的**输出上限**：一次最多展开这么多行详情。
+# 为何要上限：失败很多时会刷屏，而**读者要的是“能不能一眼看出什么错了”**。
+# 截掉的部分**不丢** —— 全量输出一直在日志文件里（`rc=… · 全量日志：<path>`）。
+_FAILURE_HEAD = 15
+
+
+def _failure_excerpt(output: str, limit: int = _FAILURE_HEAD) -> list[str]:
+    """从测试输出里抽**失败详情**（不是只有名字）—— 从 `FAIL:`/`ERROR:` 起
+    连同 traceback 一起，直到下一条失败或分隔线。
+
+    为何要它（实测踩到）：原先只打 `FAIL: <名字>`，读者知道哪个用例红了、**不知道红在哪里**
+    ⇒ 只能重跑一遍并手动 grep（本机全量 90–103s，跑两遍是纯浪费）。
+    本函数把“读短的那份就能定位”变成默认行为，日志仍是短的超集。
+    """
+    lines = output.splitlines()
+    out: list[str] = []
+    truncated = False
+    i = 0
+    while i < len(lines) and not truncated:
+        line = lines[i]
+        if line.startswith(("FAIL:", "ERROR:")):
+            out.append(line)
+            i += 1
+            # 跟着 traceback 走：直到一条 ==== 分隔线（unittest 的几条串的分界）或下一条失败
+            while i < len(lines) and not lines[i].startswith("===="):
+                if lines[i].startswith(("FAIL:", "ERROR:")):
+                    break
+                if len(out) >= limit - 1:      # 留一行给“截断”提示（上限含提示行）
+                    truncated = True
+                    break
+                out.append(lines[i])
+                i += 1
+            out.append("")
+            continue
+        i += 1
+    if truncated:
+        out.append("…（摘要到此截断；完整输出见下方日志文件）")
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="收尾门：全量测试（硬）+ 资产健康（只读报告）")
     parser.add_argument("--dry-run", action="store_true", help="只打印将执行的命令，不跑")
@@ -113,9 +153,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[1/2] 全量测试（jobs={args.jobs}）… {_tests_summary(output)}")
         if code != 0:
             rc = 1
-            for line in output.splitlines():
-                if line.startswith(("FAIL:", "ERROR:")):
-                    print(f"        {line}")
+            # 报**摘要 + 失败详情**（不只是名字）：读者读这一段就能定位，不必重跑一遍。
+            for line in _failure_excerpt(output):
+                print(f"        {line}" if line else "")
 
         code, output = _run(assets_argv("check"))
         handle.write(f"\n===== assets check =====\n{output}\n")

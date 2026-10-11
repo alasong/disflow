@@ -42,8 +42,9 @@ import os
 from dataclasses import dataclass, field, replace
 
 from .boards import DEFAULT_BOARDS, Board, load_boards, boards_path
-from .vocab import (DEFAULT_STAGE, LEASE_TTL_SECONDS, QUESTION_POLICY_DEFAULT, ROLES,
-                   SIZE_BUDGET_DEFAULT)
+from .vocab import (CLAIM_PASS_WORDS, CODE_QUALITY_SUFFIXES, DEFAULT_STAGE, GOAL_STOPWORDS,
+                    LEASE_TTL_SECONDS, QUESTION_POLICY_DEFAULT, ROLES, SIZE_BUDGET_DEFAULT,
+                    TEST_CLAIM_WORDS, WEAK_REASON_DEFAULT)
 
 CONFIG_BASENAME = "disflow.json"
 ENV_CONFIG_PATH = "DISFLOW_CONFIG"
@@ -77,6 +78,21 @@ class Config:
 
     lease_ttl: int = LEASE_TTL_SECONDS
     """租约默认存活秒数（`start --ttl` 可覆盖）。"""
+
+    weak_reasons: tuple[str, ...] = WEAK_REASON_DEFAULT
+    """敷衍理由词表（破例声明必须具体；整串命中词表 ⇒ 拒收）。空元组 = 关掉该判据。"""
+
+    test_claim_words: tuple[str, ...] = TEST_CLAIM_WORDS
+    """「声称做了测试」的词表（与 `claim_pass_words` 合判对账信号；空 = 关掉）。"""
+
+    claim_pass_words: tuple[str, ...] = CLAIM_PASS_WORDS
+    """「声称通过」的词表（与 `test_claim_words` 合判对账信号；空 = 关掉）。"""
+
+    goal_stopwords: tuple[str, ...] = GOAL_STOPWORDS
+    """`goal_align` 门的停用词表（不参与目标与声明的内容词比对）。"""
+
+    code_quality_suffixes: tuple[str, ...] = CODE_QUALITY_SUFFIXES
+    """`code_quality` 门要检查的文件后缀（默认 `.py`；空 = 关掉该门）。"""
 
     boards: tuple[Board, ...] = DEFAULT_BOARDS
     """看板定义（板 = 阶段）。来源：`boards.json`（独立文件），缺失 = 内建默认。"""
@@ -188,6 +204,12 @@ _VALIDATORS = {
     "size_budget": (lambda v: _as_int(v, "size_budget"), "size_budget"),
     "lease_ttl": (lambda v: _as_int(v, "lease_ttl"), "lease_ttl"),
     "roles": (lambda v: _as_str_tuple(v, "roles"), "roles"),
+    "weak_reasons": (lambda v: _as_str_tuple(v, "weak_reasons"), "weak_reasons"),
+    "test_claim_words": (lambda v: _as_str_tuple(v, "test_claim_words"), "test_claim_words"),
+    "claim_pass_words": (lambda v: _as_str_tuple(v, "claim_pass_words"), "claim_pass_words"),
+    "goal_stopwords": (lambda v: _as_str_tuple(v, "goal_stopwords"), "goal_stopwords"),
+    "code_quality_suffixes": (lambda v: _as_str_tuple(v, "code_quality_suffixes"),
+                              "code_quality_suffixes"),
     "question_policy": (lambda v: _as_policy(v, "question_policy"), "question_policy"),
 }
 

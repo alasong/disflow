@@ -321,8 +321,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="注入式假改动（逗号分隔路径），覆盖 git 检测（测试/排查用）")
     parser.add_argument("--dry-run", action="store_true", help="只打印计划与命令，不执行")
     parser.add_argument("--json", action="store_true", help="计划以 JSON 输出")
-    parser.add_argument("--jobs", type=int, default=1,
-                        help="并发跑测试文件的进程数（默认 1；0=自动核数）")
+    parser.add_argument("--jobs", type=int, default=0,
+                        help="并发跑测试文件的进程数（默认 0=自动核数；1=串行 discover，"
+                             "与 README 逐字一致；N=每文件一进程）")
     args = parser.parse_args(argv)
     jobs = resolve_jobs(args.jobs)
 
