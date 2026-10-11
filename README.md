@@ -326,7 +326,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 763 passed（零第三方依赖）——收尾全量，保留可用
+python3 -m unittest discover -s tests -t tests    # 774 passed（零第三方依赖）——收尾全量，保留可用
 python3 scripts/finish.py                          # 收尾门：全量 + 资产 scan/check（退出码当门）
 python3 scripts/test_changed.py --all --jobs 8    # **收尾推荐**：全量 + 并发（96s→33s，2.9×）
 python3 scripts/test_changed.py                   # 迭代期：只跑改动相关的子集（带「这不是全量」横幅）

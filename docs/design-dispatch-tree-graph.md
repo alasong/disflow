@@ -138,6 +138,29 @@ kaa 已把这条判据固化：
 
 ---
 
+## 4.1 Spec（交付单元）是一等公民（目标；未实现）
+
+> **2026-10-11 新定**（[ADR 0006](decisions/0006-spec-一等公民.md)，jev choice conf 1.0）：**Spec** 是
+> **独立顶层实体**，用来管「从资产上新到交付」全过程。本节为目标设计草案，**尚未实现**。
+
+**Spec 是什么**：一个**交付单元**——独立 `id` + `goal` + **完成判据（gate）** + 状态；独立生命周期；
+随事件流持久化、可重放。它声明「要交付哪些**角色**的资产」（requirement / design / implementation /
+verification / documentation），而「全量交付」= **角色齐全**（不止文档与需求，还有代码）。
+
+**Spec 与资产：关联，不是归属**（用户调整点）：
+
+```text
+Spec ──关联(多对多，可带类型)(role: requirement|design|implementation|verification|documentation)──▶ 资产
+```
+
+- **无** `asset.parent = spec`：资产独立存在、可被多个 Spec 引用（可复用正是它成为资产的判据）；
+- Spec **自身也是资产**（可复用记录，进同一登记，带 `tier`/`premises`）。
+
+**硬边界（不得成第二真相源）**：Spec **不**定义资产刷新**顺序**（派生自 `premises` 拓扑序）；
+**不**复制 tree/node 的状态与就绪判定（归引擎）。
+
+---
+
 ## 5. 数据模型（草案）
 
 ### 5.1 节点

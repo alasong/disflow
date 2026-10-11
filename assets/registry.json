@@ -51,6 +51,33 @@
       "tier": "asserted",
       "premises": []
     },
+    "board-entity": {
+      "type": "doc",
+      "category": "process",
+      "path": "docs/decisions/0005-看板提升为一等实体.md",
+      "purpose": "交付单元 Spec：看板升为一等实体（需求→设计→实现→验证→文档 全量交付）",
+      "tier": "asserted",
+      "premises": [
+        "requirements",
+        "pkg"
+      ],
+      "spec": {
+        "required_roles": [
+          "requirement",
+          "design",
+          "implementation",
+          "verification",
+          "documentation"
+        ],
+        "delivers": [
+          "requirements",
+          "design",
+          "pkg",
+          "tests",
+          "readme"
+        ]
+      }
+    },
     "fr-gap": {
       "type": "report",
       "category": "requirement",
@@ -59,7 +86,10 @@
       "tier": "asserted",
       "premises": [
         "pkg",
-        "scripts"
+        {
+          "id": "scripts",
+          "kind": "generated_from"
+        }
       ]
     },
     "design-draft": {

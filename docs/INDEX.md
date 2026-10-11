@@ -42,6 +42,7 @@
 | `docs/decisions/0003-运行视图-v10-按板列不按树.md` | decision | active | v10：看板 = 阶段列，树不是一块板（当前形态） |
 | `docs/decisions/0004-ai-入口先读索引.md` | decision | active | AI 入口：动手前先读 docs/INDEX.md + assets/INDEX.md（仓根 AGENTS.md 兜） |
 | `docs/decisions/0005-看板提升为一等实体.md` | decision | active | 看板从「视图」升为一等实体；树/图是板内维度，分发器/验收器挂在板上 |
+| `docs/decisions/0006-spec-一等公民.md` | decision | active | Spec 升为一等公民（独立实体）；Spec 关联资产（多对多），不是归属 |
 
 ## 3. 增 / 改 / 删 的规矩
 

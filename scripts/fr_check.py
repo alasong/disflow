@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""对 `docs/requirements.md` §3–§7 的 32 条 FR + 7 条 NFR **逐条**机检 + 分类。
+"""对 `docs/requirements.md` §3–§7 的 34 条 FR + 7 条 NFR **逐条**机检 + 分类。
 
 为什么要有这个脚本（而不是在会话里口述一遍）：
 本会话已机检过 §1.2 病根 8 条 / §1.3 保留项 5 条 / §2 目标与非目标 10 条（见
@@ -431,6 +431,25 @@ def nfr7_no_silent() -> tuple[bool, str]:
     return ok, f"store.py raise 命中 {_n_lines(o1)} 处；state.py 报错路径 {_n_lines(o2)} 处"
 
 
+def fr34_spec_association() -> tuple[bool, str]:
+    """FR-34 Spec **关联**资产（多对多、非归属）。
+
+    判据：① 至少一个资产带 `spec` 块（`required_roles` 非空 + `delivers` 数组）= 关联存在；
+    ② **无**资产带 `parent` 键 = 不是「挂在 Spec 下」的归属；③ `delivery` 交付门可机跑。
+    """
+    with open(os.path.join(ROOT, "assets", "registry.json"), encoding="utf-8") as fh:
+        assets = json.load(fh)["assets"]
+    specs = [k for k, a in assets.items()
+             if isinstance(a.get("spec"), dict)
+             and a["spec"].get("required_roles")
+             and isinstance(a["spec"].get("delivers"), list)]
+    owners = [k for k, a in assets.items() if "parent" in a]
+    rc, _out = _run([sys.executable, "scripts/assets_scan.py", "delivery"])
+    ok = bool(specs) and not owners and rc in (0, 1)
+    return ok, (f"带 spec 块的资产 {len(specs)} 个 {specs}；"
+                f"带 parent（归属）的资产 {len(owners)} 个（应 0）；delivery 门 rc={rc}")
+
+
 Check = Callable[[], tuple[bool, str]]
 
 # (编号, 标题, 检查函数) —— 这些是 [机检]，脚本真跑。
@@ -460,6 +479,7 @@ MACHINE: list[tuple[str, str, Check]] = [
     ("FR-27", "status 能识别卡死", fr27_stuck),
     ("FR-28", "import mgt 从 state/registry 读入", fr28_import_mgt),
     ("FR-29", "映射关系写进 design.md §10", fr29_mapping_doc),
+    ("FR-34", "Spec 关联资产（多对多、非归属）", fr34_spec_association),
     ("NFR-1", "零第三方依赖", nfr1_zero_deps),
     ("NFR-3", "文件式：无服务、无数据库", nfr3_file_based),
     ("NFR-6", "规模预算，超预算即拒", nfr6_size_budget),
@@ -509,7 +529,11 @@ UNJUDGEABLE: list[tuple[str, str, str]] = [
 ]
 
 # [未实现]：实现里找不到对应能力。（编号, 标题, 缺什么, 若要做验收点）
-UNIMPLEMENTED: list[tuple[str, str, str, str]] = []
+UNIMPLEMENTED: list[tuple[str, str, str, str]] = [
+    ("FR-33", "Spec 是一等公民（独立交付单元实体）",
+     "无**引擎级** Spec 实体：交付单元仍靠资产登记的 `spec` 块代位，无独立 id/生命周期/事件流。",
+     "Spec 成为 disflow 一等实体（事件类型 + 投影），可登记为资产；一条端到端测试。"),
+]
 
 # ◐ 部分缺口：整条机检通过，但**子句**在实现里找不到。（编号, 子句, 缺什么, 验收点）
 # 判据：子句必须在**需求原文里真的写着**，且确实没实现——报告不得替需求发明子句（否则计数与正文自相矛盾，
@@ -606,7 +630,7 @@ def emit_report() -> str:
     out.append("> 由 `scripts/fr_check.py` 生成（`python3 scripts/fr_check.py --report`）。")
     out.append("> 本条报告的头等产出**不是通过率**，而是把 **[未实现]** 与 **[不可机检]** 诚实分出来。")
     out.append("")
-    out.append("## 总表（32 FR + 7 NFR = 39 条）")
+    out.append("## 总表（34 FR + 7 NFR = 41 条）")
     out.append("")
     out.append("| # | 一句话验收标准 | 证据类型 | 证据（可复制命令 / 测试名） |")
     out.append("| --- | --- | --- | --- |")
@@ -622,7 +646,7 @@ def emit_report() -> str:
     out.append("## [未实现]（实现里找不到对应能力——最有价值的输出）")
     out.append("")
     if not UNIMPLEMENTED:
-        out.append("**（空）**：32 FR + 7 NFR 里没有整条未实现的。"
+        out.append("**（空）**：34 FR + 7 NFR 里没有整条未实现的。"
                    f"**◐ 部分缺口** {len(PARTIAL)} 条（整条机检通过、子句在实现里找不到）；"
                    f"**已复核·非缺口** {len(DOWNGRADED)} 条（曾标 ◐、复核后确认需求已满足）。")
     for cid, title, missing, acceptance in UNIMPLEMENTED:
@@ -687,7 +711,7 @@ def emit_report() -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="对 docs/requirements.md §3–§7 的 32 FR + 7 NFR 逐条机检并分类")
+        description="对 docs/requirements.md §3–§7 的 34 FR + 7 NFR 逐条机检并分类")
     parser.add_argument("--report", action="store_true",
                         help="从判据表生成 markdown 报告到 stdout（不跑机检）")
     args = parser.parse_args(argv)
@@ -719,7 +743,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print("\n[未实现]（实现里找不到对应能力——最有价值的输出）")
     if not UNIMPLEMENTED:
-        print("  （空：32 FR + 7 NFR 里没有整条未实现的）")
+        print("  （空：34 FR + 7 NFR 里没有整条未实现的）")
     for cid, title, missing, acceptance in UNIMPLEMENTED:
         print(f"  [{cid}] {title}")
         print(f"        缺什么：{missing}")
@@ -747,7 +771,7 @@ def main(argv: list[str] | None = None) -> int:
     total = len(MACHINE) + len(TEST_ONLY) + len(UNJUDGEABLE) + len(UNIMPLEMENTED)
     print(f"\n四类计数：机检 {len(MACHINE)}（通过 {len(MACHINE) - len(failed)} · 失败 {len(failed)}）"
           f" · 测试 {len(TEST_ONLY)} · 未实现 {len(UNIMPLEMENTED)} · 不可机检 {len(UNJUDGEABLE)}"
-          f" · 合计 {total}（应 39）；另有 ◐ 部分缺口 {len(PARTIAL)} 条")
+          f" · 合计 {total}（应 41）；另有 ◐ 部分缺口 {len(PARTIAL)} 条")
     for name in failed:
         print("  FAIL:", name)
     return 1 if failed else 0

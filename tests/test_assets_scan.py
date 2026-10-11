@@ -5,6 +5,8 @@
 2. `derive` 的 stale 规则——用替身固定 git 事实，测规则本身而非环境。
 3. `assets/index.jsonl` 与 `assets/registry.json` 的**稳定字段**一致——防「改了注册表忘跑 scan」。
    只比稳定字段（id/type/path/purpose/tier/premises），不比 trust/hash/dirty（那些随工作区变）。
+4. **依据边分型**（`anchors`/`generated_from`/`verifies`/`documents`）与 **Spec 交付门**
+   （`spec` 块的角色覆盖、`delivery` 缺角色 rc=1）——这两组是本轮新增机制。
 """
 from __future__ import annotations
 
@@ -140,6 +142,105 @@ class StaleRuleTest(unittest.TestCase):
         plan = self.scan.refresh_plan(assets, ["pkg/x.py"])
         ids = [aid for aid, _ in plan]
         self.assertEqual(ids, ["a", "b"])
+
+    def test_typed_premise_drives_stale(self):
+        """`dict` 形式的依据与字符串等价——**分型不改变 stale 的判定**。"""
+        self.scan.dirty = lambda rel: rel == "disflow/"
+        rows = self._rows({
+            "pkg": _asset(type="code", path="disflow/"),
+            "doc": _asset(premises=[{"id": "pkg", "kind": "generated_from"}]),
+        })
+        self.assertEqual(rows["doc"]["trust"], "stale")
+        self.assertEqual(rows["doc"]["stale_basis"], ["pkg"])
+
+
+class RelationKindTest(unittest.TestCase):
+    """依据边分型：纯字符串 = `anchors`（默认）；已知 kind 收，非法 kind / 缺 id 拒。"""
+
+    def setUp(self) -> None:
+        self.scan = _load_scan()
+
+    def _reject(self, assets: dict) -> str:
+        with self.assertRaises(SystemExit) as ctx:
+            self.scan.validate(assets)
+        return str(ctx.exception)
+
+    def test_plain_string_defaults_to_anchors(self):
+        self.assertEqual(self.scan.premise_kind("pkg"), "anchors")
+        self.assertEqual(self.scan.premise_kind({"id": "pkg"}), "anchors")
+        self.assertEqual(self.scan.premise_id({"id": "pkg"}), "pkg")
+        self.assertEqual(
+            self.scan.premise_ids(["a", {"id": "b", "kind": "verifies"}]), ["a", "b"])
+
+    def test_known_kinds_accepted(self):
+        self.scan.validate({
+            "a": _asset(),
+            "gen": _asset(premises=[{"id": "a", "kind": "generated_from"}]),
+            "ver": _asset(premises=[{"id": "a", "kind": "verifies"}]),
+            "doc": _asset(premises=[{"id": "a", "kind": "documents"}]),
+        })
+
+    def test_illegal_kind_rejected(self):
+        msg = self._reject({"a": _asset(),
+                            "b": _asset(premises=[{"id": "a", "kind": "bogus"}])})
+        self.assertIn("kind 非法", msg)
+
+    def test_premise_without_id_rejected(self):
+        msg = self._reject({"a": _asset(premises=[{"kind": "verifies"}])})
+        self.assertIn("缺 id", msg)
+
+
+class SpecDeliveryTest(unittest.TestCase):
+    """Spec（带 `spec` 块的资产）的交付覆盖：按角色算齐不齐，缺角色 → 交付门 rc=1。"""
+
+    def setUp(self) -> None:
+        self.scan = _load_scan()
+
+    def _reject(self, assets: dict) -> str:
+        with self.assertRaises(SystemExit) as ctx:
+            self.scan.validate(assets)
+        return str(ctx.exception)
+
+    def test_bad_role_rejected(self):
+        msg = self._reject({"s": _asset(spec={"required_roles": ["bogus"], "delivers": []})})
+        self.assertIn("required_roles", msg)
+
+    def test_non_array_delivers_rejected(self):
+        msg = self._reject({"s": _asset(spec={"required_roles": ["requirement"],
+                                               "delivers": "nope"})})
+        self.assertIn("delivers", msg)
+
+    def test_dangling_deliver_rejected(self):
+        msg = self._reject({"s": _asset(
+            spec={"required_roles": ["requirement"], "delivers": ["nope"]})})
+        self.assertIn("未登记资产", msg)
+
+    def test_coverage_groups_by_role(self):
+        cov = self.scan.spec_coverage({
+            "s": _asset(spec={"required_roles": ["requirement", "verification"],
+                              "delivers": ["reqdoc"]}),
+            "reqdoc": _asset(category="requirement"),
+        })
+        self.assertEqual(cov[0]["covered"]["requirement"], ["reqdoc"])
+        self.assertEqual(cov[0]["missing_roles"], ["verification"])
+
+    def test_no_spec_block_yields_nothing(self):
+        self.assertEqual(self.scan.spec_coverage({"a": _asset()}), [])
+
+    def test_delivery_cli_rc(self):
+        """交付门：角色缺 → rc=1，齐全 → rc=0（走真 CLI 入口，替身注入登记表）。"""
+        scan = self.scan
+        self.addCleanup(setattr, scan, "_load", scan._load)
+
+        def reg(roles: list[str], cats: dict[str, str]) -> dict:
+            out = {"s": _asset(spec={"required_roles": roles, "delivers": list(cats)})}
+            out.update({d: _asset(category=c) for d, c in cats.items()})
+            return out
+
+        scan._load = lambda: reg(["requirement", "verification"], {"r": "requirement"})
+        self.assertEqual(scan.main(["delivery"]), 1)     # 缺 verification
+        scan._load = lambda: reg(["requirement"], {"r": "requirement"})
+        self.assertEqual(scan.main(["delivery"]), 0)     # 角色齐全
 
 
 class IndexSyncTest(unittest.TestCase):

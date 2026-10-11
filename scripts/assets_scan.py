@@ -47,6 +47,11 @@ CATEGORIES = {"requirement", "design", "implementation", "verification",
               "process", "documentation", "config"}
 TIERS = ("verified", "asserted", "stub")
 REQUIRED = ("type", "path", "purpose", "tier")
+# **依据边的类型**（关系分型，借鉴 SPDX 的 typed relationships）：`premises` 条目可为纯 id
+# （默认 `anchors`）或 `{"id": .., "kind": ..}`。`kind` 是**语义标签**（本资产如何依赖它：
+# 锚定 / 生成自 / 验证 / 记录）；**四种都驱动 stale**（依据物变了，本资产都要复查）。
+RELATION_KINDS = ("anchors", "generated_from", "verifies", "documents")
+DEFAULT_RELATION = "anchors"
 
 
 # --------------------------------------------------------------------------- git 事实
@@ -93,6 +98,29 @@ def dirty(rel: str) -> bool:
     return bool(_git("status", "--porcelain", "--", rel).strip())
 
 
+# --------------------------------------------------------------- premise（依据边，可分型）
+
+def premise_id(item: object) -> str:
+    """premise 条目 → 资产 id：纯字符串（默认 `anchors`）或 `{"id":..,"kind":..}`。"""
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        return str(item.get("id") or "")
+    return ""
+
+
+def premise_kind(item: object) -> str:
+    """premise 条目的关系类型（字符串 = `anchors`）。"""
+    if isinstance(item, dict):
+        return str(item.get("kind") or DEFAULT_RELATION)
+    return DEFAULT_RELATION
+
+
+def premise_ids(premises: list[object] | None) -> list[str]:
+    """依据边列表 → id 列表（供 stale / 拓扑序 / 反查统一消费）。"""
+    return [premise_id(p) for p in (premises or [])]
+
+
 # --------------------------------------------------------------------------- 校验
 
 def _load() -> dict[str, dict]:
@@ -128,11 +156,41 @@ def validate(assets: dict[str, dict]) -> None:
         path = a.get("path")
         if isinstance(path, str) and path and not (ROOT / path).exists():
             errors.append(f"{aid}: path 不存在 {path!r}")
-        for p in a.get("premises") or []:
-            if p == aid:
+        for item in a.get("premises") or []:
+            pid = premise_id(item)
+            if not pid:
+                errors.append(f"{aid}: premise 条目缺 id（应为字符串或 {{\"id\":..}}）：{item!r}")
+                continue
+            if pid == aid:
                 errors.append(f"{aid}: premise 自环")
-            elif p not in assets:
-                errors.append(f"{aid}: premise 指向未登记资产 {p!r}")
+            elif pid not in assets:
+                errors.append(f"{aid}: premise 指向未登记资产 {pid!r}")
+            if isinstance(item, dict) and premise_kind(item) not in RELATION_KINDS:
+                errors.append(f"{aid}: premise kind 非法 {premise_kind(item)!r}"
+                              f"（应为 {list(RELATION_KINDS)}）")
+        # spec（一等交付单元）：带 spec 块的资产就是 Spec（它本身仍是资产）。
+        spec = a.get("spec")
+        if spec is not None:
+            if not isinstance(spec, dict):
+                errors.append(f"{aid}: spec 应为对象")
+            else:
+                roles = spec.get("required_roles")
+                if not isinstance(roles, list) or not roles:
+                    errors.append(f"{aid}: spec.required_roles 应为非空数组")
+                else:
+                    bad = [r for r in roles if r not in CATEGORIES]
+                    if bad:
+                        errors.append(f"{aid}: spec.required_roles 含非法角色 {bad}"
+                                      f"（应为 {sorted(CATEGORIES)}）")
+                delivers = spec.get("delivers")
+                if not isinstance(delivers, list):
+                    errors.append(f"{aid}: spec.delivers 应为数组")
+                else:
+                    dangling = [d for d in delivers if d not in assets]
+                    if dangling:
+                        errors.append(f"{aid}: spec.delivers 指向未登记资产 {dangling}")
+        if a.get("owner") and a["owner"] not in assets:
+            errors.append(f"{aid}: owner 指向未登记资产 {a['owner']!r}")
 
     for cycle in _cycles(assets):
         errors.append(f"premises 成环：{' → '.join(cycle)}")
@@ -149,7 +207,7 @@ def _cycles(assets: dict[str, dict]) -> list[list[str]]:
     def visit(node: str, stack: list[str]) -> None:
         color[node] = GREY
         stack.append(node)
-        for nxt in assets.get(node, {}).get("premises") or []:
+        for nxt in premise_ids(assets.get(node, {}).get("premises")):
             if nxt not in assets:
                 continue
             if color[nxt] == GREY:
@@ -189,12 +247,12 @@ def derive(assets: dict[str, dict]) -> list[dict]:
     by_id = {r["id"]: r for r in rows}
     for r in rows:
         basis = []
-        for p in r["premises"]:
-            pr = by_id[p]
+        for pid in premise_ids(r["premises"]):
+            pr = by_id[pid]
             # 新资产（自身未提交）不判 stale：它尚无「被超越的基线」。
             # 依据物脏（未提交改动）或比本资产更晚提交 → 本资产的断言可能已失真。
             if pr["dirty"] or (r["last_commit"] and pr["last_commit"] > r["last_commit"]):
-                basis.append(p)
+                basis.append(pid)
         r["stale_basis"] = basis
         r["trust"] = "stale" if basis else r["tier"]
     return rows
@@ -212,7 +270,7 @@ def topo_order(assets: dict[str, dict]) -> list[str]:
     def visit(a: str) -> None:
         if a in seen:
             return
-        for p in assets[a].get("premises") or []:
+        for p in premise_ids(assets[a].get("premises")):
             visit(p)
         seen.add(a)
         order.append(a)
@@ -263,7 +321,7 @@ def reverse_impact(assets: dict[str, dict], target: str) -> list[str]:
     """谁（传递地）把 target 当依据——改 target 后要复查的面。"""
     direct: dict[str, set[str]] = defaultdict(set)
     for aid, a in assets.items():
-        for p in a.get("premises") or []:
+        for p in premise_ids(a.get("premises")):
             direct[p].add(aid)
     seen: set[str] = set()
     stack = list(direct[target])
@@ -276,6 +334,34 @@ def reverse_impact(assets: dict[str, dict], target: str) -> list[str]:
     return sorted(seen)
 
 
+def spec_coverage(assets: dict[str, dict]) -> list[dict]:
+    """每个 **Spec**（带 `spec` 块的资产）的交付覆盖：按**角色**（category）分组它的 `delivers`。
+
+    这是「Spec 管全量交付」的机制核心：产出物按角色挂在 Spec 下，缺哪个角色一眼可查。
+    成熟度（tier）单独报——`verified` 是「验证过」， completeness 是「齐不齐」，两轴不混。
+    """
+    out: list[dict] = []
+    for aid, a in sorted(assets.items()):
+        spec = a.get("spec")
+        if not isinstance(spec, dict):
+            continue
+        roles = [r for r in (spec.get("required_roles") or []) if r in CATEGORIES]
+        delivers = [d for d in (spec.get("delivers") or []) if d in assets]
+        covered: dict[str, list[str]] = defaultdict(list)
+        for d in delivers:
+            covered[assets[d].get("category") or "(未分类)"].append(d)
+        missing = [r for r in roles if not covered.get(r)]
+        unverified = [d for d in delivers if assets[d].get("tier") != "verified"]
+        out.append({
+            "id": aid, "goal": a.get("purpose", ""),
+            "required_roles": roles, "delivers": delivers,
+            "covered": {r: sorted(covered.get(r, [])) for r in roles},
+            "missing_roles": missing,
+            "unverified": sorted(unverified),
+        })
+    return out
+
+
 # --------------------------------------------------------------------------- 渲染
 
 def _row_line(r: dict) -> str:
@@ -283,7 +369,7 @@ def _row_line(r: dict) -> str:
             f"`{r['path']}` | {r['purpose']} |")
 
 
-def render_md(rows: list[dict]) -> str:
+def render_md(rows: list[dict], assets: dict[str, dict]) -> str:
     stale = [r for r in rows if r["trust"] == "stale"]
     lines = [
         "# 项目资产索引",
@@ -310,11 +396,21 @@ def render_md(rows: list[dict]) -> str:
         lines += ["| id | 依据 stale_basis | 说明 |", "| --- | --- | --- |"]
         lines += [f"| `{r['id']}` | {', '.join('`' + p + '`' for p in r['stale_basis'])} | "
                   f"{r['purpose']} |" for r in stale]
+    specs = spec_coverage(assets)
+    lines += ["", "## specs（一等交付单元：产出按角色挂在 Spec 下）", ""]
+    if not specs:
+        lines.append("（未登记任何 Spec —— 在资产上挂 `spec` 块（`required_roles` + `delivers`）即可）")
+    else:
+        lines += ["| spec | 角色覆盖 | 缺角色 | 说明 |", "| --- | --- | --- | --- |"]
+        for s in specs:
+            cov = sum(1 for role in s["required_roles"] if s["covered"].get(role))
+            miss = "、".join(s["missing_roles"]) or "—"
+            lines.append(f"| `{s['id']}` | {cov}/{len(s['required_roles'])} | {miss} | {s['goal']} |")
     lines += ["", "## premises 图（依据 → 依赖它的资产）", ""]
     from collections import defaultdict as _dd
     incoming: dict[str, list[str]] = _dd(list)
     for r in rows:
-        for p in r["premises"]:
+        for p in premise_ids(r["premises"]):
             incoming[p].append(r["id"])
     if not incoming:
         lines.append("（无）")
@@ -325,12 +421,12 @@ def render_md(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _write(rows: list[dict]) -> None:
+def _write(rows: list[dict], assets: dict[str, dict]) -> None:
     index_jsonl, index_md = _index_paths()
     index_jsonl.write_text(
         "\n".join(json.dumps(r, ensure_ascii=False, sort_keys=True) for r in rows) + "\n",
         encoding="utf-8")
-    index_md.write_text(render_md(rows), encoding="utf-8")
+    index_md.write_text(render_md(rows, assets), encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- CLI
@@ -348,6 +444,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("order", parents=[common], help="刷新顺序（依据先的拓扑序）")
     pl = sub.add_parser("plan", parents=[common], help="改动路径 → 要刷新的资产（拓扑序）")
     pl.add_argument("paths", nargs="*", help="改动路径；省略则取 git 工作区改动")
+    dl = sub.add_parser("delivery", parents=[common],
+                        help="Spec 交付覆盖（缺角色 → 退出码 1）")
+    dl.add_argument("spec", nargs="?", help="只看某个 spec；省略=全部")
     args = parser.parse_args(argv)
 
     global ROOT
@@ -392,9 +491,32 @@ def main(argv: list[str] | None = None) -> int:
         print("\n按此序跑 scan；收尾跑 check")
         return 0
 
+    if args.cmd == "delivery":
+        specs = spec_coverage(assets)
+        if args.spec:
+            specs = [s for s in specs if s["id"] == args.spec]
+            if not specs:
+                raise SystemExit(f"不是 spec（资产没有 `spec` 块）：{args.spec}")
+        if not specs:
+            print("未登记任何 Spec（资产上没有 `spec` 块）")
+            return 0
+        failed = False
+        for s in specs:
+            ok = not s["missing_roles"]
+            cov = sum(1 for role in s["required_roles"] if s["covered"].get(role))
+            print(f"{'✓' if ok else '✗'} {s['id']}：角色覆盖 {cov}/{len(s['required_roles'])}"
+                  f" · 交付 {len(s['delivers'])} 条")
+            for role in s["required_roles"]:
+                print(f"    {role:16} {'、'.join(s['covered'].get(role) or []) or '（缺）'}")
+            if s["unverified"]:
+                print(f"    未 verified（成熟度，不拦门）：{s['unverified']}")
+            if not ok:
+                failed = True
+        return 1 if failed else 0
+
     rows = derive(assets)
     if args.cmd == "scan":
-        _write(rows)
+        _write(rows, assets)
         index_jsonl, index_md = _index_paths()
         print(f"✓ 已写 {index_jsonl.relative_to(ROOT)} 与 {index_md.relative_to(ROOT)}"
               f"（{len(rows)} 条资产）")
