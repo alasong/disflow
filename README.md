@@ -28,8 +28,20 @@ printf 'Hello\n' > greeting.txt
 # 而状态目录删掉重置是合法动作——配置不该被那个动作带走。
 cat > disflow.json <<'JSON'
 {
-  "acceptance_timeout": 300,
-  "stages": ["req", "design", "dev", "verify"]
+  "acceptance_timeout": 300
+}
+JSON
+
+# 看板定义另住一个文件（板 = 阶段 = 节点 stage 的取值闭集）：
+# 它会长大（动态建板），变更节奏也与引擎参数不同，所以不塞进 disflow.json。
+cat > boards.json <<'JSON'
+{
+  "boards": [
+    {"id": "req", "label": "需求"},
+    {"id": "design", "label": "设计"},
+    {"id": "dev", "label": "开发"},
+    {"id": "verify", "label": "验证"}
+  ]
 }
 JSON
 ```
@@ -222,6 +234,8 @@ python3 -m disflow.cli done demo a --decl '{"note":"…"}'   # 跑门；无已�
 # 三种视图（同一投影）
 python3 -m disflow.cli board demo          # 按 stage 列 + 列内树层级（默认只列运行中/待完成；
                                           #   --all 展开终态 · --all-columns 铺空列 · --json 全量事实）
+python3 -m disflow.cli board demo --by board   # **四块板**：一个阶段一块板（板头报上游完成度）；
+                                               #   与 --stage 互斥 · 空板恒铺（结构事实，不折叠）
 python3 -m disflow.cli tree demo           # 按 parent
 python3 -m disflow.cli graph demo [--dot]  # 按边
 
@@ -237,12 +251,13 @@ python3 -m disflow.cli reap demo           # 回收过期租约（worker 崩溃�
 python3 -m disflow.cli doctor
 ```
 
-## 配置（独立文件 `disflow.json`）
+## 配置（两个独立文件）
 
-零配置可用；要改则放一个独立文件在**项目根**（与状态目录是兄弟，不在它里面）：
+零配置可用；要改则放独立文件在**项目根**（与状态目录是兄弟，不在它里面）。
+**两个文件互不为前提**——只有其中一个也生效，两个都没有就全用内建默认。
 
 ```jsonc
-// <项目根>/disflow.json
+// <项目根>/disflow.json —— 引擎参数（超时/预算/租约/忽略集/负责方）
 {
   "acceptance_timeout": 300,          // 验收默认超时（秒）；节点可声明 acceptance.timeout 覆盖
   "size_budget": 400,                 // 单节点改动行数预算；节点可声明 context.size_budget
@@ -250,27 +265,51 @@ python3 -m disflow.cli doctor
   "git_timeout": 20,                  // git 探测超时（大仓调大）
   "output_tail": 2000,                // 证据里保留的输出尾部字符数
   "walk_ignore": ["node_modules"],    // 指纹递归目录时跳过的名字
-  "stages": ["req", "design", "dev", "verify"],    // 看板列（写时校验）；`done` 是节点状态，不是列
-  "roles": ["dev", "qa", "pm"]                            // 负责方（写时校验）
+  "roles": ["dev", "qa", "pm"],       // 负责方（写时校验）
+  "question_policy": { }              // 提问纪律（写进 worker 契约；形状见 spec.py）
 }
 ```
 
-路径可用 `DISFLOW_CONFIG` 指到别处。**为什么必须是独立文件**：配置是**策略**
-（人写、要版本化、要 review），状态是**派生**（可从事件重建）——放一起的话，
-「删掉 `.disflow/` 重置」这个合法动作会**静默带走策略**。
+```jsonc
+// <项目根>/boards.json —— 看板定义（板 id 即节点 stage 的取值闭集）
+{
+  "boards": [
+    {"id": "req",    "label": "需求"},   // 数组序 = 板的先后（不另设 order 字段）
+    {"id": "design", "label": "设计"},
+    {"id": "dev",    "label": "开发"},
+    {"id": "verify", "label": "验证"}
+  ]
+}
+```
 
-**先后顺序（会撞上）**：`disflow.json` 就是一个**普通文件**，引擎不特殊对待它。
-`start` 会拍下基线快照，所以它得**在第一次 `start` 之前**就位（或提交进仓）——
-否则作用域门会把它算成“这个节点引入的改动”（实测：`改动超出 touch_plan：['disflow.json']`）。
-之所以不把它列入白名单：配置变更有时**真是**节点干的活，那就该进 `touch_plan`；
+`boards.json` 也可写成纯字符串数组（`{"boards": ["req", "dev"]}`，label 回落成 id）。
+`done` **不是板**：它是节点**状态**（`core.TERMINAL`），写进去会被响亮拒收。
+板序第一块 = **流程入口**（root 容器落的板）；任务没声明 `stage` 时落 `dev`（是板集里的一块），
+没有 `dev` 就落入口板。要精确控制就显式声明 `stage`。
+
+路径可分别用 `DISFLOW_CONFIG` / `DISFLOW_BOARDS` 指到别处。**为什么必须是独立文件**：
+配置是**策略**（人写、要版本化、要 review），状态是**派生**（可从事件重建）——放一起的话，
+「删掉 `.disflow/` 重置」这个合法动作会**静默带走策略**。板定义再单独一个文件的理由：
+它会长大（动态建板），变更节奏与引擎参数不同，混在一起 review 看不清改的是哪件事。
+
+`disflow.json` 的 `stages` 键**已退役**（板定义搬到 `boards.json`）：写了会**响亮报错**
+并给迁移指引，**不静默回落** —— 回落就是「同一件事两处定义」，用户会以为配置生效了。
+
+**先后顺序（会撞上）**：这两个文件都是**普通文件**，引擎不特殊对待它们。
+`start` 会拍下基线快照，所以它们得**在第一次 `start` 之前**就位（或提交进仓）——
+否则作用域门会把它们算成“这个节点引入的改动”（实测：`改动超出 touch_plan：['disflow.json']`）。
+之所以不列入白名单：配置变更有时**真是**节点干的活，那就该进 `touch_plan`；
 白名单会默默藏掉那种情况。
 
-`disflow doctor` 会把 8 个键的实际取值与来源列出来（改了行为就变，那就得看得见）：
+`disflow doctor` 会把每个键的实际取值**与来源**列出来（两个文件了，来源不再唯一）：
 
 ```text
-配置：/path/disflow.json（存在）
-  acceptance_timeout = 300.0
-  ...
+配置（逐键报来源）：
+  /path/boards.json
+    boards = req=需求 · design=设计 · dev=开发 · verify=验证
+  /path/disflow.json
+    acceptance_timeout = 300.0
+    ...
 ```
 
 ## 开发看板（dogfooding）
@@ -285,8 +324,9 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 663 passed（零第三方依赖）——收尾全量，保留可用
+python3 -m unittest discover -s tests -t tests    # 717 passed（零第三方依赖）——收尾全量，保留可用
 python3 scripts/test_changed.py                   # 迭代期：只跑改动相关的子集（带「这不是全量」横幅）
+python3 scripts/test_changed.py --jobs 8          # 并发跑（按测试文件分进程；全链 78s→约 37s）
 python3 scripts/mutation_check.py                 # 变异测试：64/64（验证测试真的有牙）
 ```
 

@@ -22,6 +22,7 @@ test_selfgate_probe 3.9s · test_docs 3.8s · test_typecheck 3.2s · test_rescop
 
 跑法：
   python3 scripts/test_changed.py                        # 子集（默认，带「不是全量」横幅）
+  python3 scripts/test_changed.py --jobs 8               # 并发跑选中的测试文件（默认 1=串行；0=自动核数）
   python3 scripts/test_changed.py --changed disflow/views.py   # 注入式假改动（测试/排查用）
   python3 scripts/test_changed.py --base <sha>            # 并上相对 <sha> 已提交的改动
   python3 scripts/test_changed.py --all                  # 全量（等价于既有 discover 命令）
@@ -59,6 +60,22 @@ META_TESTS = (
 DOC_TESTS = ("test_docs.py", "test_readme_walkthrough.py")
 
 # 少数特殊文件 → 固定关联的测试文件（不靠命名/引用面推断的那些）。
+# 资产登记目录：`assets/registry.json` 与生成的 `index.jsonl` 由 `test_assets_scan.py` 对账。
+ASSETS_TESTS = ("test_assets_scan.py",)
+
+
+def _is_local_tool_path(rel: str) -> bool:
+    """仓根**点目录** = 本地产物 / 别的工具的状态（`.pi/` `.workbuddy-ai/` `.ruff_cache/`…），
+    不是本仓源码。
+
+    不判为 unmapped：否则每多一个工具状态目录，迭代期就被迫改跑全量
+    （实测 2026-10-11：`.workbuddy-ai/` 与新增 `assets/` 一起把子集打回全量 78s）。
+    `.github/` 白名单放行——它在语义上是仓内配置，不是本地状态。
+    """
+    head = rel.split("/", 1)[0]
+    return head.startswith(".") and head not in (".github",)
+
+
 SPECIAL_FILES = {
     "pyrightconfig.json": ("test_typecheck.py",),
 }
@@ -131,7 +148,11 @@ def map_changed_to_tests(changed: list[str],
     unmapped: list[str] = []
 
     for raw in changed:
-        rel = raw.strip().lstrip("./")
+        rel = raw.strip()
+        # 删 `./` 前缀要用**前缀**判，不能用 `lstrip("./")` —— 后者按字符集剥，
+        # 会把 `.workbuddy-ai/…` 的头点也吃掉，使点目录识别失效（实测 2026-10-11）。
+        if rel.startswith("./"):
+            rel = rel[2:]
         if not rel:
             continue
         base = os.path.basename(rel)
@@ -155,6 +176,19 @@ def map_changed_to_tests(changed: list[str],
 
         if rel.startswith("scripts/") and base.endswith(".py"):
             _add_module_tests(selected, tests, base[:-3], rel, kind="script")
+            continue
+
+        if _is_local_tool_path(rel):     # 本地工具状态，不是本仓源码：不映射、不算 unmapped
+            continue
+
+        if rel.startswith("assets/"):
+            for name in ASSETS_TESTS:
+                if name in testset:
+                    selected.setdefault(name, f"资产登记改动：{rel}")
+            if base.endswith(".md"):
+                for name in DOC_TESTS:
+                    if name in testset:
+                        selected.setdefault(name, f"资产文档改动：{rel}")
             continue
 
         if rel in SPECIAL_FILES:
@@ -200,6 +234,45 @@ def build_command(selected: list[str], *, run_all: bool = False) -> list[str]:
     if run_all:
         return list(FULL_COMMAND)
     return [sys.executable, "-m", "unittest", *(name[:-3] for name in selected)]
+
+
+def resolve_jobs(n: int) -> int:
+    """`--jobs 0` = 自动（CPU 核数）；其余原样（≥1）。
+
+    为何不默认自动：并发对**子进程密集**的套件收益有限（实测 8 并发只到 2.1×，
+    有效并行 ~3.3 核），且会拉高 CPU 争用——默认保持串行、可预测，由人显式开并发。
+    """
+    return (os.cpu_count() or 1) if n == 0 else n
+
+
+def parallel_commands(selected: list[str]) -> list[list[str]]:
+    """每个测试文件一个 `unittest` 调用（供 `--jobs>1` 并发跑）。
+
+    按**文件**而非按用例并行：每个文件独立进程，各自 `DISFLOW_STATE_DIR`、各自 import，
+    互不串味（用例级并行会共享 `os.environ`，实测会串味）。
+    """
+    return [[sys.executable, "-m", "unittest", name[:-3]] for name in selected]
+
+
+def run_parallel(selected: list[str], jobs: int) -> int:
+    """并发跑每个测试文件并聚合退出码；任一失败 → 1。失败者的完整输出照抄到 stdout。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    env = test_env()
+
+    def one(cmd: list[str]) -> tuple[str, int, str]:
+        proc = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True)
+        return cmd[-1], proc.returncode, proc.stdout + proc.stderr
+
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        results = list(pool.map(one, parallel_commands(selected)))
+    failed = [(name, out) for name, rc, out in results if rc != 0]
+    for name, out in failed:
+        print(f"\n===== FAILED: {name} =====")
+        print(out)
+    print(f"\n[并行 jobs={jobs}] {len(results)} 个测试文件 · "
+          f"{len(results) - len(failed)} 通过 · {len(failed)} 失败")
+    return 1 if failed else 0
 
 
 def test_env() -> dict[str, str]:
@@ -248,7 +321,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="注入式假改动（逗号分隔路径），覆盖 git 检测（测试/排查用）")
     parser.add_argument("--dry-run", action="store_true", help="只打印计划与命令，不执行")
     parser.add_argument("--json", action="store_true", help="计划以 JSON 输出")
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="并发跑测试文件的进程数（默认 1；0=自动核数）")
     args = parser.parse_args(argv)
+    jobs = resolve_jobs(args.jobs)
 
     if args.all:
         tests = all_test_files()
@@ -262,6 +338,9 @@ def main(argv: list[str] | None = None) -> int:
             print("$ " + " ".join(command))
         if args.dry_run:
             return 0
+        if jobs > 1:
+            print(f"[并行] jobs={jobs}（每个测试文件一个进程）")
+            return run_parallel(all_test_files(), jobs)
         return subprocess.run(command, cwd=ROOT).returncode
 
     if args.changed is not None:
@@ -305,6 +384,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             return 0
 
+    if jobs > 1:
+        run_list = list(all_test_files()) if run_all else plan["selected"]
+        print(f"[并行] jobs={jobs}（每个测试文件一个进程）")
+        return run_parallel(run_list, jobs)
     return subprocess.run(command, cwd=ROOT, env=test_env()).returncode
 
 

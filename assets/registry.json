@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "_doc": "手写事实源。字段与派生规则见 assets/README.md。tier=verified 必给 evidence。",
+  "assets": {
+    "requirements": {
+      "type": "doc",
+      "path": "docs/requirements.md",
+      "purpose": "FR/NFR 需求基线（FR-1..29 + NFR-1..7），一切验收的源头",
+      "tier": "asserted",
+      "premises": []
+    },
+    "design": {
+      "type": "doc",
+      "path": "docs/design.md",
+      "purpose": "实现契约：节点字段 / 事件 / 门 / 投影语义（改实现前先看它）",
+      "tier": "asserted",
+      "premises": ["pkg"]
+    },
+    "architecture": {
+      "type": "doc",
+      "path": "docs/architecture.md",
+      "purpose": "按实现画的架构图（events→state→树/图/看板/分发/自检）",
+      "tier": "asserted",
+      "premises": ["pkg"]
+    },
+    "dev-board": {
+      "type": "board",
+      "path": "docs/dev-board.md",
+      "purpose": "开发看板 + 逐轮 fresh-context 独立验证记录",
+      "tier": "asserted",
+      "premises": ["pkg", "tests"]
+    },
+    "backlog": {
+      "type": "doc",
+      "path": "docs/v0.2-backlog.md",
+      "purpose": "v0.2 未完成缺口清单（唯一放行依据）",
+      "tier": "asserted",
+      "premises": []
+    },
+    "fr-gap": {
+      "type": "report",
+      "path": "docs/fr-nfr-gap-report.md",
+      "purpose": "需求覆盖机检报告（由 scripts/fr_check.py 生成）",
+      "tier": "asserted",
+      "premises": ["pkg", "scripts"]
+    },
+    "lessons": {
+      "type": "doc",
+      "path": "docs/self-harden-lessons.md",
+      "purpose": "self-harden 树踩坑与规避（过程资产，跨任务复用）",
+      "tier": "asserted",
+      "premises": ["pkg"]
+    },
+    "design-draft": {
+      "type": "doc",
+      "path": "docs/design-dispatch-tree-graph.md",
+      "purpose": "分发器/树/图设计草稿（标注未实现）",
+      "tier": "stub",
+      "premises": []
+    },
+    "readme": {
+      "type": "doc",
+      "path": "README.md",
+      "purpose": "5 分钟上手 walkthrough + 量化 / worktree 说明",
+      "tier": "asserted",
+      "premises": ["pkg"]
+    },
+    "pkg": {
+      "type": "code",
+      "path": "disflow/",
+      "purpose": "引擎包：状态/树/图/门/视图/CLI（唯一实现面）",
+      "tier": "verified",
+      "evidence": "python3 -m unittest discover -s tests -t tests",
+      "premises": []
+    },
+    "tests": {
+      "type": "test",
+      "path": "tests/",
+      "purpose": "验收测试套件：门拒收 / 投影一致 / 分层自检 / CLI 回归",
+      "tier": "verified",
+      "evidence": "python3 -m unittest discover -s tests -t tests",
+      "premises": ["pkg"]
+    },
+    "scripts": {
+      "type": "script",
+      "path": "scripts/",
+      "purpose": "自检 / 探针 / 报告脚本（fr_check、mutation_check、assets_scan 等）",
+      "tier": "asserted",
+      "premises": ["pkg"]
+    },
+    "config": {
+      "type": "config",
+      "path": "pyrightconfig.json",
+      "purpose": "类型检查范围与 Python 版本",
+      "tier": "asserted",
+      "premises": []
+    },
+    "lens-config": {
+      "type": "config",
+      "path": ".pi-lens.json",
+      "purpose": "pi-lens 静态检查规则开关",
+      "tier": "asserted",
+      "premises": []
+    }
+  }
+}

@@ -109,6 +109,25 @@ class MappingGuardTest(unittest.TestCase):
         self.assertIn("test_docs.py", selected)
         self.assertIn("test_readme_walkthrough.py", selected)
 
+    def test_assets_change_selects_the_asset_guard(self):
+        """资产登记改动走 `test_assets_scan.py`，不再因「无法映射」退化成全量。"""
+        plan = SCRIPT_MODULE.map_changed_to_tests(["assets/registry.json"])
+        self.assertIn("test_assets_scan.py", plan["selected"])
+        self.assertFalse(plan["fallback_full"], "assets/ 是本仓源码，不该判为 unmapped")
+        self.assertEqual(plan["unmapped"], [])
+
+    def test_assets_markdown_selects_document_guards(self):
+        """`assets/README.md` 是文档 ⇒ 并上文档守卫（与普通 .md 同判据）。"""
+        selected = self._selected(["assets/README.md"])
+        self.assertIn("test_docs.py", selected)
+        self.assertIn("test_assets_scan.py", selected)
+
+    def test_local_tool_dotdir_is_not_unmapped(self):
+        """别的工具的状态点目录（`.workbuddy-ai/` 等）不该把子集打回全量。"""
+        plan = SCRIPT_MODULE.map_changed_to_tests([".workbuddy-ai/memory/x.md"])
+        self.assertFalse(plan["fallback_full"])
+        self.assertEqual(plan["unmapped"], [])
+
     def test_unmappable_change_falls_back_to_full_not_silent_skip(self):
         """**绝不静默跳过**：无法映射的改动 ⇒ 保守改跑全量，并显式列出该路径。"""
         plan = SCRIPT_MODULE.map_changed_to_tests(["LICENSE"])
@@ -139,6 +158,21 @@ class AllModeEquivalenceTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("-m unittest discover -s tests -t tests", proc.stdout)
         self.assertIn("全量", proc.stdout)
+
+
+class ParallelModeTest(unittest.TestCase):
+    """`--jobs` 并发：按文件分进程（各自环境，不串味），聚合退出码。"""
+
+    def test_parallel_commands_is_one_process_per_file(self):
+        cmds = SCRIPT_MODULE.parallel_commands(["test_docs.py", "test_views.py"])
+        self.assertEqual(len(cmds), 2)
+        for cmd in cmds:
+            self.assertEqual(cmd[:3], [sys.executable, "-m", "unittest"])
+        self.assertEqual({c[-1] for c in cmds}, {"test_docs", "test_views"})
+
+    def test_parallel_run_aggregates_exit_zero(self):
+        """端到端：并发跑一个真实测试文件，聚合退出码为 0。"""
+        self.assertEqual(SCRIPT_MODULE.run_parallel(["test_assets_scan.py"], 2), 0)
 
 
 class SubsetBannerTest(unittest.TestCase):
