@@ -54,12 +54,28 @@ trust(a)   = "stale"  if stale_basis(a) else tier(a)
 | `index.jsonl` | `assets_scan.py` | ✓ | AI/工具（一行一资产，机读） |
 | `INDEX.md` | `assets_scan.py` | ✓ | 人/AI 快速 grep |
 
+## 刷新顺序（执行任务时）
+
+**顺序 = premises 拓扑序（依据先、被依据后），由 `assets_scan.py order` 派生——不手写。**
+（Jev choice conf 0.95：手写 spec 会成第二事实源 → 漂移。）
+
+三件事必须分开，别混：
+
+| 问题 | 谁管 |
+|---|---|
+| **顺序**（先刷谁） | premises DAG 拓扑序 → `assets_scan.py order` |
+| **范围**（改动后刷哪些） | 改到的资产 ∪ `impact` 下游 |
+| **时机**（什么时候刷） | 工作流事件：node-done / 收尾 |
+
+`spec`（节点验收点）**不**管顺序——它最多管**门**：「本节点完成时，它碰到的资产已 `scan` 且 `check` 通过」。
+
 ## 决策记录（Jev 定，低置信/高风险才上人）
 
 | 日期 | 决策 | 判据 | 结果 |
 | --- | --- | --- | --- |
 | 2026-10-11 | 引入 `category` 类别轴（与 `type` 正交） | jev `choice` conf 0.64 + 可逆低风险 | **加字段** |
 | 2026-10-11 | 信任**不**沿依据边传递（保持一跳） | jev `choice` conf 0.89；传递 = 推测传染（一个根动一次刷红全图） | **保持一跳** |
+| 2026-10-11 | 刷新顺序由 premises 拓扑序**派生**，不用手写 spec | jev `choice` conf 0.95；`noul`(spec 管顺序合适)=0.20 | **派生** |
 
 ## 已知局限（诚实声明，别当没有）
 

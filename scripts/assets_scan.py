@@ -200,6 +200,28 @@ def derive(assets: dict[str, dict]) -> list[dict]:
     return rows
 
 
+def topo_order(assets: dict[str, dict]) -> list[str]:
+    """刷新顺序：**依据先、被依据后**（premises DAG 的拓扑序）。
+
+    顺序是 DAG 的**派生量**，不手写（Jev choice conf=0.95）；无环由 `validate` 保证。
+    同一层内按 id 排序，保证输出确定性。
+    """
+    order: list[str] = []
+    seen: set[str] = set()
+
+    def visit(a: str) -> None:
+        if a in seen:
+            return
+        for p in assets[a].get("premises") or []:
+            visit(p)
+        seen.add(a)
+        order.append(a)
+
+    for a in sorted(assets):
+        visit(a)
+    return order
+
+
 def reverse_impact(assets: dict[str, dict], target: str) -> list[str]:
     """谁（传递地）把 target 当依据——改 target 后要复查的面。"""
     direct: dict[str, set[str]] = defaultdict(set)
@@ -286,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check", parents=[common], help="校验；有 stale 或缺证据则退出码 1")
     imp = sub.add_parser("impact", parents=[common], help="反查依赖指定资产的面")
     imp.add_argument("id")
+    sub.add_parser("order", parents=[common], help="刷新顺序（依据先的拓扑序）")
     args = parser.parse_args(argv)
 
     global ROOT
@@ -305,6 +328,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{args.id} 的影响面（{len(hits)} 条，改它后要复查）：")
             for h in hits:
                 print(f"  - {h}（{assets[h]['purpose']}）")
+        return 0
+
+    if args.cmd == "order":
+        seq = topo_order(assets)
+        print(f"刷新顺序（依据 → 被依据，{len(seq)} 条）：")
+        for i, aid in enumerate(seq, 1):
+            cat = assets[aid].get("category", "")
+            print(f"  {i:2}. {aid:14} [{cat}]")
         return 0
 
     rows = derive(assets)

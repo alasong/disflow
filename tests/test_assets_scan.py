@@ -119,6 +119,17 @@ class StaleRuleTest(unittest.TestCase):
         self.assertEqual(self.scan.reverse_impact(assets, "a"), ["b", "c"])
         self.assertEqual(self.scan.reverse_impact(assets, "c"), [])
 
+    def test_order_puts_premises_before_dependents(self):
+        """刷新顺序：依据必须排在被依据之前（拓扑序）。"""
+        assets = {
+            "a": _asset(premises=[]),
+            "b": _asset(premises=["a"]),
+            "c": _asset(premises=["b"]),
+        }
+        order = self.scan.topo_order(assets)
+        self.assertLess(order.index("a"), order.index("b"))
+        self.assertLess(order.index("b"), order.index("c"))
+
 
 class IndexSyncTest(unittest.TestCase):
     """生成索引与手写注册表不许漂移（只比稳定字段）。"""
