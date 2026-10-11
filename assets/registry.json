@@ -167,6 +167,17 @@
         "pkg",
         "design"
       ]
+    },
+    "spec-pdca-template": {
+      "type": "doc",
+      "category": "process",
+      "path": "templates/spec-pdca/README.md",
+      "purpose": "spec 模板（每个功能一份，内部 PDCA）：拷去别的项目用；含功能模板与项目铁律模板",
+      "tier": "asserted",
+      "premises": [
+        "readme",
+        "pkg"
+      ]
     }
   }
 }

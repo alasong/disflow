@@ -144,6 +144,20 @@ def _stale_lines(check_output: str) -> list[str]:
 _FAILURE_HEAD = 15
 
 
+def _only_readme_count_failed(output: str) -> bool:
+    """失败项**只有** `test_readme_test_count_matches_the_loaded_suite` 吗？
+
+    为何要这个判据（实测踩到，白跑了 4 轮 36s）：`--sync-readme` 的同步发生在测试
+    **之后**，所以「数字不对」那一次必然红——哪怕数字已经被改对了。
+    于是每加一个测试就要跑两次门。
+
+    判据必须**窄**：只有**唯一**失败项是那条门时才算，否则会把真失败当成
+    「重跑一次就好」——那是灾难性的（会把真问题当噪音）。
+    """
+    fails = re.findall(r"^FAIL:\s*(\S+)", output, re.MULTILINE)
+    return fails == ["test_readme_test_count_matches_the_loaded_suite"]
+
+
 def _failure_excerpt(output: str, limit: int = _FAILURE_HEAD) -> list[str]:
     """从测试输出里抽**失败详情**（不是只有名字）—— 从 `FAIL:`/`ERROR:` 起
     连同 traceback 一起，直到下一条失败或分隔线。
@@ -217,12 +231,15 @@ def main(argv: list[str] | None = None) -> int:
                 changed = sync_readme_count(real)
                 if changed:
                     print(f"        README 测试数同步：{changed} → {real}")
-                    if code != 0:
-                        # **必须明说**：同步发生在测试**之后**，所以「数字不同步」导致的
-                        # 那次红不会因本次同步而变绿——要再跑一次才是真读数。
-                        # 不说的话读者会以为同步没用（实测踩到，白跑一轮 36s）。
-                        print("        ↳ 本次测试是**同步前**跑的；若红仅因这个数字，"
-                              "重跑一次本命令即绿")
+                    # **自动重跑**（只此一次）：同步发生在测试之后，所以那次红是
+                    # 「同步前的读数」，不是真失败。不重跑的话每次加测试都要跑两轮
+                    # （实测白跑了 4 次 36s）。触发条件**必须窄**：
+                    # 只有唯一失败项是那条数字门时才算。
+                    if code != 0 and _only_readme_count_failed(output):
+                        print("        ↳ 唯一失败项是测试数门（已同步）⇒ 自动重跑一次…")
+                        code, output = _run(test_cmd)
+                        handle.write(f"\n===== 全量测试（同步后重跑）=====\n{output}\n")
+                        print(f"            {_tests_summary(output)}")
         if code != 0:
             rc = 1
             # 报**摘要 + 失败详情**（不只是名字）：读者读这一段就能定位，不必重跑一遍。

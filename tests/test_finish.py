@@ -80,6 +80,27 @@ class FinishGateTest(unittest.TestCase):
         self.assertFalse(hasattr(self.finish, "test_argv"),
                          "test_argv 应随串行开关一起删除")
 
+    def test_only_readme_count_failed_is_narrow(self):
+        """自动重跑的触发判据必须**窄**：只有唯一失败项是数字门时才算。
+
+        为何是硬判据（实测踩到）：`--sync-readme` 的同步发生在测试**之后**，
+        所以「数字不对」那一次必然红——每加一个测试就要跑两轮门（实测白跑 4 轮 36s）。
+        加自动重跑解决它，但**触发条件一旦放宽就会把真失败当噪音**：
+        那是灾难性的（真 bug 被「重跑一次就好」掩盖）。
+        """
+        one_bad = ("FAIL: test_readme_test_count_matches_the_loaded_suite (x)\n"
+                   "FAILED (failures=1)\n")
+        self.assertTrue(self.finish._only_readme_count_failed(one_bad))
+
+        # 关键反例：数字门 **+** 别的失败 ⇒ 不得重跑（真 bug 不能被掩盖）
+        mixed = ("FAIL: test_readme_test_count_matches_the_loaded_suite (x)\n"
+                 "FAIL: test_real_bug (y)\n")
+        self.assertFalse(self.finish._only_readme_count_failed(mixed),
+                         "还有真失败时不得重跑——那会把真 bug 当噪音")
+
+        self.assertFalse(self.finish._only_readme_count_failed("FAIL: test_real_bug (y)\n"))
+        self.assertFalse(self.finish._only_readme_count_failed("OK\n"), "全绿不需重跑")
+
     def test_actual_test_count_handles_both_real_layouts(self):
         """取数逻辑：**纯函数测**（不跑真测试，秒级）。
 

@@ -345,7 +345,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 869 passed（零第三方依赖）——**数字口径基准**（当场装载数，与并发无关）
+python3 -m unittest discover -s tests -t tests    # 882 passed（零第三方依赖）——**数字口径基准**（当场装载数，与并发无关）
 python3 scripts/finish.py                          # 收尾门：全量（**恒并行**）+ 资产 check（退出码当门）
 python3 scripts/finish.py --jobs 1                 # 单进程跑同一套（调试用；不再退回 direct discover）
 python3 scripts/finish.py --changed                # 迭代用：门只跑改动子集（**收尾仍须**跑不带它的）
@@ -387,7 +387,9 @@ disflow/
   engine.py       # 动词面（锁 + append）
   cli.py          # 命令装配
 tests/            # stdlib unittest（含 test_layering.py：核心零业务词的逆向自检）
-scripts/          # seed_dev_board.py
+scripts/          # 仓内工具（finish/assets_scan/test_changed/doc_outline/disflow-shim …）
+templates/        # 拷去别的项目用的模板（见「在别的项目里用」）
+  spec-pdca/      #   spec 模板：一个功能一份，内部按 PDCA（README + SPEC-模板 + constitution-模板）
 ```
 
 模块分两层（NFR-2）：**核心层** `core`/`store`/`graph`/`ready` 零业务词、依赖单向；
