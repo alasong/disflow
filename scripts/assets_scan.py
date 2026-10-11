@@ -42,6 +42,9 @@ def _index_paths() -> tuple[Path, Path]:
     return ROOT / "assets" / "index.jsonl", ROOT / "assets" / "INDEX.md"
 
 TYPES = {"code", "test", "script", "doc", "board", "report", "config"}
+# 语义类别（可选字段）：与 type（文件形态）正交——需求/设计/实现/验证/过程…
+CATEGORIES = {"requirement", "design", "implementation", "verification",
+              "process", "documentation", "config"}
 TIERS = ("verified", "asserted", "stub")
 REQUIRED = ("type", "path", "purpose", "tier")
 
@@ -115,6 +118,9 @@ def validate(assets: dict[str, dict]) -> None:
                 errors.append(f"{aid}: 缺必填字段 {key}")
         if a.get("type") not in TYPES:
             errors.append(f"{aid}: type 非法 {a.get('type')!r}（应为 {sorted(TYPES)}）")
+        if a.get("category") and a["category"] not in CATEGORIES:
+            errors.append(f"{aid}: category 非法 {a['category']!r}"
+                          f"（应为 {sorted(CATEGORIES)} 或省略）")
         if a.get("tier") not in TIERS:
             errors.append(f"{aid}: tier 非法 {a.get('tier')!r}（应为 {list(TIERS)}）")
         if a.get("tier") == "verified" and not a.get("evidence"):
@@ -169,6 +175,7 @@ def derive(assets: dict[str, dict]) -> list[dict]:
         rows.append({
             "id": aid,
             "type": a["type"],
+            "category": a.get("category", ""),
             "path": a["path"],
             "purpose": a["purpose"],
             "tier": a["tier"],
@@ -230,6 +237,13 @@ def render_md(rows: list[dict]) -> str:
         "| --- | --- | --- | --- | --- | --- |",
     ]
     lines += [_row_line(r) for r in rows]
+    lines += ["", "## 按类别（需求 / 设计 / 实现 / 验证 / 过程…）", "",
+              "| 类别 | 资产 |", "| --- | --- |"]
+    by_cat: dict[str, list[str]] = {}
+    for r in rows:
+        by_cat.setdefault(r["category"] or "(未分类)", []).append(r["id"])
+    for cat in sorted(by_cat):
+        lines.append(f"| {cat} | {', '.join('`' + i + '`' for i in sorted(by_cat[cat]))} |")
     lines += ["", "## stale（依据物已变，结论可能失真）", ""]
     if not stale:
         lines.append("（无）")

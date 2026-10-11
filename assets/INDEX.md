@@ -21,6 +21,18 @@
 | `scripts` | script | asserted | stale | `scripts/` | 自检 / 探针 / 报告脚本（fr_check、mutation_check、assets_scan 等） |
 | `tests` | test | verified | stale | `tests/` | 验收测试套件：门拒收 / 投影一致 / 分层自检 / CLI 回归 |
 
+## 按类别（需求 / 设计 / 实现 / 验证 / 过程…）
+
+| 类别 | 资产 |
+| --- | --- |
+| config | `config`, `lens-config` |
+| design | `architecture`, `design`, `design-draft` |
+| documentation | `readme` |
+| implementation | `pkg`, `scripts` |
+| process | `dev-board`, `lessons` |
+| requirement | `backlog`, `fr-gap`, `requirements` |
+| verification | `tests` |
+
 ## stale（依据物已变，结论可能失真）
 
 | id | 依据 stale_basis | 说明 |

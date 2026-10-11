@@ -66,6 +66,10 @@ class ValidateTest(unittest.TestCase):
         msg = self._reject({"a": _asset(path="docs/nope-不存在.md")})
         self.assertIn("path 不存在", msg)
 
+    def test_invalid_category_rejected(self):
+        msg = self._reject({"a": _asset(category="bogus")})
+        self.assertIn("category 非法", msg)
+
 
 class StaleRuleTest(unittest.TestCase):
     """固定 git 事实测 stale 规则；不依赖当前工作区脏不脏。"""
@@ -131,6 +135,8 @@ class IndexSyncTest(unittest.TestCase):
             row = index[aid]
             for key in ("type", "path", "purpose", "tier"):
                 self.assertEqual(row[key], decl[key], f"{aid}.{key} 漂移")
+            self.assertEqual(row.get("category", ""), decl.get("category", ""),
+                             f"{aid}.category 漂移")
             self.assertEqual(row["premises"], list(decl.get("premises") or []),
                              f"{aid}.premises 漂移")
 

@@ -25,7 +25,8 @@
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `type` | ✓ | `code` / `test` / `script` / `doc` / `board` / `report` / `config` |
+| `type` | ✓ | `code` / `test` / `script` / `doc` / `board` / `report` / `config`（文件形态） |
+| `category` | 可选 | 语义类别（与 type 正交）：`requirement` / `design` / `implementation` / `verification` / `process` / `documentation` / `config` |
 | `path` | ✓ | 相对仓根；文件或目录（目录取全树） |
 | `purpose` | ✓ | 一句话：给谁、解决什么。空 → `scan` 拒收 |
 | `tier` | ✓ | 见上 |
@@ -52,6 +53,13 @@ trust(a)   = "stale"  if stale_basis(a) else tier(a)
 | `registry.json` | 人 | ✓ | 事实源 |
 | `index.jsonl` | `assets_scan.py` | ✓ | AI/工具（一行一资产，机读） |
 | `INDEX.md` | `assets_scan.py` | ✓ | 人/AI 快速 grep |
+
+## 决策记录（Jev 定，低置信/高风险才上人）
+
+| 日期 | 决策 | 判据 | 结果 |
+| --- | --- | --- | --- |
+| 2026-10-11 | 引入 `category` 类别轴（与 `type` 正交） | jev `choice` conf 0.64 + 可逆低风险 | **加字段** |
+| 2026-10-11 | 信任**不**沿依据边传递（保持一跳） | jev `choice` conf 0.89；传递 = 推测传染（一个根动一次刷红全图） | **保持一跳** |
 
 ## 已知局限（诚实声明，别当没有）
 
