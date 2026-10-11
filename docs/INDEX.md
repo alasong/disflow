@@ -36,6 +36,10 @@
 | `docs/self-harden-evaluation.md` | report | historical | self-harden 这批改动的收益评估 |
 | `docs/self-harden-lessons.md` | report | historical | self-harden 踩过什么 / 怎么发现 / 下次怎么避免 |
 | `docs/fr-nfr-gap-report.md` | report | historical | FR/NFR 缺口与机检报告（`scripts/fr_check.py` 生成） |
+| `docs/decisions/README.md` | reference | current | 决策记录（ADR）规矩 + 索引（一决定一篇，写入即冻结） |
+| `docs/decisions/0001-运行视图-v8-可用性四修.md` | decision | superseded | v8：追加式刷新 / 终态行不打 goal / 默认只列未完成 |
+| `docs/decisions/0002-看板-v9-默认只列运行中加待完成.md` | decision | active | v9：默认只列运行中+待完成，事实不丢 |
+| `docs/decisions/0003-运行视图-v10-按板列不按树.md` | decision | active | v10：看板 = 阶段列，树不是一块板（当前形态） |
 
 ## 3. 增 / 改 / 删 的规矩
 
@@ -44,7 +48,7 @@
 | **新增** | 先在本表登记（`type` / `status` / 一句话），否则测试红 | `tests/test_docs_index.py` |
 | **修改** | `design`/`requirements`/`reference` 改**现状**；`report` 是**快照**，不改 | 人 |
 | **删 / 归档** | 一次性的 `report` 不再被引用即可归档（删或移 `docs/archive/`）；**先删登记行**，否则「登记了不存在的文件」红 | `tests/test_docs_index.py` |
-| **重设计史** | **不进** `design.md`（那写现状）—— 进 `dev-board.md` 流水，或单起一篇 `decision` | 人 |
+| **重设计史** | **不进** `design.md`（那里写**现状**）—— 进 `docs/decisions/`（ADR，一决定一篇、写入即冻结）或 `dev-board.md` 流水 | 人 + `test_docs_index.py` |
 
 **冗余的判据**：同一**事实**出现在两处即冗余（例：板定义只在 `boards.py`/`boards.json`，
 `design.md` 只**引用**不复制）。文档里贴计数会漂 —— 计数要么由脚本生成（如

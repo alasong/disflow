@@ -19,19 +19,26 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 INDEX = ROOT / "docs" / "INDEX.md"
 
 # 只认**带 `docs/` 前缀**的 .md 或裸 `README.md`：散文里的 `design.md` 这类相对提及不算登记
-# （否则一句话就会把一篇文档「登记」进来，守卫形同虚设）。
-_ENTRY = re.compile(r"`(docs/[A-Za-z0-9_./-]+\.md|README\.md)`")
+# （否则一句话就会把一篇文档「登记」进来，守卫形同虚设）。文件名可含中文（ADR 就是），
+# 故字符类放成「除反引号/空白/竖线外任意」——表格单元里的路径不会含这三者。
+_ENTRY = re.compile(r"`(docs/[^`\s|]+\.md|README\.md)`")
 _TYPES = ("requirements", "design", "reference", "process", "decision", "report")
+
+
+def _all_docs() -> set[str]:
+    """`docs/` 下（**递归**，含 `docs/decisions/`）每个 .md 的仓内相对路径 + 裸 `README.md`。"""
+    found = {f"docs/{p.relative_to(ROOT / 'docs').as_posix()}" for p in (ROOT / "docs").rglob("*.md")}
+    found.add("README.md")
+    return found
 
 
 class DocsIndexTest(unittest.TestCase):
     def _registered(self) -> set[str]:
-        return set(_ENTRY.findall(INDEX.read_text(encoding="utf-8")))
+        # 过滤掉**通配形态**（如散文里的 `docs/*.md`）——它们不是文件，不存在「死链」一说。
+        return {e for e in _ENTRY.findall(INDEX.read_text(encoding="utf-8")) if "*" not in e}
 
     def test_every_doc_is_registered(self):
-        docs = {f"docs/{p.name}" for p in sorted((ROOT / "docs").glob("*.md"))}
-        docs.add("README.md")
-        missing = sorted(docs - self._registered())
+        missing = sorted(_all_docs() - self._registered())
         self.assertEqual(missing, [],
                          f"这些文档没在 docs/INDEX.md 登记（新增文档必须登记）：{missing}")
 
