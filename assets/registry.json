@@ -2,6 +2,17 @@
   "version": 1,
   "_doc": "手写事实源。字段与派生规则见 assets/README.md。tier=verified 必给 evidence。",
   "assets": {
+    "agents": {
+      "type": "doc",
+      "category": "documentation",
+      "path": "AGENTS.md",
+      "purpose": "AI 常驻入口：动手/回答前先读 docs/INDEX.md + assets/INDEX.md（缺口修复见 ADR 0004）",
+      "tier": "asserted",
+      "premises": [
+        "design",
+        "pkg"
+      ]
+    },
     "requirements": {
       "type": "doc",
       "category": "requirement",
