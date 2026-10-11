@@ -156,6 +156,17 @@
       "purpose": "pi-lens 静态检查规则开关",
       "tier": "asserted",
       "premises": []
+    },
+    "kaa-comparison": {
+      "type": "report",
+      "category": "documentation",
+      "path": "docs/kaa-comparison.md",
+      "purpose": "disflow vs kaa 机制对照：规模/各自独有/差距结论（实测，用于回答「差多少」）",
+      "tier": "asserted",
+      "premises": [
+        "pkg",
+        "design"
+      ]
     }
   }
 }

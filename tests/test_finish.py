@@ -37,17 +37,84 @@ class FinishGateTest(unittest.TestCase):
         self.assertNotIn("assets_scan.py scan", proc.stdout,
                          "收尾门不得写盘（scan 会重写 index，提交后再跑必留 diff）")
 
-    def test_dry_run_jobs_1_falls_back_to_serial_discover(self):
+    def test_there_is_no_serial_switch(self):
+        """**不提供串行开关**（刻意）：串行曾是「数字口径」的第二个来源，
+        而两个来源就意味着一处要区分二者——实测那处（`_actual_test_count`）连错三轮，
+        每次都静默写错 README。取消第二来源 ⇒ 那类 bug 整类消失。
+
+        具体判据：`--jobs 1` **不得**退回 `unittest discover`（旧行为），
+        而应与其它 N 一样走 `test_changed.py` 并行（jobs=1 就是单进程）。
+        """
         proc = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "finish.py"), "--jobs", "1", "--dry-run"],
             cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        for token in ("unittest", "discover", "assets_scan.py check"):
-            self.assertIn(token, proc.stdout)
+        self.assertIn("test_changed.py", proc.stdout,
+                      "--jobs 1 也必须走 test_changed.py（串行开关已取消）")
+        self.assertNotIn("-m unittest", proc.stdout,
+                         "不得再有 direct discover 这条路（那是第二个数字来源）")
 
-    def test_test_argv_matches_the_readme_command(self):
-        argv = self.finish.test_argv()
-        self.assertEqual(argv[1:], ["-m", "unittest", "discover", "-s", "tests", "-t", "tests"])
+    def test_changed_mode_drops_all_flag(self):
+        """`--changed`（迭代）不带 `--all` ⇒ 走子集；默认（收尾）带 `--all` ⇒ 全量。
+
+        为何打这个钉子（实测需求）：本门全量 ~36s，其中 94% 是 3 个 worktree 测试
+        （真建 git 仓 + 真建 worktree）。迭代期不该为一点改动付全量代价，
+        但收尾**必须**全量（本仓纪律）—— 两个档不许互相渗透。
+        """
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "finish.py"), "--changed", "--dry-run"],
+            cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("test_changed.py", proc.stdout)
+        self.assertNotIn("--all", proc.stdout, "--changed 必须走子集，不得带 --all")
+
+    def test_default_mode_keeps_all_flag(self):
+        """默认仍是全量——收尾口径不得因新增 `--changed` 而放宽。"""
+        argv = self.finish.parallel_test_argv(0)
+        self.assertIn("--all", argv)
+        argv_changed = self.finish.parallel_test_argv(0, changed=True)
+        self.assertNotIn("--all", argv_changed)
+
+    def test_no_direct_discover_path_remains(self):
+        """模块里不得再留 `test_argv`（它只服务串行 discover = 已取消的第二来源）。"""
+        self.assertFalse(hasattr(self.finish, "test_argv"),
+                         "test_argv 应随串行开关一起删除")
+
+    def test_actual_test_count_handles_both_real_layouts(self):
+        """取数逻辑：**纯函数测**（不跑真测试，秒级）。
+
+        为何在这里打钉子（实测踩了三轮，每次都是**静默写错文档**）：
+        README 声明一个测试数，取数一错 `--sync-readme` 就把错数字写进去，
+        且写错后**没人看**（不像报错会拦）。三轮错过的形态：
+          ① 取第一个 `Ran` → 并行下取到**失败文件**的值（856 写成 26）。
+          ② 先认 `[并行 …]` 摘要行 → 真实串行输出里**也有**一条（某测试自 spawn 的
+             子进程输出被 unittest 捕进 stdout），把 858 写成 **25**。
+          ③ 「恰好一条 `Ran` ⇒ 串行」 → 并行下恰好 1 个文件失败时也只有一条。
+        而两条并行摘要行**文本格式完全一样**（只有数字不同） ⇒ 文本层面无法可靠区分。
+        故改用 **`[total-cases=N]` 唯一标记**（由 runner 显式报出，不是从人读文本推的）。
+        """
+        # 并行：认显式标记（即使只剩一个失败文件的 `Ran` 也不影响）。
+        parallel = (
+            "===== FAILED: test_x.py =====\n"
+            "Ran 26 tests in 14.0s\n"
+            "FAILED (failures=1)\n\n"
+            "[并行 jobs=10] 57 个测试文件 · 56 通过 · 1 失败 · 858 用例  [total-cases=858]\n"
+        )
+        self.assertEqual(self.finish._actual_test_count(parallel), 858,
+                         "并行必须认标记，不能拿失败文件的 26")
+
+        # 串行：无标记 ⇒ 回落到**唯一**那条 `Ran`（即使输出里混了子进程的并行字样）。
+        serial = (
+            "[并行 jobs=2] 1 个测试文件 · 1 通过 · 0 失败 · 25 用例\n"
+            "....\nRan 858 tests in 115.0s\n\nOK\n"
+        )
+        self.assertEqual(self.finish._actual_test_count(serial), 858,
+                         "串行要取全量的 `Ran 858`，不是子进程产物的 25")
+
+        # 多条无标记的 `Ran` ⇒ 拿不准 ⇒ None（不许猜：猜错会静默写错文档）。
+        ambiguous = "Ran 26 tests in 14s\nRan 830 tests in 70s\n"
+        self.assertIsNone(self.finish._actual_test_count(ambiguous))
+        self.assertIsNone(self.finish._actual_test_count("没有任何数字\n"))
 
     def test_parallel_argv_delegates_to_test_changed(self):
         argv = self.finish.parallel_test_argv(8)

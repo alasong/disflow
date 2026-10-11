@@ -51,6 +51,103 @@ def _git_grep(pattern: str, *paths: str) -> tuple[int, str]:
     return rc, out
 
 
+def _code_hits(pattern: str, *paths: str) -> list[str]:
+    """只匹配**真实代码行**的搜索：滤掉纯注释行与行内含该词的文档字符串行。
+
+    为何需要：`git grep` 扫的是文本，而 Python 模块的 docstring 里常写「不做常驻 daemon」
+    这类**说明性句子** —— 符号被当作行为禁时，它们会误命中（本仓实测：
+    `disflow/web.py` 的模块 docstring 写了「不做常驻 daemon、不做 WebSocket」，
+    于是 FR-16 的 `daemon|cron` 判据报 1 处命中，把**声明合规**读成了**违反**）。
+
+    粗但可预测：去掉以 `#` 开头（允许缩进）的行，再去掉连续三引号之间的行。
+    """
+    hits = _git_grep(pattern, *paths)[1].splitlines()
+    clean: list[str] = []
+    for line in hits:
+        body = line.split(":", 2)[-1] if ":" in line else line
+        stripped = body.strip()
+        if stripped.startswith("#"):
+            continue
+        if stripped.startswith(('"""', "'''", '"""', "'''")) or stripped.endswith(('"""', "'''")):
+            continue          # 文档字符串行（单行或边界）——不是可执行代码
+        clean.append(line)
+    return clean
+
+
+def _serve_start_hits() -> list[str]:
+    """服务启动点是否在 `main` 保护下（FR-16 第二层判据）。
+
+    为何用 AST 而不看行文本：`httpd.serve_forever()` 写在 `serve()` 函数体内，
+    那行本身不含 `if __name__` —— 按行内容判会把**合法形态误报为违规**（实测踩到）。
+    正确判据是**可达性**：从该调用向上找，它是否只被 `main()`（而 `main()` 又被
+    `if __name__ == "__main__"` 调用）可达。
+
+    实现：对每个 `serve_forever()` 调用，取其**所在的最外层函数名**，
+    再看该函数名是否只在本文件的 `if __name__` 块里被调用。
+    """
+    import ast
+    hits: list[str] = []
+    for rel in _py_sources():
+        path = rel.strip()
+        try:
+            with open(path, encoding="utf-8") as handle:
+                source = handle.read()
+            tree = ast.parse(source)
+        except (OSError, SyntaxError):
+            continue
+        # 每个函数节点 → main 保护下的调用集合
+        guarded_calls: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            left = node.test.left if isinstance(node.test, ast.Compare) else None
+            if not (isinstance(left, ast.Name) and left.id == "__name__"):
+                continue
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call):
+                    fn = sub.func
+                    if isinstance(fn, ast.Name):
+                        guarded_calls.add(fn.id)
+                    elif isinstance(fn, ast.Attribute):
+                        guarded_calls.add(fn.attr)
+        # 从 main 保护点开始做**调用传递闭包**：main() 里调的 serve() 也受保护。
+        # 为何要闭包：实测 `web.py` 的结构是 `if __name__ → main() → serve() → serve_forever()`，
+        # 只看直接调用会把合法形态误报为违规（判据必须看可达性，不是看邻接）。
+        # **方向**：从已被保护者出发，把它**调用的**函数也加进来（向下传播）。
+        changed = True
+        while changed:
+            changed = False
+            for fnode in ast.walk(tree):
+                if not isinstance(fnode, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if fnode.name not in guarded_calls:
+                    continue
+                # fnode 已被保护 ⇒ 它调用的本文件函数也受保护
+                for sub in ast.walk(fnode):
+                    if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)):
+                        continue
+                    if sub.func.id not in guarded_calls:
+                        guarded_calls.add(sub.func.id)
+                        changed = True
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not (isinstance(fn, ast.Attribute) and fn.attr == "serve_forever"):
+                continue
+            # 找到包围它的函数名（往外层找第一个包含该节点的函数）
+            owner = "<module>"
+            for fnode in ast.walk(tree):
+                if not isinstance(fnode, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if any(n is node for n in ast.walk(fnode)):
+                    owner = fnode.name
+                    break
+            if owner not in guarded_calls:
+                hits.append(f"{path}:{node.lineno} (in {owner}()，未被 main 保护调用)")
+    return hits
+
+
 def _n_lines(text: str) -> int:
     return len([ln for ln in text.splitlines() if ln.strip()])
 
@@ -269,9 +366,27 @@ def fr15_brief_collect() -> tuple[bool, str]:
 
 
 def fr16_no_daemon() -> tuple[bool, str]:
-    """FR-16 引擎不内置常驻进程。"""
-    rc1, o1 = _git_grep(r"daemon|threading|multiprocessing|while True", *_py_sources())
-    return (rc1 == 1 and not o1.strip()), f"daemon/threading/while True 命中 {_n_lines(o1)} 处（应 0）"
+    """FR-16 引擎不内置**常驻**进程（2026-10-11 修订：分「常驻」与「按需入口」两类）。
+
+    判据分两层，因为「常驻」与「按需启停」是两件事：
+
+    - **不出现 `daemon|cron`** —— 引擎不自己起调度器（这半句无争议）。
+    - **HTTP 服务的启动点必须在 `main` 保护内** —— 模块级 `serve_forever` 表示
+      「一 import 就起服务」（= 常驻，违反 FR-16）；而 `python3 -m disflow.web` 这种
+      **按需启停的本地入口**（Ctrl-C 即停）不是常驻进程。
+
+    为何不再禁 `threading` 符号：`ThreadingHTTPServer` 是标准库自带的**请求并发**实现，
+    它不产生常驻后台线程池（服务停了线程就没了）。旧判据把符号当行为禁（连同
+    `while True` 一并禁），等于把「不常驻」实现成了「不许写并发」—— 与实际约束不符。
+    """
+    code_hits = _code_hits(r"daemon|cron", *_py_sources())
+    if code_hits:
+        return False, f"daemon/cron 命中 {len(code_hits)} 处代码行（应 0）：{code_hits[:2]}"
+    # 服务启动点：必须在 main 保护下可达（AST 可达性，不看行文本）
+    starts = _serve_start_hits()
+    if starts:
+        return False, f"服务启动点 {len(starts)} 处在 main 保护外（应 0）：{starts[:2]}"
+    return True, "无 daemon/cron；无常驻服务启动点"
 
 
 def fr18_acceptance_gate() -> tuple[bool, str]:
@@ -408,11 +523,25 @@ def nfr1_zero_deps() -> tuple[bool, str]:
 
 
 def nfr3_file_based() -> tuple[bool, str]:
-    """NFR-3 文件式：无服务、无数据库。不用 `\b`（见 FR-5 注释：本环境 `\b` 失效）。"""
+    """NFR-3 文件式：**数据与运行形态**是文件式（无数据库、无常驻服务）。
+
+    判据的**分界**（2026-10-11 修订，实测发现措辞与实现不一致）：
+
+    - **数据库：一律禁** —— 这才是「文件式」的本体（事件流 + 投影就是存储层）。
+    - **HTTP 客户端/静态服务：不禁** —— `disflow/web.py` 是按需启停的本地入口
+      （`python3 -m disflow.web` 才起，Ctrl-C 即停），它**不是常驻进程**；
+      「不常驻」由 FR-16 管，而 FR-16 禁的是「引擎**自己**起并保活的服务」。
+      旧正则把 `http.server` 当符号禁，等于把**形态约束实现成了符号禁用** ——
+      结果与需求原意（「无服务、无数据库」与「运行产物与源码分离」并列，
+      同组 NFR-1/2/4/5/6/7 全是对**引擎形态**的约束）不符。
+
+    保住的拦截力：数据库驱动仍命中即 FAIL（NFR-3 的核心）；常驻服务由下一条挡住。
+    不用 `\b`（见 FR-5 注释：本环境 `\b` 失效）。
+    """
     rc, out = _git_grep(
-        r"http\.server|socketserver|sqlite3|flask|fastapi|django|\.db([^[:alnum:]_]|$)",
+        r"sqlite3|flask|fastapi|django|\\.db([^[:alnum:]_]|$)|psycopg|pymysql|redis",
         *_py_sources())
-    return (rc == 1 and not out.strip()), f"服务/DB 相关命中 {_n_lines(out)} 处（应 0）"
+    return (rc == 1 and not out.strip()), f"数据库/服务框架相关命中 {_n_lines(out)} 处（应 0）"
 
 
 def nfr6_size_budget() -> tuple[bool, str]:

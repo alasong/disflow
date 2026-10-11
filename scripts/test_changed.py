@@ -2,19 +2,28 @@
 """迭代期只跑「改动相关」的测试子集——默认打印醒目横幅，绝不假装是全量。
 
 为什么要有它（宿主实测，不是估计）：全量 `python3 -m unittest discover -s tests -t tests`
-= **58.6s / 582 用例**，耗时集中在 6 个文件（test_worktree 12.1s · test_worktree_gate 5.5s ·
+当初实测 = **58.6s / 582 用例**（快照，非当前值——现为 58 个文件/863 用例；
+本案例只用于说明「为何需要子集」，数字会腐烂，勿当读数用），耗时集中在 6 个文件
+（test_worktree 12.1s · test_worktree_gate 5.5s ·
 test_selfgate_probe 3.9s · test_docs 3.8s · test_typecheck 3.2s · test_rescope 2.6s），
 占 53%；其余 33 个文件共约 27s，主因是**大量子进程**（单次 `python3 -m disflow.cli --help`
 = 67ms：裸解释器 18ms + import disflow 34ms）。迭代期反复跑全量是纯等。
 
 **映射判据（显式可读，不猜、不静默跳过）**：
-  1. 命名约定：改 `disflow/<stem>.py`（或 `scripts/<stem>.py`）⇒ 并上 `tests/test_<stem>.py`（若存在）；
+  1. 命名约定：改 `disflow/<stem>.py`（或 `scripts/<stem>.<任意扩展名>`）⇒ 并上 `tests/test_<stem>.py`（若存在）；
   2. 引用面：**grep 全库测试文件**，凡文本里出现 `disflow.<stem>` / `from disflow import … <stem>`
-     / `scripts/<stem>.py` 的测试文件都进子集（改动可能破坏任何引用它的测试）；
+     / `scripts/<stem>.<扩展名>` 的测试文件都进子集（改动可能破坏任何引用它的测试）；
   3. 文档改动（`*.md`）⇒ 并上文档守卫（`test_docs.py` / `test_readme_walkthrough.py`）；
   4. **固定元测试**（声明类全局不变量）：`test_docs.py` / `test_layering.py` /
      `test_declarations.py` / `test_typecheck.py` —— 与改动无关地总是跑。
   5. 无法映射的改动路径（如 `LICENSE`）：**不猜**，打印后**保守改跑全量**（fail-closed，绝不假绿）。
+
+**历史上易落 `unmapped` 的三类**（都曾经让迭代期白跑全量，修法已固化，别再退回去）：
+  - **非 `.py` 的脚本**（`scripts/*.sh`）：映射原先只认 `.py` ⇒ 改一个 shim 就退化全量
+    （39.8s，而它其实有 `test_shim.py` 守着）。现按**实际扩展名**生成 pattern。
+  - **生成物**（`docs/outline.jsonl` / `assets/index.jsonl`）：无命名/引用面可推断 ⇒
+    进 `SPECIAL_FILES` 显式指定（生成物有明确的生产者与守卫者，不需要猜）。
+  - **本地工具状态**（`.pi/` 等点目录）：`_is_local_tool_path` 排除，既不算 unmapped 也不映射。
 
 取改动与门**同源**：`disflow.gates.git_changed_files`（`git status --porcelain` ∪
 `git diff --name-only <base>`）。若 worker 已 `git commit`，`git status` 会空 ⇒ 用
@@ -22,7 +31,7 @@ test_selfgate_probe 3.9s · test_docs 3.8s · test_typecheck 3.2s · test_rescop
 
 跑法：
   python3 scripts/test_changed.py                        # 子集（默认，带「不是全量」横幅）
-  python3 scripts/test_changed.py --jobs 8               # 并发跑选中的测试文件（默认 1=串行；0=自动核数）
+  python3 scripts/test_changed.py --jobs 8               # 并发跑选中的测试文件（默认 0=自动核数；N=每文件一进程）
   python3 scripts/test_changed.py --changed disflow/views.py   # 注入式假改动（测试/排查用）
   python3 scripts/test_changed.py --base <sha>            # 并上相对 <sha> 已提交的改动
   python3 scripts/test_changed.py --all                  # 全量（等价于既有 discover 命令）
@@ -41,6 +50,9 @@ import sys
 from typing import TypedDict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# unittest 的用例数行（`Ran N tests in …s`）——并行聚合与 README 同步共用同一把尺子。
+_RAN_RE = re.compile(r"^Ran (\d+) tests?", re.MULTILINE)
 TESTS_DIR = os.path.join(ROOT, "tests")
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
@@ -78,6 +90,13 @@ def _is_local_tool_path(rel: str) -> bool:
 
 SPECIAL_FILES = {
     "pyrightconfig.json": ("test_typecheck.py",),
+    # **生成物白名单**（2026-10-11 加，实测踩到）：这些文件由 `scripts/*.py` 生成，
+    # 没有命名/引用面可推断 ⇒ 旧逻辑判为 `unmapped` ⇒ **保守退化全量**。
+    # 后果：**每改一次文档索引就被迫跑 36s 全量**（迭代期最常见的改动之一）。
+    # 判据：生成物有**明确的生产者与守卫者**，直接指定即可，不需要猜。
+    "docs/outline.jsonl": ("test_doc_outline.py",),
+    "assets/index.jsonl": ("test_assets_scan.py",),
+    "assets/INDEX.md": ("test_assets_scan.py",),
 }
 
 # 全量命令：`--all` **逐字等价**于既有 discover 命令（README 里保留可用的那条）。
@@ -108,26 +127,32 @@ def _test_source(name: str, tests_dir: str = TESTS_DIR) -> str:
         return handle.read()
 
 
-def _reference_patterns(stem: str, kind: str) -> list[str]:
+def _reference_patterns(stem: str, kind: str, suffix: str = ".py") -> list[str]:
     """某模块名在测试文件里出现的形状（**显式列出**，不靠子串猜想）。
 
     `kind="disflow"`：`disflow.<stem>` 或 `from disflow import … <stem>`。
-    `kind="script"`：`scripts/<stem>.py` 或 `<stem>.py`（脚本被当文件路径引用）。
+    `kind="script"`：`scripts/<stem><suffix>` 或 `<stem><suffix>`。
+
+    `suffix` **不能写死 `.py`**（实测踩到，两次）：`scripts/` 下还有 `.sh`（启动器…）。
+    写死时 `scripts/disflow-shim.sh` 匹配不到任何测试 ⇒ 落 unmapped ⇒
+    **保守退化全量**（39.8s，而它其实有 `test_shim.py` 守着）。
+    这与 `docs/outline.jsonl` 那次是**同一类**故障：生成物/非 .py 脚本没有映射路径。
     """
     escaped = re.escape(stem)
     if kind == "disflow":
         return [rf"\bdisflow\.{escaped}\b",
                 rf"\bfrom disflow import\b[^\n]*\b{escaped}\b"]
-    return [rf"scripts/{escaped}\.py", rf"\b{escaped}\.py\b"]
+    esc_suffix = re.escape(suffix)
+    return [rf"scripts/{escaped}{esc_suffix}", rf"\b{escaped}{esc_suffix}\b"]
 
 
 def _add_module_tests(selected: dict[str, str], tests: list[str], stem: str,
-                      rel: str, kind: str) -> None:
+                      rel: str, kind: str, suffix: str = ".py") -> None:
     """把「改了模块 <rel>」映射到的测试文件加进 `selected`（含判据理由）。"""
     candidate = f"test_{stem}.py"
     if candidate in set(tests):
         selected.setdefault(candidate, f"命名约定 {candidate} ← 改了 {rel}")
-    patterns = _reference_patterns(stem, kind)
+    patterns = _reference_patterns(stem, kind, suffix)
     for name in tests:
         text = _test_source(name)
         if any(re.search(pattern, text) for pattern in patterns):
@@ -174,8 +199,13 @@ def map_changed_to_tests(changed: list[str],
             _add_module_tests(selected, tests, stem, rel, kind="disflow")
             continue
 
-        if rel.startswith("scripts/") and base.endswith(".py"):
-            _add_module_tests(selected, tests, base[:-3], rel, kind="script")
+        if rel.startswith("scripts/") and "." in base:
+            # **不限于 `.py`**（实测踩到）：`scripts/` 下还有 `.sh`（启动器）。原先只认 `.py`
+            # ⇒ `disflow-shim.sh` 落 unmapped ⇒ 保守退化全量（39.8s），而它其实有
+            # `test_shim.py` 守着。按实际扩展名传 suffix。
+            stem, suffix = base.rsplit(".", 1)
+            _add_module_tests(selected, tests, stem, rel, kind="script",
+                              suffix="." + suffix)
             continue
 
         if _is_local_tool_path(rel):     # 本地工具状态，不是本仓源码：不映射、不算 unmapped
@@ -270,8 +300,16 @@ def run_parallel(selected: list[str], jobs: int) -> int:
     for name, out in failed:
         print(f"\n===== FAILED: {name} =====")
         print(out)
+    # **总用例数**：与文件数并列报出。为何要它（实测踩到）：摘要行原先只有文件数，
+    # 而 README 声明的是**用例数**，于是 `finish.py --sync-readme` 拿不到真值，
+    # 只能去猜 —— 初版猜成了某个失败文件的 `Ran 26`（真实 856）。
+    # 并行模式下每个文件一个进程，各自打 `Ran N tests`；总数只能在这里聚合。
+    total_cases = 0
+    for _name, _rc, out in results:
+        total_cases += sum(int(n) for n in _RAN_RE.findall(out))
     print(f"\n[并行 jobs={jobs}] {len(results)} 个测试文件 · "
-          f"{len(results) - len(failed)} 通过 · {len(failed)} 失败")
+          f"{len(results) - len(failed)} 通过 · {len(failed)} 失败 · {total_cases} 用例"
+          f"  [total-cases={total_cases}]")
     return 1 if failed else 0
 
 
@@ -322,8 +360,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="只打印计划与命令，不执行")
     parser.add_argument("--json", action="store_true", help="计划以 JSON 输出")
     parser.add_argument("--jobs", type=int, default=0,
-                        help="并发跑测试文件的进程数（默认 0=自动核数；1=串行 discover，"
-                             "与 README 逐字一致；N=每文件一进程）")
+                        help="并发跑测试文件的进程数（默认 0=自动核数；N=每文件一进程，1 即单进程）")
     args = parser.parse_args(argv)
     jobs = resolve_jobs(args.jobs)
 
@@ -339,10 +376,8 @@ def main(argv: list[str] | None = None) -> int:
             print("$ " + " ".join(command))
         if args.dry_run:
             return 0
-        if jobs > 1:
-            print(f"[并行] jobs={jobs}（每个测试文件一个进程）")
-            return run_parallel(all_test_files(), jobs)
-        return subprocess.run(command, cwd=ROOT).returncode
+        print(f"[并行] jobs={jobs}（每个测试文件一个进程）")
+        return run_parallel(all_test_files(), jobs)
 
     if args.changed is not None:
         changed: list[str] | None = [p for p in args.changed.split(",") if p.strip()]
@@ -385,11 +420,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             return 0
 
-    if jobs > 1:
-        run_list = list(all_test_files()) if run_all else plan["selected"]
-        print(f"[并行] jobs={jobs}（每个测试文件一个进程）")
-        return run_parallel(run_list, jobs)
-    return subprocess.run(command, cwd=ROOT, env=test_env()).returncode
+    run_list = list(all_test_files()) if run_all else plan["selected"]
+    print(f"[并行] jobs={jobs}（每个测试文件一个进程）")
+    return run_parallel(run_list, jobs)
 
 
 if __name__ == "__main__":

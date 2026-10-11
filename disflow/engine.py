@@ -624,7 +624,24 @@ class Engine:
                         "expect": "验收命令通过；改动落在 touch_plan 内；改动行数不超预算"}
             missing: list[str] = []
             if not ok:
-                missing.append(f"验收未通过：{why}")
+                # 验收失败时**带上命令输出尾部**（实测踩到：真错误如
+                # `ModuleNotFoundError: No module named 'base'` 已在 evidence.output_tail 里，
+                # 旧输出只报 `exit=1（期望 0）` ⇒ 读者只能另跑命令去猜失败原因，
+                # 而拒收输出同一屏已经有那个信息 —— 采集了却不展示 = 摩擦）。
+                tail = str((evidence.get("acceptance") or {}).get("output_tail") or "").strip()
+                if tail:
+                    # 不能取固定行数：unittest 的尾部是分隔线与 `Ran N tests`，真错误在前面。
+                    # 判据：优先取含错误关键词的行（切中读者真正要的），否则回落到最后几行。
+                    lines = [ln for ln in tail.splitlines() if ln.strip()]
+                    key = [ln for ln in lines
+                           if any(w in ln for w in ("Error", "error:", "Traceback",
+                                                    "AssertionError", "FAILED",
+                                                    "No such", "not found", "无法", "未找到"))]
+                    show = (key[:4] if key else lines[-3:])
+                    last = "\n      ".join(show)
+                    missing.append(f"验收未通过：{why}\n      命令输出（关键行）：\n      {last}")
+                else:
+                    missing.append(f"验收未通过：{why}")
             required = (acceptance or {}).get("require_declarations") or []
             absent = [name for name in required
                       if not str((declarations or {}).get(name) or "").strip()]
@@ -761,6 +778,56 @@ class Engine:
             self._validate_stage(node, stage, self._tree_stages(t))
         return self._write("node.stage", tree=tree, node=node, guard=guard,
                            prepare=lambda _: {"stage": str(stage), "reason": reason,
+                                              "holder": holder})
+
+    def set_acceptance(self, tree: str, node: str, acceptance: dict, *,
+                       reason: str = "", holder: str = "") -> dict:
+        """补/改节点的**验收判据**（`acceptance`）——与 `set_stage` / `rescope` 同形状的补口。
+
+        **为何需要**：`acceptance` 只在建节点（`expand`）与 mgt 导入时写一次，34 个动词里
+        没有改它的。而建节点时忘写判据是常见疏漏 —— 本仓 `board-web` 实例：交付全部完成后
+        才发现节点无 `acceptance`、`done` 被门拦，而**没有合法路径**补。无补口的后果与当年
+        `touch_plan` 一样（后由 `rescope` 补上）：人只能改 `state.json`，而它是投影、会被
+        `rebuild` 覆盖 ⇒ 违反「事件才是真相」。
+
+        **为何不破坏门的效力**（对抗性检验）：事后补判据**不让门失效** —— 验收命令仍在
+        `done` 时**真跑**，本动词改变的是「计划什么时候写」，不是「跑不跑」。这与
+        `rescope` 已确立的先例同款（计划可补、但必须留痕）：差别只在于 `rescope` 拦
+        「已碰过的路径」（因为 `design_first` 的力量来自「计划先于改动」），而
+        `acceptance` 没有对象可比 —— 判据是**未来要跑的**，不是**过去已做过的**。
+
+        **三条裁剪**：
+        - **形状校验**：必须是对象，且至少含 `cmd` 或 `waiver` 之一（两者皆无 = 挂了等于没挂）。
+        - **落事件 + 记理由 + 记谁改的**：`node.acceptance` 是新 kind；理由与 holder 累进
+          `acceptance_log`。投影只赋值、不校验（校验在写时，保事件流可重放）。
+        - **收尾态拒收**：`done`/`skipped`/`failed` 不可改 —— 与 `set_stage` 同款：
+          终态的证据已按旧判据采集过了，改判据等于改写历史。要改先 `retry`（failed）
+          或另起节点（done/skipped 无重开路径）。
+
+        **不碰调度**：`acceptance` 不是调度边，只影响 `done` 时跑什么门；`ready`/`drive`/
+        波次/`is_stuck` 逐字节不变。
+        """
+        if not str(reason or "").strip():
+            raise EngineError("acceptance 必须给 --reason：为何现在才补判据（记入 acceptance_log）")
+        if not isinstance(acceptance, dict) or not acceptance:
+            raise EngineError('--acceptance 必须是非空 JSON 对象，如 \'{"cmd": "true", "expect": "exit0"}\'')
+        if not str(acceptance.get("cmd") or "").strip() and \
+                not str(acceptance.get("waiver") or "").strip():
+            raise EngineError(
+                'acceptance 必须含 cmd（可跑判据）或 waiver（显式豁免理由）——两者皆无等于没挂。'
+                '若本节点确实无可跑判据，用 waiver 并写具体理由（敷衍理由会被 weak_reason 门拒收）')
+
+        def guard(t: dict) -> None:
+            item = self._need(t, node)
+            status = str(item.get("status", "pending"))
+            if status in _STAGE_FROZEN:
+                raise EngineError(
+                    f"{node} 状态为 {status}，不可改 acceptance：终态的证据已按旧判据采集过，"
+                    f"改判据等于改写历史（同 `set_stage` 的终态拒收）。\n"
+                    f"  failed 可 `disflow retry {tree} {node}` 放回 pending 再改；"
+                    "done/skipped 无重开路径，确需改判据请另起节点。")
+        return self._write("node.acceptance", tree=tree, node=node, guard=guard,
+                           prepare=lambda _: {"acceptance": acceptance, "reason": reason,
                                               "holder": holder})
 
     def rescope(self, tree: str, node: str, touch: list[str], reason: str,

@@ -150,6 +150,34 @@ def _has_collected(engine: Engine, tree: str, node: str) -> bool | None:
     return nodes[node].get("collected") is not None
 
 
+def _dump_contract(contract: dict, missing: list[str], file=None) -> None:
+    """契约片段：**只印与缺项相关的字段**，不是整个 contract。
+
+    为何要筛（实测踩到）：原先无条件 dump 整个契约——典型拒收输出 14 行，
+    而其中**只有 1-2 行对行动有用**（如「验收未通过」对应的 `acceptance.cmd`）。
+    其余（`touch_plan` 为空、`size_budget` 默认值、`expect` 通句）只是背景。
+
+    筛法用**关键词 → 字段**映射，不是猜：缺项文本里提到哪个字段名就印哪个。
+    过滤后**不能为空**（否则回到全 dump，至少让读者看得到契约），也不能误删
+    `node`（它是定位键，永远印）。
+    """
+    keys: list[str] = ["node"]
+    mapping = (
+        (("验收", "acceptance"), "acceptance"),
+        (("touch_plan", "超出"), "touch_plan"),
+        (("规模", "budget"), "size_budget"),
+        (("必填声明", "声明"), "acceptance"),
+    )
+    joined = " ".join(missing)
+    for words, key in mapping:
+        if any(w in joined for w in words) and key in contract and key not in keys:
+            keys.append(key)
+    kept = {k: contract[k] for k in keys if k in contract}
+    if len(kept) <= 1:                      # 只筛出 node = 等于没筛，回到全量
+        kept = dict(contract)
+    _dump(kept, file=file)
+
+
 def cmd_done(engine: Engine, args) -> int:
     declarations = _loads(args.decl) if args.decl else None
     dry = bool(getattr(args, "dry_run", False))
@@ -181,7 +209,7 @@ def cmd_done(engine: Engine, args) -> int:
         for item in reject.missing:
             print(f"  - {item}", file=sys.stderr)
         print("契约片段：", file=sys.stderr)
-        _dump(reject.contract, file=sys.stderr)
+        _dump_contract(reject.contract, reject.missing, file=sys.stderr)
         return 2
     vacuous = _done_vacuous(outcome, dry, args)
     if dry:
@@ -593,6 +621,19 @@ def cmd_stage(engine: Engine, args) -> int:
     return 0
 
 
+def cmd_acceptance(engine: Engine, args) -> int:
+    expected = args.acceptance
+    acceptance = _loads(expected)
+    if not isinstance(acceptance, dict):
+        print("✗ --set 必须是 JSON 对象", file=sys.stderr)
+        return 2
+    engine.set_acceptance(args.tree, args.node, acceptance,
+                          reason=args.reason, holder=getattr(args, "holder", "") or "")
+    shown = acceptance.get("cmd") or f"waiver: {str(acceptance.get('waiver'))[:40]}"
+    print(f"✓ {args.node} acceptance → {shown}")
+    return 0
+
+
 def cmd_rescope(engine: Engine, args) -> int:
     touch = _loads(args.touch)
     dry = bool(getattr(args, "dry_run", False))
@@ -624,7 +665,7 @@ def cmd_close(engine: Engine, args) -> int:
         for item in reject.missing:
             print(f"  - {item}", file=sys.stderr)
         print("契约片段：", file=sys.stderr)
-        _dump(reject.contract, file=sys.stderr)
+        _dump_contract(reject.contract, reject.missing, file=sys.stderr)
         return 2
     if dry:
         print(f"✓ 预演通过：{args.tree} 的 tree_closure + tree_coverage 门均会过（**未落事件**）")
@@ -1148,6 +1189,17 @@ def build_parser() -> argparse.ArgumentParser:
     node.add_argument("--reason", required=True,
                        help="为何现在才要加范围（必填，记入 rescope_log）")
     node.add_argument("--dry-run", action="store_true", help="预演：跑门但不落事件")
+
+    node = add("acceptance", cmd_acceptance)
+    node.add_argument("tree")
+    node.add_argument("node")
+    node.add_argument("--set", required=True, dest="acceptance",
+                      help='新的验收判据（JSON 对象），如 \'{"cmd": "true", "expect": "exit0"}\' '
+                           '或 \'{"waiver": "<具体理由>"}\'')
+    node.add_argument("--reason", required=True,
+                      help="为何现在才补判据（必填；记入 acceptance_log，可审计）")
+    node.add_argument("--holder", default="",
+                      help="谁改的（记入 acceptance_log，便于追溯）")
 
     node = add("close", cmd_close)
     node.add_argument("tree")

@@ -175,6 +175,63 @@ class ParallelModeTest(unittest.TestCase):
         self.assertEqual(SCRIPT_MODULE.run_parallel(["test_assets_scan.py"], 2), 0)
 
 
+class NoSerialPathTest(unittest.TestCase):
+    """**不存在串行 discover 这条路**（刻意，实测踩到后取消）。
+
+    为何是硬判据：串行曾是「数字口径」的第二个来源，而两个来源就意味着一处要区分
+    二者——实测那处（`finish.py` 的取数）**连错三轮**（把 858 写成 26 / 25），
+    每轮都是**静默写错 README**（比报错更坏）。取消第二来源 ⇒ 那类 bug 整类消失。
+
+    注意 `--dry-run` **仍打印** `unittest discover`——那是「等价覆盖」的语义展示（
+    告诉读者并行跑的就是同一套），不是执行路径。故本组只钉**真跑**。
+    """
+
+    def test_jobs_1_still_goes_through_the_parallel_runner(self):
+        """用 **真实子集但不断言 rc**：本测试只关心「走哪条路」，不关心被测代码是否全绿。
+
+        （初版用 `assertEqual(rc, 0)` —— **错**：子集里本就有其它失败测试，
+        rc 与「走哪条路」无关。这条路断言只能从输出格式看。）
+        """
+        proc = subprocess.run(
+            [sys.executable, "scripts/test_changed.py", "--jobs", "1",
+             "--changed", "disflow/views.py"],
+            cwd=ROOT, capture_output=True, text=True, timeout=300)
+        self.assertIn("[并行] jobs=1", proc.stdout,
+                      "--jobs 1 必须走并行 runner（单进程），不得退回 discover")
+        self.assertIn("total-cases=", proc.stdout, "并行 runner 要报出用例数标记")
+        self.assertNotIn("unittest discover", proc.stdout.split("$ ")[-1] if "$ " in proc.stdout else "zzz",
+                         "真跑输出里不得出现 direct discover（dry-run 的语义展示不在此列）")
+
+    def test_source_has_no_direct_discover_execution(self):
+        """源码里不得再有 `subprocess.run(command)` 这种直接跑 discover 的执行语句。"""
+        src = (ROOT / "scripts" / "test_changed.py").read_text(encoding="utf-8")
+        self.assertNotIn("return subprocess.run(command, cwd=ROOT", src,
+                         "直接执行 discover 的路已取消（只留给 dry-run 打印）")
+
+
+class NonPyScriptMappingTest(unittest.TestCase):
+    """`scripts/` 下的**非 .py** 文件也要能映射到测试（实测踩到，两次）。
+
+    为何：映射原先只认 `scripts/*.py`，而 `scripts/` 下还有 `.sh`（启动器）。
+    落 `unmapped` ⇒ **保守退化全量**（实测改一个 shim 就从 31s 变 40s），
+    而它其实有 `test_shim.py` 守着。这与 `docs/outline.jsonl` 那次是同一类故障。
+    """
+
+    def test_sh_script_maps_to_its_test_via_reference(self):
+        plan = SCRIPT_MODULE.map_changed_to_tests(["scripts/disflow-shim.sh"])
+        self.assertIn("test_shim.py", plan["selected"],
+                      "shim 有 test_shim.py 守着，不该落 unmapped")
+        self.assertEqual(plan["unmapped"], [], f"不该有 unmapped：{plan['unmapped']}")
+        self.assertFalse(plan["fallback_full"], "能映射就不该退化全量")
+
+    def test_reference_pattern_uses_the_real_suffix(self):
+        """pattern 不得写死 `.py`（写死就是这条 bug 的根因）。"""
+        patterns = SCRIPT_MODULE._reference_patterns("disflow-shim", "script", ".sh")
+        self.assertTrue(any(r"\.sh" in p or ".sh" in p for p in patterns), patterns)
+        joined = " ".join(patterns)
+        self.assertNotIn(r"\.py", joined, "传了 .sh 就不该再生成 .py pattern")
+
+
 class SubsetBannerTest(unittest.TestCase):
     """子集模式必须**醒目**声明它不是全量，并给出覆盖读数与收尾提示。"""
 

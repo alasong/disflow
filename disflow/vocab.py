@@ -150,6 +150,7 @@ EVENT_KINDS: tuple[str, ...] = (
     "node.import",
     "node.context",
     "node.stage",
+    "node.acceptance",
     "node.rescope",
     "asset.produce", "asset.consume",
     "node.start", "node.collect", "node.done",

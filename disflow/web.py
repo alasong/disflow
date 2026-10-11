@@ -15,7 +15,8 @@ web 只是**第三种渲染**（人读态 = 终端文本、机器态 = `--json`�
 就绕过了唯一的写点与门 —— 那是**禁止**的。
 
 **零第三方依赖**（NFR-1）：只用标准库 `http.server` / `json` / `urllib`。
-不做常驻 daemon、不做 WebSocket、不引前端框架（`backlog` §E 非目标）。
+**按需启停**：`python3 -m disflow.web` 才起服务，Ctrl-C 即停 —— 不是常驻后台进程（FR-16）；
+不做 WebSocket、不引前端框架（`backlog` §E 非目标）。
 
 用法：
     python3 -m disflow.web [--port 8765] [--host 127.0.0.1] [--cwd <repo>]

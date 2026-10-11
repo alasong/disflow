@@ -36,6 +36,7 @@
 | `docs/requirements.md` | requirements | current | FR-1..29 + NFR-1..7 + 验收判据（§7 覆盖审计） |
 | `docs/design.md` | design | current | 设计现状：数据模型 / 就绪 / 分发 / 门 / 看板（§6.1 逐树看板） |
 | `docs/architecture.md` | design | current | 架构图（Mermaid 纯文本，零依赖渲染） |
+| `docs/kaa-comparison.md` | report | current | disflow vs kaa 机制对照（实测数据；kaa 为外部参照物） |
 | `docs/design-dispatch-tree-graph.md` | design | stub | 分发器 / 树 / 图 **专项**设计（未实现） |
 | `docs/dev-board.md` | process | current | 开发看板 + dogfooding 流水（本仓第一份狗粮） |
 | `docs/v0.2-backlog.md` | decision | current | 停放项 + **触发条件**（不是待办；没触发条件就不动） |
@@ -54,6 +55,7 @@
 | `docs/decisions/0008-看板不做web化.md` | decision | superseded by 0011 | 0008：看板不做 web 化 —— 形态排序/非目标仍有效，「不做」裁决已被 0011 推翻 |
 | `docs/decisions/0011-web入口-实现.md` | decision | active | 0011：web 入口**实现** —— 薄壳只读 + 写面白名单经 `Engine`（锁/门）；12 项真 HTTP 测试 |
 | `docs/decisions/0012-防漂移三门.md` | decision | active | 0012：**防漂移三门**（goal_align/code_quality/verify_real）—— 硬门 + 逃生口，理由过质量门 |
+| `docs/decisions/0013-NFR3-FR16边界.md` | decision | active | 0013：NFR-3/FR-16 边界 —— 禁「常驻」而非禁「入口」；机检判据与需求措辞对齐 |
 | `docs/decisions/0009-步骤准入-软门槛.md` | decision | active | 0009：步骤准入**软门槛** —— 允许说明性步骤但必须显式标注「无判据」；skill 要保证准确性必须有可执行入口 |
 | `docs/decisions/0010-kaa融合-声明式.md` | decision | active | 0010：kaa 与 disflow 融合 —— 只取**互补判据**进现有扩展点（`weak_reason`/`claim_mismatch` 已落地），**不做双引擎** |
 

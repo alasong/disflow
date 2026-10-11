@@ -671,6 +671,36 @@ children 声明里直接给，与 `require`/`relate`/`produce`/`consume` 动词�
 投影只赋值、不校验取值（校验在写时）——与 `tree.deadline` 同一分界：reducer 一依赖配置，
 事件流就不可重放（§9.2 边界二）。不带 `--dry-run`：守卫只做闭集/状态校验，不跑门（§7.3）。
 
+### 7.7 验收判据的**当口补挂**：`acceptance`
+
+`acceptance`（节点的验收判据）原本只在 `expand` 建节点与 mgt 导入时写一次——
+建树后**改不了**。这与 §7.2 的 `touch_plan`、§7.6 的 `stage` 是**同一个缺口形状**
+（建树后不可改，前两者分别由 `rescope` / `stage` 补上，唯独判据一直没有补口）。
+
+**为什么这是真问题**（实脉踩到，不是“不方便”）：本仓 `board-web` 树是**动手前拍的粗拆**，
+整个交付（23 文件一批提交）完成后才发现节点没配 `acceptance` ⇒ `done` 被门拦，
+而 34 个动词里**没有合法路径**补。后果与当年 `touch_plan` 一样：人只能去改 `state.json`，
+而它是**投影**、会被 `rebuild` 覆盖 ⇒ **违反「事件才是真相」**。
+
+`disflow acceptance <tree> <node> --set '<json>' --reason <why> [--holder H]`：
+
+| 裁剪 | 判据 | 为何 |
+| --- | --- | --- |
+| **形状校验** | 必须是对象，且**至少含 `cmd` 或 `waiver` 之一** | 两者皆无 = 挂了等于没挂（静默无效比报错贵） |
+| **落事件 + 记理由 + 记谁改的** | `node.acceptance` 事件；`acceptance_log` 累进 `{from,to,reason,holder}` | 判据是门的输入，必须可审计、可重放——与 `stage_log` 同形 |
+| **收尾态拒收** | `done`/`skipped`/`failed`（`_STAGE_FROZEN`）不可改 | 终态的证据已按**旧判据**采集过，改判据 = 改写历史（failed 可 `retry`） |
+| **不碰调度** | `ready`/`drive`/波次/`is_stuck` 改前改后逐字节一致 | 判据只影响 `done` 时跑什么门，不是调度边 |
+
+**为何不破坏门的效力**（对抗性检验）：事后补判据**不让门失效** —— 验收命令仍在 `done` 时
+**真跑**；本动词改变的是「判据什么时候写」，不是「跑不跑」。这与 `rescope` 的先例同款
+（计划可补、但必须留痕），差别只在 `rescope` 要拦「已碰过的路径」（因为 `design_first`
+的力量来自「计划先于改动」），而 `acceptance` 没有对象可比 —— 判据是**未来要跑的**，
+不是**过去已做过的**。
+
+实测佐证（本仓）：`api` 节点补上 `{"cmd": "python3 -m unittest tests.test_web -q"}` 后，
+`done` **立刻拒收 exit=1** —— 因为该命令缺 `PYTHONPATH` 跑不起来。门没有因为“判据是事后补的”
+而放水：它真跑了、真拒了，错误当场暴露（换正确的 discover 形式后才过）。
+
 ---
 
 ## 8. 角色与阶段（修 mgt 的 P7）

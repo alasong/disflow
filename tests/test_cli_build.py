@@ -297,5 +297,52 @@ class CliWorktreeReapForceTest(DisflowTestCase):
                 self.assertIn("不支持 --force", err)
 
 
+class ContractSnippetTest(DisflowTestCase):
+    """门拒收时印的**契约片段**不得把整个 contract 倒出来。
+
+    为何是硬判据（实测踩到）：原先无条件 `_dump(contract)` —— 典型拒收输出 14 行，
+    而其中只有 1-2 行对行动有用（缺项对应的那个字段）。其余（空的 `touch_plan`、
+    默认 `size_budget`、`expect` 通句）只是背景，反而淹没关键信息。
+    """
+
+    def _reject_output(self, findings: dict) -> str:
+        """起一棵树、跑出一个门拒收，返回 CLI 的 stderr。
+
+        ⚠️ **必须用隔离的真 git 仓**（`git_repo`）——直接用 `Engine(cwd=self.tmp)` 会让门
+        在**本仓**上跑（`_gate_cwd` 的目录源是 engine 的 cwd），于是改动集是仓里所有未提交
+        文件、规模必然超预算 ⇒ 拒收项多出 `size_budget`/`touch_plan`/`code_quality`，
+        测试就测不准「只印相关字段」这件事（实测踩到）。
+        """
+        engine, repo = git_repo(self, {"a.py": "x = 1\n"})
+        engine.init_tree("t", "g")
+        engine.expand("t", "root", [{"id": "n", "goal": "做一个功能",
+                                     "acceptance": findings, "touch_plan": ["a.py"]}])
+        engine.start("t", "n", holder="h")
+        engine.collect("t", "n", {"status": "ok", "summary": "做了一个功能",
+                                   "changed_files": []})
+        # `main()` 自己造 `Engine()`（cwd = **进程 cwd**），所以必须 chdir 到隔离仓，
+        # 否则门在真仓上跑（改动集 = 仓里全部未提交文件）—— 实测踩到。
+        here = os.getcwd()
+        os.chdir(repo)
+        self.addCleanup(os.chdir, here)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            main(["done", "t", "n"])
+        return err.getvalue()
+
+    def test_only_fields_relevant_to_the_missing_item_are_shown(self):
+        out = self._reject_output({"cmd": "true", "expect": "contains:NEEDLE"})
+        self.assertIn("验收未通过", out)
+        self.assertIn("acceptance", out, "缺项是验收 ⇒ 应印 acceptance")
+        self.assertIn("node", out, "定位键永远印")
+        # 与缺项无关的字段不该出现（这是本次优化的核心）
+        self.assertNotIn("size_budget", out, "缺项与规模无关 ⇒ 不必印")
+
+    def test_node_key_is_always_present(self):
+        # 用**必然失败**的验收（`expect: contains:` 而命令不输出它），否则门真通过、无拒收输出。
+        out = self._reject_output({"cmd": "true", "expect": "contains:绝不会有这个串"})
+        self.assertIn("node", out)
+
+
 if __name__ == "__main__":
     unittest.main()

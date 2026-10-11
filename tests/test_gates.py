@@ -319,6 +319,29 @@ class ExpectSemanticsTest(DisflowTestCase):
         self.assertTrue(any("验收未通过" in m for m in ctx.exception.missing))
         self.assertTrue(any("NEEDLE" in m for m in ctx.exception.missing))
 
+    def test_failure_output_is_shown_with_the_rejection(self):
+        """验收失败时，**命令输出的关键行**必须随拒收一起给出。
+
+        为何是硬判据（实测踩到）：真错误已在 `evidence.acceptance.output_tail` 里，
+        但旧输出只报 `exit=1（期望 0）`。后果是读者只能**另跑一条命令**去猜失败原因，
+        而同一屏本可以给出那个信息 —— 采集了却不展示 = 纯摩擦。
+        """
+        engine = Engine(cwd=self.tmp)
+        engine.init_tree("t", "g")
+        engine.expand("t", "root", [{
+            "id": "n", "goal": "g", "touch_plan": [],
+            "acceptance": {"cmd": f'{sys.executable} -c "import sys; '
+                                   f'print(\'BOOM MarkerError: 真错误在这\', file=sys.stderr); '
+                                   f'sys.exit(3)"',
+                           "expect": "exit0"}}])
+        engine.start("t", "n", "w")
+        with self.assertRaises(GateReject) as ctx:
+            engine.done("t", "n")
+        joined = "\n".join(ctx.exception.missing)
+        self.assertIn("验收未通过", joined)
+        self.assertIn("MarkerError", joined,
+                      f"拒收应带命令输出关键行（实际：{joined}）")
+
 
 if __name__ == "__main__":
     unittest.main()

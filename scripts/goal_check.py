@@ -285,9 +285,25 @@ def n3_no_llm_in_decisions() -> tuple[bool, str]:
 
 
 def n5_no_distributed() -> tuple[bool, str]:
-    """§2 非目标：不做多机分布式调度。"""
-    code, hits = _grep(r"socket|http\.client|urllib|requests", *(_py_sources()))
-    return not hits.strip(), f"网络相关导入/调用命中 {len(hits.splitlines())} 处"
+    """§2 非目标：不做**多机**分布式调度。
+
+    判据的**分界**（2026-10-11 修订，与 NFR-3/FR-16 同一类修正，见 ADR 0013）：
+    「多机分布式」的真特征是**跨主机通信**——远程地址、服务端监听、集群/选主。
+    而 `urllib` / `http.server` 这类**标准库网络件用于本机**（`disflow/web.py` 就是
+    绑 `127.0.0.1` 的本地入口）完全不是分布式调度。
+    旧判据把 `urllib` 当符号禁，等于把**形态约束实现成了符号禁用** —— 与
+    `fr_check` 的 NFR-3/FR-16 初版犯的是同一个错。
+
+    保住的拦截力：跨主机地址（非 127.0.0.1/localhost 的 host）、集群/选主/远程调用
+    仍命中即 FAIL。
+    """
+    code, hits = _grep(
+        r"0\.0\.0\.0|consul|etcd|zookeeper|celery|rabbitmq|kafka|ray\.init|"
+        r"socket\.(connect|create_connection)|xmlrpc|paramiko",
+        *(_py_sources()))
+    if hits.strip():
+        return False, f"跨主机/集群相关命中 {len(hits.splitlines())} 处"
+    return True, "无跨主机通信、无集群/选主（本机 127.0.0.1 入口不算分布式）"
 
 
 Check = Callable[[], tuple[bool, str]]

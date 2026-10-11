@@ -361,6 +361,30 @@ def _on_node_stage(state: dict, event: dict) -> None:
     })
 
 
+def _on_node_acceptance(state: dict, event: dict) -> None:
+    """补/改节点的**验收判据**（`acceptance`）：换值 + 把变更历史留在 `acceptance_log`。
+
+    为何需要（对称性判据）：`stage` 有 `set_stage`、写面有 `rescope`、树级有 `context`，
+    唯独**节点验收判据**没有「建好之后能改」的路径 —— 而 `expand` 时忘写 `acceptance`
+    是常见疏漏（本仓 `board-web` 实例：整个交付完成后才发现节点无判据、`done` 被拦，
+    而 34 个动词里没有合法补口）。无补口的后果与当年 `touch_plan` 一样：人只能去改
+    `state.json`，而它是投影、会被 `rebuild` 覆盖 ⇒ 违反「事件才是真相」。
+
+    历史必须留（与 `stage_log` / `rescope_log` / `reopen_log` 同一理由）：判据是门的输入，
+    事后要能回答「这门是谁、什么时候、为什么这么定的」。
+    reducer 只赋值、**不校验**（校验在写时）：重放历史时不许因为旧值非法而炸。
+    """
+    node = _node(state, event["slug"], event["node"])
+    old = node.get("acceptance")
+    new = event.get("acceptance")
+    node["acceptance"] = new
+    node.setdefault("acceptance_log", []).append({
+        "from": old, "to": new,
+        "reason": event.get("reason") or "",
+        "holder": event.get("holder") or "",
+    })
+
+
 def _on_tree_close(state: dict, event: dict) -> None:
     state["trees"][event["slug"]]["closed"] = True
 
@@ -410,6 +434,7 @@ _HANDLERS = {
     "node.import": _on_node_import,
     "node.context": _on_node_context,
     "node.stage": _on_node_stage,
+    "node.acceptance": _on_node_acceptance,
     "node.rescope": _on_node_rescope,
     "tree.close": _on_tree_close,
     "tree.reopen": _on_tree_reopen,

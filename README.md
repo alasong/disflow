@@ -12,6 +12,21 @@ export PYTHONPATH=/改成你 clone 的 disflow 路径
 export DISFLOW_STATE_DIR="$PWD/.disflow"       # 仓内 state dir：上手够用，但 worktree 会被硬拒（见「量化、迭代、worktree」）
 ```
 
+**在别的项目里用**（跨项目）：把启动器放进 PATH，它会自动推导上面两条：
+
+```bash
+ln -s /改成你 clone 的 disflow 路径/scripts/disflow-shim.sh ~/bin/disflow
+cd /path/to/你的项目
+disflow doctor                                 # 先自检（全绿即可用）
+disflow init 我的树 --goal "想达成什么"
+disflow host-next 我的树                      # 给出可照抄的 start/collect/done 命令
+```
+
+> 启动器做两件事：`PYTHONPATH` 指向该 clone；状态目录推导到
+> `$DISFLOW_HOME`（默认 `~/.disflow-projects`）下、**按 git 仓根分**的 `仓名-短哈希`。
+> 放在**仓外**是硬要求：仓内状态目录会被 git 追踪 ⇒ 污染改动集、worktree 不可用。
+> 在项目的**任何子目录**跑都落到同一状态目录（按仓根算，不按 cwd）。
+
 **准备**——注意两点：`.gitignore` 与**配置文件**。状态目录必须被忽略，否则它会以
 「未跟踪目录」的身份被改动归因当成“本节点引入的改动”。配置文件（可选）必须
 **在第一次 `start` 之前**就位（或提交进仓库）——`start` 会拍下基线快照，
@@ -330,9 +345,11 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 852 passed（零第三方依赖）——串行全量，口径基准
-python3 scripts/finish.py                          # 收尾门：全量 + 资产 check（退出码当门；默认并行，0=自动核数）
-python3 scripts/finish.py --jobs 1                 # 退回串行 discover（与上一行 README 命令逐字一致）
+python3 -m unittest discover -s tests -t tests    # 867 passed（零第三方依赖）——**数字口径基准**（当场装载数，与并发无关）
+python3 scripts/finish.py                          # 收尾门：全量（**恒并行**）+ 资产 check（退出码当门）
+python3 scripts/finish.py --jobs 1                 # 单进程跑同一套（调试用；不再退回 direct discover）
+python3 scripts/finish.py --changed                # 迭代用：门只跑改动子集（**收尾仍须**跑不带它的）
+python3 scripts/finish.py --sync-readme            # 把本行上方的测试数同步为真实值（不用手改）
 python3 scripts/test_changed.py --all --jobs 8    # **收尾推荐**：全量 + 并发（96s→33s，2.9×）
 python3 scripts/test_changed.py                   # 迭代期：只跑改动相关的子集（带「这不是全量」横幅）
 python3 scripts/test_changed.py --jobs 8          # 迭代期子集 + 并发

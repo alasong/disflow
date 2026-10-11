@@ -31,6 +31,17 @@ SKILL = ROOT / ".agents/skills/disflow/SKILL.md"
 # `(?:\.cli)?` 必须允许：用法块里写的是 `python3 -m disflow.cli <动词>`（点），
 # 而散文里写的是 `disflow <动词>`（空格）——两种都是**合法文档**。
 # 曾经只认后者 ⇒ 把已经在用法块里写明的动词谎报成“未文档化”（实测：`unrelate`）。
+# 匹配「disflow <动词>」形态。
+# **排除词表**（2026-10-11 实测踩到）：裸 `disflow\s+([a-z-]+)` 会把「disflow vs kaa」的
+# `vs`、以及英文行文里的介词/连词/系动词当成 CLI 动词 ⇒ 报「文档引用了不存在的动词」。
+# 这是**尺子的缺陷**，不是文档的错：「disflow vs X」是极常见的对比写法。
+# 判据：排除词是**完整单词**（`\b` 级），不需要排除带连字符的复合词（它们很少是英文虚词）。
+_NOT_A_VERB: frozenset[str] = frozenset({
+    "vs", "and", "or", "is", "are", "the", "a", "an", "in", "on", "of", "to", "for",
+    "with", "by", "as", "at", "from", "than", "that", "this", "it", "was", "be",
+    "can", "will", "not", "no", "all", "any", "its", "your", "our", "their",
+})
+
 _REF = re.compile(r"\bdisflow(?:\.cli)?[ \t]+([a-z][a-z-]*(?:[ \t]*/[ \t]*[a-z][a-z-]*)*)")
 
 
@@ -48,7 +59,7 @@ def _verbs_in(text: str) -> set[str]:
     tokens: set[str] = set()
     for match in _REF.finditer(text):
         for token in re.split(r"[ \t]*/[ \t]*", match.group(1)):
-            if re.fullmatch(r"[a-z][a-z-]*", token):
+            if re.fullmatch(r"[a-z][a-z-]*", token) and token not in _NOT_A_VERB:
                 tokens.add(token)
     return tokens
 
@@ -200,6 +211,20 @@ class DocDriftTest(DisflowTestCase):
         """反向保护：编造的动词必须被认出（否则“未文档化”那条断言永远绿）。"""
         self.assertEqual(_verbs_in("disflow.cli 不存在的动词", ), set())
         self.assertEqual(_verbs_in("disflow.cli nonexist a b"), {"nonexist"})
+
+    def test_english_prose_is_not_mistaken_for_a_verb(self):
+        """回归：裸 `disflow\\s+([a-z-]+)` 会把「disflow vs kaa」的 `vs` 当成动词。
+
+        实测踩到：`docs/kaa-comparison.md` 标题写「disflow vs kaa」⇒ 文档门报
+        「引用了不存在的动词 `vs`」。**这是尺子的缺陷**，不是文档的错。
+        判据：英文虚词（`vs/and/is/of/…`）永不作为动词候选；真动词仍需被抓。
+        """
+        for prose in ("disflow vs kaa", "disflow and kaa", "disflow is a tool",
+                      "disflow in action", "disflow to the rescue"):
+            self.assertEqual(_verbs_in(prose), set(), f"{prose!r} 不应产出动词")
+        # 反向：真动词仍要被抓（证明不是把整条规则关掉）
+        self.assertEqual(_verbs_in("disflow board t"), {"board"})
+        self.assertEqual(_verbs_in("disflow start/done t n"), {"start", "done"})
 
     def test_no_doc_mentions_a_nonexistent_verb(self):
         real = _real_verbs()
