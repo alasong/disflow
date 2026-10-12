@@ -984,8 +984,17 @@ def cmd_trees(engine: Engine, args) -> int:
         return 0
     events = store.load_events(engine.storage)      # 一次读，循环里复用（不每棵树重读）
     now_ts = time.time()
+    # 默认隐藏已关闭的树（用户 2026-10-12：连问三轮「为何总看到这两棵」）。
+    # 为何默认隐藏而非删除：已关闭的树是 `awaits` 的完成信号（不可再挂任务、expand 会
+    # 提示 reopen），数据必须保留；但「做完的」不该默认占据注意力。
+    # 与 `board` 的 active_only（默认只列运行中+待完成）同一条纪律。
+    # `--all` 展开全部；隐藏时在末尾报数（**不静默**：读者要知道还有几棵被收起了）。
+    hidden = 0
     for name in names:
         status = engine.status(name)
+        if status["closed"] and not args.all:
+            hidden += 1
+            continue
         progress = status["progress"]
         mark = "●" if status["closed"] else "·"
         # 迭代边界：有 deadline 才报余量；无则什么都不说（不编一个“无限期”出来）
@@ -1003,6 +1012,9 @@ def cmd_trees(engine: Engine, args) -> int:
                 tail = " · deadline 非法"
         print(f"{mark} {name}: {progress['done']}/{progress['tasks']}（{progress['pct']}%）"
               f" · 就绪 {len(status['ready'])}{tail} · {status['goal']}")
+    if hidden:
+        # 不静默隐藏：报出被收起的条数 + 查看方式（与 board 表头报空列计数同一纪律）
+        print(f"（另有 {hidden} 棵已关闭的树已收起：disflow trees --all 展开）")
     return 0
 
 
@@ -1314,7 +1326,12 @@ def build_parser() -> argparse.ArgumentParser:
                       help="reap 专用：显式破例强删（remove 加 --force）"
                            "并把将丢弃的项记进输出；仅 reap 接受")
 
-    add("trees", cmd_trees)
+    # trees：默认只列未关闭的树（已关闭的收起，末尾报数）；--all 展开全部。
+    # 为何需要：用户 2026-10-12 连问三轮「为何总看到这两棵」——做完的树不该默认占据注意力。
+    node = sub.add_parser("trees", help="列出所有树（默认收起已关闭的；--all 展开）")
+    node.add_argument("--all", action="store_true",
+                      help="连已关闭的树一起列出（默认收起并在末尾报数）")
+    node.set_defaults(handler=cmd_trees)
 
     # ── Spec（交付单元：独立顶层实体，ADR 0006 / FR-33）──────────────────
     # 命名不叫 `spec`（那是动词别名不好读）也不叫 `speckit`（那是外部工具）——

@@ -356,6 +356,33 @@ class CliReadOnlyVerbTest(DisflowTestCase):
         self.assertIn("t", out)
         self.assertIn("u", out)
 
+    def test_trees_hides_closed_by_default(self):
+        """已关闭的树默认收起，`--all` 展开，且**不静默**（末尾报被收起的条数）。
+
+        为何钉这一条（用户 2026-10-12 连问三轮「为何总看到这两棵」）：做完的树
+        不该默认占据注意力；但数据**必须保留**（`closed` 是 `awaits` 的完成信号，
+        不可再挂任务）——故是「读取层过滤」而非「删除」。
+
+        旧行为：`trees` 无条件列出全部树（用户看到已关闭的也一直在）。
+        """
+        self._seed()
+        self._run(["init", "u", "--goal", "第二棵"])
+        # 关掉 t（它的验收已配好；close 需 done 的 evaluate/reflect —— 用逃生口跳过）
+        self._run(["context", "t", "root", "--set",
+                   '{"closure": "not_applicable: 本测试只关心 trees 的过滤，不关心 t 的交付"}'])
+        self._run(["close", "t"])
+
+        code, out, _err = self._run(["trees"])
+        self.assertEqual(code, 0)
+        self.assertIn("u", out, "未关闭的树必须显示")
+        self.assertNotIn("t:", out, "已关闭的树默认应收起")
+        self.assertIn("收起", out, "收起必须报数，不得静默隐藏")
+
+        code, out_all, _err = self._run(["trees", "--all"])
+        self.assertEqual(code, 0)
+        self.assertIn("t:", out_all, "--all 必须展开已关闭的树")
+        self.assertIn("u", out_all)
+
     # ── 自检 ─────────────────────────────────────────────────────────────
 
     def test_rebuild_check_and_doctor_are_green_on_clean_state(self):
