@@ -285,9 +285,28 @@ python3 -m disflow.cli close demo          # 需 done 的 evaluate + reflect/sta
 python3 -m disflow.cli trees               # 列出所有树（● = 已 closed）
 python3 -m disflow.cli reap demo           # 回收过期租约（worker 崩溃后的兜底）
 
-# web 入口（本地）：看板 + 资产 + 下发任务
+# web 入口（本地）：**只读看板 + 资产 + 轻量控制**
 python3 -m disflow.web                     # 默认 http://127.0.0.1:8765/
 python3 -m disflow.web --port 9000 --cwd /path/to/repo
+#
+# ⚠ 能力边界（实测，勿高估）：后端白名单开了 7 个动词，但**前端只暴露 3 个**——
+#   expand（「＋ 下发任务」按钮）/ start（就绪行）/ done（运行中行）。
+#   collect / fail / skip / retry **前端零实现**。
+#   后果：`done` 会拒收没有 collect 的节点，故**从网页下发的任务走到 done 必然被拒**
+#   ——网页上没有任何地方能填 `collect --result` 的结果 JSON。
+#   且 `collect` 还要先由**宿主**派 worker 干活（disflow 设计上不 spawn，见 SKILL §9），
+#   所以 web **永远不是完整下发器**。完整循环请走 CLI：
+#     disflow expand → disflow start → [宿主派 worker] → disflow collect → disflow done
+#   这条边界是设计取舍（ADR 0011：「web 的体积在风险面上，不在动词数上」），不是未完成的 bug。
+#
+# ⚠ 界面有两个维度，勿混（实测）：
+#   顶部三个**标签**是**视图类型**：看板 / 资产 / Spec 交付（`data-view="board|assets|specs"`）。
+#   它们下方那排**按钮**（treebar）是**树选择**：每棵树一个按钮，点一下切树。
+#   **看板按树分是设计，不是 bug**：`views.board_layout(tree: dict, ...)` 的签名只收**一棵树**，
+#   且 `GET /api/board` 的 `tree` 是**必填** query——缺它直接 400。
+#   故「多棵树」在界面上表现为「多个可切换的看板」，而**没有一个能同时看全部树的聚合视图**
+#   （那是新功能，不是修 bug）。要概览全部树：`disflow trees`
+#   （一行一树：进度 / 就绪 / 卡死 / 目标）。要跨树依赖：在建节点时声明 `awaits: ["<别树>"]`。
 
 python3 -m disflow.cli doctor
 ```
