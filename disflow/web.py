@@ -440,7 +440,14 @@ async function loadBoard() {
   const bar = $("#treebar");
   bar.innerHTML = "";
   if (!trees.length) { setStatus("（无树）"); $("#cols").innerHTML = ""; return; }
-  if (!CURRENT_TREE || !trees.some(t => t.tree === CURRENT_TREE)) CURRENT_TREE = trees[0].tree;
+  // 默认选中「有在跑任务的树」，而非字母序第一棵。
+  // 为何改（实测踩到）：trees 是 sorted() 字母序，mldev/ mlxfix 共用前缀时 mldev 恒排第一；
+  // 若 mldev 已关闭（不再变化），用户打开看板看到的是**静态的那棵**，会以为「看板没反应」。
+  // 判据：「正在动的那棵」才是打开看板时最想看的；全部静止时再退字母序。
+  if (!CURRENT_TREE || !trees.some(t => t.tree === CURRENT_TREE)) {
+    const live = trees.find(t => (t.running || []).length || (t.ready || []).length);
+    CURRENT_TREE = (live || trees[0]).tree;
+  }
   for (const t of trees) {
     const b = document.createElement("button");
     b.textContent = `${t.closed ? "●" : "·"} ${t.tree} ${t.progress.done}/${t.progress.tasks}` +

@@ -136,6 +136,22 @@ class WebTest(DisflowTestCase):
         # 打开路径必须真的连到 expdlg 上，而不是连到别的 dialog
         self.assertRegex(html, r'\$\("#newTask"\)\.onclick[\s\S]{0,400}?showModal')
 
+    def test_index_prefers_tree_with_live_work(self):
+        """看板默认选中的应是「有在跑/可派任务的树」，而非字母序第一棵。
+
+        为何钉这一条（实测踩到）：`engine.trees()` 是 `sorted()` 字母序，
+        `mldev` / `mlxfix` 共用前缀时 mldev 恒排第一；若 mldev 已关闭（不再变化），
+        用户打开看板看到的是**静态的那棵**，会以为「看板没反应」（用户当场提问）。
+        旧代码 `CURRENT_TREE = trees[0].tree` 正是这个行为。
+        """
+        status, body = self.get("/")
+        html = str(body)
+        self.assertEqual(status, 200)
+        # 必须按 running/ready 挑，而不是无条件取 trees[0]
+        self.assertRegex(html, r"trees\.find\(t =>[\s\S]{0,120}?running")
+        self.assertNotIn("CURRENT_TREE = trees[0].tree", html,
+                         "还在无条件取字母序第一棵")
+
     def test_index_wires_start_action(self):
         """就绪节点必须能从界面 `start`。
 
