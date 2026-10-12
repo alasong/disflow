@@ -250,7 +250,7 @@ MUTATIONS: list[Mutation] = [
     ("租约过期又变回“故障”（退代码 1 + 唯一修法 reap）", "disflow/cli.py",
      '                if overdue is not None:\n'
      '                    holder = (node.get("lease") or {}).get("holder") or "?"\n'
-     '                    advisories.append(',
+     '                    lease_advisories.append(',
      '                if overdue is not None:\n'
      '                    holder = (node.get("lease") or {}).get("holder") or "?"\n'
      '                    problems.append(',

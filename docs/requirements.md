@@ -227,6 +227,7 @@ disflow 是一个**任务分发流引擎**：以**看板**为一等实体（固�
 | FR-32 动态看板 | ✅ | 板定义可逐树覆盖（`init --boards` / `set_boards`）；`tests/test_boards_per_tree.py` |
 | **FR-33 Spec 一等公民（引擎级实体）** | ✅ | `specs` 与 `trees` **并列**的顶层实体：`spec.*` 事件闭集（init/goal/gate/link/unlink/deliver/undeliver/close/reopen）+ 投影 + 7 个 CLI 动词；`tests/test_spec_entity.py`（21 项：实体/重放/拒收/硬边界/CLI） |
 | **FR-34 Spec 关联资产（非归属）** | ✅ | 资产层：`assets/registry.json` 的 `spec.required_roles`/`delivers` + `assets_scan.py delivery` 门；`fr_check` 机检 FR-34 |
+| **FR-35 建树判据 / 跨树等待自检** | ✅ | 结构信号（非词面）：存在 `closed` 树 ⇒ `init` 提示 + 可照抄 `reopen`/`expand` 命令；`doctor` 报声明了 `awaits` 的树对（`awaits` = 承认依赖 ⇒ 本该是同树内 `requires`）；`tests/test_tree_cardinality.py`（6 项：提示/可照抄命令/词面仅附加/doctor advisory 不判红/不误报/干净 state） |
 | FR-24/25 上下文与写面 | ✅ | `brief` 祖先链注入；`pack_waves` 冲突排队；`tests/test_core.py` |
 | **FR-26 租约** | ✅ | 带 `expires_at`；`reap` 显式回收；`tests/test_lease.py`（**本轮补齐**） |
 | FR-27 卡死 | ✅ | `is_stuck`；`tests/test_core.py` |
