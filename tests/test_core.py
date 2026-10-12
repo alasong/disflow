@@ -131,6 +131,34 @@ class ContextTest(DisflowTestCase):
         self.assertEqual(merged["background"], "系统")
         self.assertEqual(merged["shared"], "mid")
 
+    def test_own_context_reaches_its_own_brief(self):
+        """节点**自己的** context 必须出现在它自己的 brief 里。
+
+        为何钉这一条（实测缺陷）：`disflow context --set <node>` 写的是节点自身的
+        context，而 `inherited_context` 原先只并祖先链（不含自身）⇒ 对叶子节点
+        `--set` 是**无效操作**：事件流写了、投影里也有，但 `brief` 里是空的，
+        worker 拿不到。原有两个测试只往祖先放 context，这个缺口一直没被看见。
+        """
+        nodes = {
+            "r": node("r", None, kind="container", ctx={"background": "系统"}),
+            "leaf": node("leaf", "r", ctx={"候选方向": ["A", "B"], "注意": "快照"}),
+        }
+        payload = context.brief(nodes, "leaf")
+        self.assertEqual(payload["context"]["候选方向"], ["A", "B"],
+                         "节点自身 context 没进自己的 brief")
+        self.assertEqual(payload["context"]["注意"], "快照")
+        # 祖先的 context 仍要能继承（两个来源共存，不是二选一）
+        self.assertEqual(payload["context"]["background"], "系统")
+
+    def test_own_context_overrides_ancestor_on_same_key(self):
+        """同 key 冲突时：自身 > 近祖先 > 远祖先（具体压过泛化）。"""
+        nodes = {
+            "r": node("r", None, kind="container", ctx={"k": "root"}),
+            "a": node("a", "r", ctx={"k": "mid"}),
+            "b": node("b", "a", ctx={"k": "own"}),
+        }
+        self.assertEqual(context.inherited_context(nodes, "b")["k"], "own")
+
     def test_brief_includes_done_prereq_summary(self):
         nodes = {
             "r": node("r", None, kind="container"),
