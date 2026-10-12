@@ -420,7 +420,7 @@ details summary { cursor:pointer; color:var(--dim); }
 
 <script>
 const $ = (s) => document.querySelector(s);
-let CURRENT_TREE = null, VIEW = "board";
+let CURRENT_TREE = null, VIEW = "board", SHOW_CLOSED = false;
 
 async function getJSON(url, opts) {
   const r = await fetch(url, opts);
@@ -445,15 +445,31 @@ async function loadBoard() {
   // 若 mldev 已关闭（不再变化），用户打开看板看到的是**静态的那棵**，会以为「看板没反应」。
   // 判据：「正在动的那棵」才是打开看板时最想看的；全部静止时再退字母序。
   if (!CURRENT_TREE || !trees.some(t => t.tree === CURRENT_TREE)) {
+    // 优先级：有 running/ready 的 → 未关闭的 → trees[0]。
+    // 为何要第二档：全部静止时若直选 trees[0]，而它恰好已关闭且按钮被收起，
+    // 就会「看板在显示一棵在按钮条上看不见的树」——自相矛盾。
     const live = trees.find(t => (t.running || []).length || (t.ready || []).length);
-    CURRENT_TREE = (live || trees[0]).tree;
+    const openTree = trees.find(t => !t.closed);
+    CURRENT_TREE = (live || openTree || trees[0]).tree;
+    // 若最终选中了已关闭的树（全都关了），就自动展开，让它的按钮可见
+    if (trees.find(t => t.tree === CURRENT_TREE)?.closed) SHOW_CLOSED = true;
   }
   for (const t of trees) {
+    // 已关闭的树默认收起（与 CLI `disflow trees` 同一纪律：做完的不占注意力）。
+    // 但**不静默**：被收起的条数在末尾报出，点一下即可展开看它们。
+    if (t.closed && !SHOW_CLOSED) continue;
     const b = document.createElement("button");
     b.textContent = `${t.closed ? "●" : "·"} ${t.tree} ${t.progress.done}/${t.progress.tasks}` +
                     (t.stuck ? " ⚠卡死" : "");
     if (t.tree === CURRENT_TREE) b.classList.add("on");
     b.onclick = () => { CURRENT_TREE = t.tree; loadBoard(); };
+    bar.appendChild(b);
+  }
+  const closedCount = trees.filter(t => t.closed).length;
+  if (closedCount) {
+    const b = document.createElement("button");
+    b.textContent = SHOW_CLOSED ? `收起 ${closedCount} 棵已完成` : `＋ ${closedCount} 棵已完成`;
+    b.onclick = () => { SHOW_CLOSED = !SHOW_CLOSED; loadBoard(); };
     bar.appendChild(b);
   }
   const board = await getJSON(`/api/board?tree=${encodeURIComponent(CURRENT_TREE)}`);
