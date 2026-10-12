@@ -119,6 +119,21 @@ def _goal_tokens(text: str, cfg: Config) -> set[str]:
     return tokens
 
 
+def goal_overlap(cfg: Config, left: str, right: str) -> list[str]:
+    """两段目标文本的**共同内容词**（升序）；任一侧切不出内容词 → 空（无从判定，不越权）。
+
+    为何「空」而不报「不相关」：与 `_goal_tokens` 的信息不足边界一致 —— 短目标
+    （「A1」）经停用词过滤后为空词集，不是「无关」。
+
+    **不作建树/自检的主判据**：实测权威反例（`mldev` / `mlxfix`）经本切词后只共享 1 个
+    通用动词「产出」—— 词面判据在它为之而写的那个 bug 上必然失效。本函数只供
+    `cmd_init` 当**附加信息**打印（不参与是否警告）；主判据是结构信号（已 closed 的树 /
+    已声明的 `awaits`）。
+    """
+    shared = _goal_tokens(str(left or ""), cfg) & _goal_tokens(str(right or ""), cfg)
+    return sorted(shared)
+
+
 def goal_align(cfg: Config, goal: str, claim_text: str) -> str | None:
     """产出声明是否跟节点目标**相关**（漂移门 1）—— 无关→拒收文案；相关→None。
 

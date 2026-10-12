@@ -373,6 +373,25 @@ class Engine:
                            prepare=lambda _: {"boards": boards_dump(chosen),
                                               "reason": reason})
 
+    def goal_overlap(self, goal: str, exclude: str = "") -> list[tuple[str, list[str]]]:
+        """新目标与**已有树** goal 的共同内容词（`(树名, 共同词)`，按共同词数降序）。
+
+        `exclude`：要跳过的树名（`cmd_init` 传正在建的树名 —— 刚 append 的 `tree.init`
+        已进投影，不跳就会把新树自己当“已有树”列出来）。
+
+        只供 `cmd_init` 当**附加信息**打印 —— 词面重合**不作主判据**（实测权威反例
+        `mldev` / `mlxfix` 只共享 1 个通用动词「产出」）。唯一实现在 `gates.goal_overlap`
+        （与漂移门 `goal_align` 共用一套切词），引擎只负责递状态，不在第二处再写一份。
+        """
+        hits = []
+        for name, tree_state in (self.load().get("trees") or {}).items():
+            if name == exclude:
+                continue
+            shared = gates.goal_overlap(self.cfg, goal, str(tree_state.get("goal") or ""))
+            if shared:
+                hits.append((name, shared))
+        return sorted(hits, key=lambda hit: (-len(hit[1]), hit[0]))
+
     def set_goal(self, tree: str, goal: str) -> dict:
         return self._write("tree.goal", tree=tree, prepare=lambda _: {"goal": goal})
 

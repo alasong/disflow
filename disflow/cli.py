@@ -58,6 +58,53 @@ def _boards_from_arg(spec: str) -> tuple[Board, ...]:
     return boards_mod.parse({"boards": ids}, "--boards")
 
 
+def _init_reroute_cmd(tree: str, goal: str) -> str:
+    """「同树继续」的**可照抄**命令（reopen + expand）。
+
+    为何非得给命令：本仓已实测「判据写成提示零行为改变」（319 次提及 / 零变化）——
+    只说「注意」等于没说。命令用占位符，让使用者看得出要把什么换掉。
+    """
+    return (f"disflow reopen {tree} --reason \"接着做：<为何>\"\n"
+            f"    disflow expand {tree} root --children "
+            f"'[{{\"id\":\"<新节点>\",\"goal\":\"{goal}\"}}]'")
+
+
+def _tree_overlap_warning(engine: Engine, tree: str, goal: str) -> None:
+    """建树时提示：**已有 closed 的树** —— 新树可能是它的下一阶段（给出可照抄的命令）。
+
+    **主判据是结构信号（存在已 closed 的树），不是词面重合**——实测教训（本节点返工
+    的真实原因）：判据原文拿「goal 有共同内容词」当主判据，而权威反例 `mldev` /
+    `mlxfix` 经 `gates` 切词后**只共享 1 个通用动词「产出」**（`mlxfix` 的 `awaits` 已
+    声明、不是「漏声明」）。词面判据在它为之而写的那个 bug 上必然失效 —— 故本函数不再
+    拿共同词触发警告。
+
+    为何「存在 closed 的树」是个信号：想接着干只能 `reopen` 后 `expand`；而「另建一棵」
+    会把同一目标的两个阶段拆成两棵树（实测反例 `mldev` / `mlxfix`：新树是在旧树刚做完/
+    正在收尾时建的）。词面共同词仍会打印，但**只作附加信息、不参与是否警告**。
+
+    输出走 **stderr**（stdout 只留 `✓ 建树 …` 一行成功报文，脚本 `2>/dev/null` 不会把提示
+    看成成功）；退出码仍为 0 —— 提示不改行为，只把判断摆在眼前（reopen 是人的判断，
+    目标是否独立是语义问题，机制给不出）。
+    """
+    closed = sorted(name for name, state in (engine.load().get("trees") or {}).items()
+                    if state.get("closed") and name != tree)
+    if not closed:
+        return
+    print(f"⚠ 建树提醒：已有 {len(closed)} 棵已关闭的树 —— 本树是否它们其中一棵的下一阶段？",
+          file=sys.stderr)
+    for name in closed:
+        print(f"  - 已关闭：{name}", file=sys.stderr)
+    first = closed[0]
+    print(f"  若这是 `{first}` 的下一阶段 ⇒ 同树继续（可照抄）。它更可能是同树内的一个节点"
+          "（用 `requires` 表达前置），而不是第二棵树：", file=sys.stderr)
+    print(f"    {_init_reroute_cmd(first, goal)}", file=sys.stderr)
+    # 共同内容词：**附加信息**（不参与是否警告）。标注它为何不可靠，免得读者当判据用。
+    for name, shared in engine.goal_overlap(goal, exclude=tree):
+        print(f"  （参考，非判据）与 `{name}` 共同内容词：{'、'.join(shared)}"
+              " —— 词面重合在权威反例上只命中通用词，故不作主判据", file=sys.stderr)
+    print("  确属独立目标 ⇒ 照原样建树（本提示不影响结果）。", file=sys.stderr)
+
+
 def cmd_init(engine: Engine, args) -> int:
     chosen: tuple[Board, ...] = ()
     if getattr(args, "boards", None):
@@ -65,6 +112,9 @@ def cmd_init(engine: Engine, args) -> int:
     engine.init_tree(args.tree, args.goal, boards=chosen)
     extra = f"（{len(chosen)} 块板）" if chosen else ""
     print(f"✓ 建树 {args.tree}：{args.goal}{extra}")
+    # 建树**之后**提示（不是之前）：提示要看的是「新目标 vs 现有树」，而现有树的读数
+    # 不该因为一次可能被拒的建树而白读；先建再看——拒收时本来就不该出提示。
+    _tree_overlap_warning(engine, args.tree, args.goal)
     return 0
 
 
@@ -427,9 +477,41 @@ def _state_dir_inside_repo(engine: Engine) -> tuple[str, str] | None:
     return None
 
 
+def _tree_overlap_advisories(trees: dict) -> list[str]:
+    """树级检查：**声明了跨树等待（`awaits`）的树对** —— 待人工确认，**不判红**。
+
+    判据（本节点返工后改正的）：“`awaits` 已声明 = 承认「这是另一棵树」”。若宿主一边给
+    另一棵树写 `awaits: ['mldev']`、一边把目标建成第二棵树 —— 那正是「跨树等待」的误用：
+    等待另一棵树完成 = 承认两者有依赖，那它就该是**同一棵树里的 `requires`**（同树内前置），
+    而不是两棵树 + `awaits`。**这一条能抓住权威反例 `mldev` / `mlxfix`**
+    （`mlxfix` 的节点 `awaits: ['mldev']`）—— 而原判据「goal 有共同内容词」在它上
+    只共享 1 个通用词「产出」，必静默放行。
+
+    为何不判红（exit 1）：`awaits` 本身是**合法机制**（确需跨树等待时就该写），本条不能断言
+    它一定错。与租约过期、worktree 可用性同一条纪律：**需人判断**，只在全绿时单独成行报出来。
+    """
+    notes: list[tuple[str, str]] = []
+    for name in sorted(trees):
+        target_trees: list[str] = []
+        for node in trees[name]["nodes"].values():
+            for waiting in node.get("awaits") or []:
+                if waiting in trees and waiting != name:
+                    target_trees.append(str(waiting))
+        for target in sorted(set(target_trees)):
+            notes.append((name, target))
+    if not notes:
+        return []
+    lines = [f"树级：{len(notes)} 处跨树等待（`awaits`）——请确认它们本该同树（用 requires），"
+             "还是确需跨树分两棵"]
+    for name, target in notes:
+        lines.append(f"{name} 等待 {target}：若两者是同一目标的先后阶段 ⇒ 应同树内 `requires`；"
+                     "确属独立的两个目标才保留 `awaits`")
+    return lines
+
+
 def cmd_doctor(engine: Engine, args) -> int:
     problems: list[str] = []
-    advisories: list[str] = []
+    lease_advisories: list[str] = []
     matched, diffs = store.projection_matches(engine.storage, project=project)
     if not matched:
         problems.extend(f"投影漂移：{d}" for d in diffs)
@@ -450,6 +532,7 @@ def cmd_doctor(engine: Engine, args) -> int:
             "修法：把 [state].dir 或 DISFLOW_STATE_DIR 配到仓外")
     state = engine.load()
     now_ts = time.time()
+    tree_overlaps = _tree_overlap_advisories(state.get("trees") or {})
     for name, tree in sorted(state.get("trees", {}).items()):
         cycles = graph.find_cycles(tree["nodes"])
         if cycles:
@@ -459,7 +542,7 @@ def cmd_doctor(engine: Engine, args) -> int:
                 overdue = lease_overdue_seconds(node.get("lease"), now_ts)
                 if overdue is not None:
                     holder = (node.get("lease") or {}).get("holder") or "?"
-                    advisories.append(
+                    lease_advisories.append(
                         f"{name}/{node_id}: 租约已过期 {_human_seconds(overdue)}"
                         f"（holder={holder}）")
             for dep in node.get("requires") or []:
@@ -476,6 +559,9 @@ def cmd_doctor(engine: Engine, args) -> int:
             f"{item['tree']}: {item['closed_at']} 已关闭，但之后又挂了任务"
             f"（{item['expanded_at']} · node={item['node']}）{who}"
             f"—— awaits 的完成信号已失真；若确实要继续，应显式 `disflow reopen {item['tree']}`")
+    # 展示列表 = 租约项 + 树级项。**分开存**：脚注（两种读法：reap / done）只解释租约，
+    # 若和树级条目混在一个列表里，一条与租约无关的树级提示下会挂着一段租约说明。
+    advisories = lease_advisories + tree_overlaps
     if problems:
         # 失败报文统一走 stderr（与 GateReject 一致）：脚本 2>/dev/null 时不会把失败看成成功。
         # stdout 必须为空——“失败时 stdout 干净”是既有契约（tests/test_cli_readonly.py）。
@@ -508,7 +594,7 @@ def cmd_doctor(engine: Engine, args) -> int:
             print(f"  - {worktree_advisory}")
         for item in advisories:
             print(f"  - {item}")
-        if advisories:                 # 脚注只讲租约过期：没有租约项就不印
+        if lease_advisories:           # 脚注只讲租约过期：没有租约项就不印
             print(_DOCTOR_ADVISORY_FOOTNOTE)
     print("✓ doctor 全绿")
     return 0

@@ -153,6 +153,10 @@ disflow 是一个**任务分发流引擎**：以**看板**为一等实体（固�
   **角色清单**（requirement/design/implementation/verification/documentation），「全量交付」= 角色齐全。
   （**两层均已落地**：资产层 = `assets/registry.json` 的 `spec` 块 + `assets_scan.py delivery` 门；
   引擎层 = `spec.*` 事件 + 顶层 `specs` 投影 + CLI，见 FR-33。）
+- **FR-35**：**建树有判据、跨树等待有自检**：`init` 时若已有 `closed` 的树 ⇒ 提醒
+  「这可能是它的下一阶段」并给出可照抄的 `reopen` + `expand`；`doctor` 报出声明了 `awaits`
+  指向另一棵树的树对（`awaits` = 承认依赖 ⇒ 本该是同树内的 `requires`）。
+  **只提示不拒收**（目标是否独立是语义问题，词面/结构信号都有假阳性）。见 `design.md` §6.3。
 
 ---
 

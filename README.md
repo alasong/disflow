@@ -386,7 +386,7 @@ python3 -m disflow.cli done demo n7 --dry-run    # 预演：跑门不落事件�
 ## 测试
 
 ```bash
-python3 -m unittest discover -s tests -t tests    # 929 passed（零第三方依赖）——**数字口径基准**（当场装载数，与并发无关）
+python3 -m unittest discover -s tests -t tests    # 935 passed（零第三方依赖）——**数字口径基准**（当场装载数，与并发无关）
 python3 scripts/finish.py                          # 收尾门：全量（**恒并行**）+ 资产 check（退出码当门）
 python3 scripts/finish.py --jobs 1                 # 单进程跑同一套（调试用；不再退回 direct discover）
 python3 scripts/finish.py --changed                # 迭代用：门只跑改动子集（**收尾仍须**跑不带它的）
