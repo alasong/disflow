@@ -121,6 +121,35 @@ class WebTest(DisflowTestCase):
         # 三视图标签都在（Spec 是体系的一部分，不在前台看不到 = 缺一块）
         self.assertIn('data-view="specs"', str(body))
 
+    def test_index_wires_dispatch_entry(self):
+        """下发入口必须**接上**：dialog 存在 ≠ 有路打开它。
+
+        为何钉这一条（实测缺陷）：`<dialog id="expdlg">` 与 `#dlgSubmit` 的提交逻辑
+        原本都在，但全页 `showModal` 出现 0 次 ⇒ 界面上的「下发任务」入口**不存在**
+        （DOM 在、路径无）。旧断言只查 `data-view="specs"`，看不见这种「半成品」。
+        """
+        status, body = self.get("/")
+        html = str(body)
+        self.assertEqual(status, 200)
+        self.assertIn('id="newTask"', html, "缺「＋ 下发任务」按钮")
+        self.assertIn("showModal", html, "对话框没有打开路径（只造了 DOM）")
+        # 打开路径必须真的连到 expdlg 上，而不是连到别的 dialog
+        self.assertRegex(html, r'\$\("#newTask"\)\.onclick[\s\S]{0,400}?showModal')
+
+    def test_index_wires_start_action(self):
+        """就绪节点必须能从界面 `start`。
+
+        为何钉这一条（实测缺口）：后端白名单开了 7 个动词，界面原本只暴露 `done`
+        ⇒ `start` 无入口。而 `start` 拍的基线是 `done` 门的依据：跳过 start 会让门在
+        空基线上跑（把开工前就脏的文件算成本节点引入的改动）。
+        """
+        status, body = self.get("/")
+        html = str(body)
+        self.assertEqual(status, 200)
+        self.assertIn('"start"', html, "界面没有 start 动作")
+        # start 必须带 holder（后端缺 holder 会拒收，见 test_write_rejects_missing_holder）
+        self.assertRegex(html, r'action === "start"[\s\S]{0,200}?holder')
+
     def test_specs_endpoint_reports_roles_and_missing(self):
         """`/api/specs` 报交付覆盖；**缺角色是报告不是门**（HTTP 仍 200）。"""
         self.engine.spec_init("s1", "交付甲")

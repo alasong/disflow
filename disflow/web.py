@@ -391,6 +391,7 @@ details summary { cursor:pointer; color:var(--dim); }
     <div class="tab" data-view="assets">资产</div>
     <div class="tab" data-view="specs">Spec 交付</div>
   </div>
+  <button type="button" id="newTask" title="向当前树的下发新节点（expand）">＋ 下发任务</button>
   <span class="hint" id="status">加载中…</span>
 </header>
 <main>
@@ -480,7 +481,15 @@ function renderBoard(board) {
         row.innerHTML = `<span class="mk">${r.mark}</span>` +
                         `<span class="id">${esc(r.node)}</span>` +
                         `<span class="goal">${esc(r.goal || "")}</span>`;
-        if (g.group === "running") {
+        // 按状态给动作：就绪 → start（先开工拍基线）；运行中 → done。
+        // 为何 start 必须能从界面点到：done 的门以 start 拍的基线为准，
+        // 跳过 start 会让门在空基线上跑（把开工前就脏的文件算成本节点引入）。
+        if (g.group === "ready") {
+          const btn = document.createElement("button");
+          btn.textContent = "start";
+          btn.onclick = () => quickAction("start", r.node);
+          row.appendChild(btn);
+        } else if (g.group === "running") {
           const btn = document.createElement("button");
           btn.textContent = "done";
           btn.onclick = () => quickDone(r.node);
@@ -497,16 +506,26 @@ function esc(s) {
   return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 }
 
-async function quickDone(node) {
-  if (!confirm(`对 ${CURRENT_TREE}/${node} 跑 done？（会跑门并落事件）`)) return;
+async function quickAction(action, node) {
+  // start 必带 holder（后端缺 holder 直接拒收）；web 下发的租约统一记作 "web"，
+  // 与 CLI 的 --holder 同名同义，便于 `reap` 对账。
+  const holder = action === "start" ? "web" : undefined;
+  const extra = action === "start" ? `（holder=${holder}，会拍开工基线）` : "";
+  if (!confirm(`对 ${CURRENT_TREE}/${node} 跑 ${action}？${extra}`)) return;
   try {
-    const res = await getJSON("/api/write", {
+    const payload = {action, tree: CURRENT_TREE, node};
+    if (holder) payload.holder = holder;
+    await getJSON("/api/write", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({action: "done", tree: CURRENT_TREE, node})
+      body: JSON.stringify(payload)
     });
-    setStatus(`${node} done 成功`);
+    setStatus(`${node} ${action} 成功`);
     await loadBoard();
-  } catch (e) { setStatus(`${node} done 失败：${e.message}`, true); }
+  } catch (e) { setStatus(`${node} ${action} 失败：${e.message}`, true); }
+}
+
+async function quickDone(node) {
+  await quickAction("done", node);
 }
 
 async function loadAssets() {
@@ -567,6 +586,16 @@ document.querySelectorAll(".tab").forEach(tab => {
     (loaders[VIEW] || loadBoard)().catch(e => setStatus(e.message, true));
   };
 });
+
+// 「＋ 下发任务」→ 打开 expand 对话框。
+// 为何要显式接线：dialog 与提交逻辑原本都在，唯独没有 showModal ——
+// 界面上的入口因此**不存在**（能看见对话框的 DOM，却没有任何路径打开它）。
+$("#newTask").onclick = () => {
+  if (!CURRENT_TREE) { setStatus("先选一棵树", true); return; }
+  $("#dlgTree").textContent = CURRENT_TREE;
+  $("#dlgOut").style.display = "none";
+  $("#expdlg").showModal();
+};
 
 $("#dlgSubmit").onclick = async () => {
   let children;
