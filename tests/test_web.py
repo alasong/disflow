@@ -109,7 +109,7 @@ class WebTest(DisflowTestCase):
     def test_read_endpoints_do_not_touch_state(self):
         before = self.fingerprint()
         for path in ("/", "/api/trees", "/api/board?tree=t", "/api/assets",
-                     "/api/host-next?tree=t"):
+                     "/api/specs", "/api/host-next?tree=t"):
             status, _ = self.get(path)
             self.assertEqual(status, 200, f"{path} 应 200")
         self.assertEqual(self.fingerprint(), before, "只读端点改了状态")
@@ -118,6 +118,29 @@ class WebTest(DisflowTestCase):
         status, body = self.get("/")
         self.assertEqual(status, 200)
         self.assertIn("<title>disflow</title>", str(body))
+        # 三视图标签都在（Spec 是体系的一部分，不在前台看不到 = 缺一块）
+        self.assertIn('data-view="specs"', str(body))
+
+    def test_specs_endpoint_reports_roles_and_missing(self):
+        """`/api/specs` 报交付覆盖；**缺角色是报告不是门**（HTTP 仍 200）。"""
+        self.engine.spec_init("s1", "交付甲")
+        self.engine.spec_link("s1", "pkg", "implementation")
+        status, body = self.get("/api/specs")
+        self.assertEqual(status, 200)
+        specs = body["specs"]
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0]["spec"], "s1")
+        self.assertEqual(specs[0]["assets"], {"pkg": "implementation"})
+        self.assertEqual(specs[0]["roles"], ["implementation"])
+        # 缺角色只报不拦（与 assets check 同纪律）——列出缺哪些，状态码仍是 200
+        self.assertIn("documentation", specs[0]["missing_roles"])
+        self.assertEqual(len(body["roles"]), 5)
+
+    def test_specs_empty_is_not_an_error(self):
+        """无 Spec ⇒ 200 + 空表（不 404：空是**正常状态**，不是资源缺失）。"""
+        status, body = self.get("/api/specs")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["specs"], [])
 
     # ── 判据 2：写面经 Engine、拒收要响亮 ────────────────────────────────
     def test_write_start_marks_running(self):

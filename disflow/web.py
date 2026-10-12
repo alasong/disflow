@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import views
 from .engine import Engine, EngineError
+from .state import SPEC_ROLES
 
 # 前端资源与 assets 索引都相对**仓根**解析（不是 cwd 猜）——`_repo_root` 由包位置推得。
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -76,6 +77,33 @@ def _trees_payload(engine: Engine) -> dict:
             "stuck": status["stuck"],
         })
     return {"trees": out}
+
+
+def _specs_payload(engine: Engine) -> dict:
+    """Spec（交付单元）摘要 —— **与 `disflow specs --json` 同源**（同一投影、同一口径）。
+
+    为何 web 要认 Spec（ADR 0006）：Spec 与看板/树**并列**是体系的一部分；
+    只在 CLI 可见而在前台看不到，等于体系缺了一块（用户 2026-10-12 点出的正是这个）。
+
+    `missing_roles` 是**报告**不是门（与 `assets_scan check` 同纪律）：
+    缺角色只说事实，不由 web 层拒任何东西（本端点**纯读**）。
+    """
+    state = engine.load()
+    out = []
+    for spec_id in sorted((state.get("specs") or {})):
+        spec = (state["specs"])[spec_id]
+        assets = spec.get("assets") or {}
+        roles = sorted(set(assets.values()))
+        out.append({
+            "spec": spec_id,
+            "goal": spec.get("goal", ""),
+            "closed": bool(spec.get("closed")),
+            "assets": assets,
+            "delivers": list(spec.get("delivers") or []),
+            "roles": roles,
+            "missing_roles": [r for r in SPEC_ROLES if r not in set(roles)],
+        })
+    return {"specs": out, "roles": list(SPEC_ROLES)}
 
 
 def _board_payload(engine: Engine, tree: str, by: str) -> dict:
@@ -216,6 +244,8 @@ class Handler(BaseHTTPRequestHandler):
                 if by not in ("column", "board"):
                     return self._fail(400, f"by 取值非法：{by!r}（允许 column | board）")
                 return self._json(200, _board_payload(engine, tree, by))
+            if route == "/api/specs":
+                return self._json(200, _specs_payload(engine))
             if route == "/api/assets":
                 return self._json(200, {"assets": _assets_index(self.cwd)})
             if route == "/api/host-next":
@@ -271,7 +301,8 @@ def serve(host: str = "127.0.0.1", port: int = 8765, cwd: str | None = None) -> 
     Handler.cwd = cwd or os.getcwd()
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(f"disflow web：http://{host}:{port}/  （cwd={Handler.cwd}）")
-    print("只读端点 /api/trees /api/board /api/assets /api/host-next；写端点 POST /api/write")
+    print("只读端点 /api/trees /api/board /api/assets /api/specs /api/host-next；"
+          "写端点 POST /api/write")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -358,6 +389,7 @@ details summary { cursor:pointer; color:var(--dim); }
   <div class="tabs">
     <div class="tab on" data-view="board">看板</div>
     <div class="tab" data-view="assets">资产</div>
+    <div class="tab" data-view="specs">Spec 交付</div>
   </div>
   <span class="hint" id="status">加载中…</span>
 </header>
@@ -367,6 +399,7 @@ details summary { cursor:pointer; color:var(--dim); }
     <div class="cols" id="cols"></div>
   </div>
   <div id="assets" style="display:none"></div>
+  <div id="specs" style="display:none"></div>
 </main>
 
 <dialog id="expdlg">
@@ -496,6 +529,32 @@ async function loadAssets() {
   </tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+async function loadSpecs() {
+  const {specs, roles} = await getJSON("/api/specs");
+  const open = specs.filter(s => !s.closed).length;
+  setStatus(`Spec ${specs.length} 个 · 开着 ${open} 个`);
+  if (!specs.length) {
+    $("#specs").innerHTML = '<p class="hint">（无 Spec）——用 <code>disflow spec-init &lt;id&gt; --goal "…"</code> 建一个交付单元。</p>';
+    return;
+  }
+  const blocks = specs.map(s => {
+    // 角色格：已覆盖的角色打勾并列出资产；缺的标红（**报告**，不拦任何动作）
+    const cells = roles.map(r => {
+      const hit = Object.entries(s.assets).filter(([, role]) => role === r).map(([a]) => a);
+      return hit.length
+        ? `<span class="badge b-verified" title="${esc(r)}">✓ ${esc(r)}</span> <span class="mono">${hit.map(esc).join(", ")}</span>`
+        : `<span class="badge b-stale" title="缺这个角色">✗ ${esc(r)}</span>`;
+    }).join("<br>");
+    return `<div class="treecard">
+      <h3>${esc(s.spec)} ${s.closed ? '<span class="badge">已关闭</span>' : ''}</h3>
+      <p class="hint">${esc(s.goal || "（未写 goal）")}</p>
+      <p>交付 ${s.delivers.length} 条 · 角色 ${s.roles.length}/${roles.length}</p>
+      <div>${cells}</div>
+    </div>`;
+  }).join("");
+  $("#specs").innerHTML = blocks;
+}
+
 document.querySelectorAll(".tab").forEach(tab => {
   tab.onclick = () => {
     document.querySelectorAll(".tab").forEach(t => t.classList.remove("on"));
@@ -503,7 +562,9 @@ document.querySelectorAll(".tab").forEach(tab => {
     VIEW = tab.dataset.view;
     $("#board").style.display = VIEW === "board" ? "" : "none";
     $("#assets").style.display = VIEW === "assets" ? "" : "none";
-    (VIEW === "board" ? loadBoard() : loadAssets()).catch(e => setStatus(e.message, true));
+    $("#specs").style.display = VIEW === "specs" ? "" : "none";
+    const loaders = {board: loadBoard, assets: loadAssets, specs: loadSpecs};
+    (loaders[VIEW] || loadBoard)().catch(e => setStatus(e.message, true));
   };
 });
 

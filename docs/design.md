@@ -316,6 +316,19 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 删树不连带删 Spec。Spec **不得成第二真相源**：它不定义资产刷新顺序（派生自 `premises` 拓扑序），
 也不复制 node 的状态/就绪（归引擎）。
 
+**web 入口的只读端点**（ADR 0011：薄壳只读 + 写面白名单经 `Engine`）：
+
+| 端点 | 给什么 | 约束 |
+| --- | --- | --- |
+| `GET /api/trees` | 每棵树摘要（同 `Engine.status`） | 只读 |
+| `GET /api/board?tree=T[&by=column&#124;board]` | 看板读数（与 `disflow board --json` 同源） | 只读；缺 `tree` ⇒ 400 |
+| `GET /api/assets` | 资产索引（trust/premises/stale_basis） | 只读 |
+| `GET /api/specs` | Spec 摘要 + 逐资产角色 + `missing_roles` | 只读；**无 Spec ⇒ 200 + 空表**（空是正常状态，不 404） |
+| `GET /api/host-next?tree=T` | 一轮派活的全部输入 | 只读；缺 `tree` ⇒ 400 |
+| `POST /api/write` | 写动作白名单（经 `Engine` 的锁与门） | 唯一写面 |
+
+判据：`tests/test_web.py`（真 HTTP；含「**只读端点打一遭后 `events.jsonl`/`state.json` 逐字节不变**」）。
+
 ### 5.3 spawn 归宿主
 
 引擎**不内置常驻进程**（FR-16）。宿主可以是：人、父 agent、编排器、`run` 命令。
