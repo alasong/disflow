@@ -2,7 +2,7 @@
 
 > 由 `scripts/assets_scan.py` 生成，**勿手改**；事实源 `assets/registry.json`。
 > 无生成时间戳（输出确定性，避免无谓 diff）。
-> 资产 16 条 · stale 7 条。
+> 资产 16 条 · stale 6 条。
 
 | id | type | tier | trust | path | purpose |
 | --- | --- | --- | --- | --- | --- |
@@ -19,7 +19,7 @@
 | `pkg` | code | verified | verified | `disflow/` | 引擎包：状态/树/图/门/视图/CLI + web 入口（唯一实现面） |
 | `readme` | doc | asserted | asserted | `README.md` | 5 分钟上手 walkthrough + 量化 / worktree 说明 |
 | `requirements` | doc | asserted | asserted | `docs/requirements.md` | FR/NFR 需求基线（FR-1..29 + NFR-1..7），一切验收的源头 |
-| `scripts` | script | asserted | stale | `scripts/` | 自检 / 探针 / 报告脚本（fr_check、mutation_check、assets_scan 等） |
+| `scripts` | script | asserted | asserted | `scripts/` | 自检 / 探针 / 报告脚本（fr_check、mutation_check、assets_scan 等） |
 | `spec-pdca-template` | doc | asserted | stale | `templates/spec-pdca/README.md` | spec 模板（每个功能一份，内部 PDCA）：拷去别的项目用；含功能模板与项目铁律模板 |
 | `tests` | test | verified | verified | `tests/` | 验收测试套件：门拒收 / 投影一致 / 分层自检 / CLI 回归 / web 只读性 |
 
@@ -44,7 +44,6 @@
 | `design` | `pkg` | 实现契约：节点字段 / 事件 / 门 / 投影语义（改实现前先看它） |
 | `fr-gap` | `pkg`, `scripts` | 需求覆盖机检报告（由 scripts/fr_check.py 生成） |
 | `kaa-comparison` | `pkg` | disflow vs kaa 机制对照：规模/各自独有/差距结论（实测，用于回答「差多少」） |
-| `scripts` | `pkg` | 自检 / 探针 / 报告脚本（fr_check、mutation_check、assets_scan 等） |
 | `spec-pdca-template` | `readme` | spec 模板（每个功能一份，内部 PDCA）：拷去别的项目用；含功能模板与项目铁律模板 |
 
 ## specs（一等交付单元：产出按角色挂在 Spec 下）
