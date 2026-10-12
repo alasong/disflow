@@ -27,7 +27,7 @@ from .ready import (
     ready_tasks,
     running_tasks,
 )
-from .state import project
+from .state import SPEC_ROLES, project
 from .vocab import DEFAULT_STAGE, STORAGE
 
 
@@ -155,6 +155,105 @@ class Engine:
 
     def trees(self) -> list[str]:
         return sorted(self.load().get("trees", {}))
+
+    # ── Spec（交付单元：**独立顶层实体**，ADR 0006 / FR-33） ────────────────
+    #
+    # 为何不走 `_write`：那条路径以**树**为中心（`existing` 校验 `state["trees"][tree]`）。
+    # Spec 不挂在树下（ADR 0006 的「关联 vs 归属」判据）——硬塞进去会让「删树连带删 Spec」，
+    # 与「Spec 可跨交付复用」矛盾。故单开一个同构的写点（锁内读→校验→append，同一不变式）。
+
+    def specs(self) -> list[str]:
+        return sorted(self.load().get("specs", {}))
+
+    def spec(self, spec_id: str, state: dict | None = None) -> dict:
+        payload = state if state is not None else self.load()
+        target = (payload.get("specs") or {}).get(spec_id)
+        if target is None:
+            raise EngineError(f"Spec 不存在：{spec_id}")
+        return target
+
+    def _write_spec(self, kind: str, spec_id: str, *, prepare=None,
+                    existing: bool = True, dry_run: bool = False,
+                    guard=None) -> dict:
+        """Spec 的唯一写点（与 `_write` 同构：锁内读 → 存在性校验 → append）。
+
+        `prepare(state)` 返回 extra；`guard(spec)` 做**引擎层**校验（非法时抛
+        `EngineError`）——与 `unrequire` 同纪律：**拒收要给对的类型**，不让它
+        从 reducer 里以 `ValueError` 冒出来（两者语义不同：前者是引擎拒收，
+        后者是「事件流语义闸门被绕过」）。`ValueError` 不落盘。
+        """
+        validate_path_name(spec_id, what="Spec id")
+        with store.lock(self.storage):
+            state = self.load()
+            current = (state.get("specs") or {}).get(spec_id)
+            if existing and current is None:
+                raise EngineError(f"Spec 不存在：{spec_id}")
+            if not existing and current is not None:
+                raise EngineError(f"Spec 已存在：{spec_id}")
+            if current is not None and guard is not None:
+                guard(current)
+            extra = prepare(state) if prepare is not None else {}
+            if dry_run:
+                return {"dry_run": True, "kind": kind, "spec": spec_id,
+                        "extra": extra or {}, "state": state}
+            store.append_event(self.storage, kind, project=project, slug=spec_id,
+                               extra=extra or {})
+        return self.load()
+
+    def spec_init(self, spec_id: str, goal: str = "") -> dict:
+        return self._write_spec("spec.init", spec_id, existing=False,
+                                prepare=lambda _: {"spec": spec_id, "goal": goal})
+
+    def spec_goal(self, spec_id: str, goal: str) -> dict:
+        return self._write_spec("spec.goal", spec_id,
+                                prepare=lambda _: {"spec": spec_id, "goal": goal})
+
+    def spec_gate(self, spec_id: str, gate: dict | None) -> dict:
+        return self._write_spec("spec.gate", spec_id,
+                                prepare=lambda _: {"spec": spec_id, "gate": gate})
+
+    def spec_link(self, spec_id: str, asset: str, role: str) -> dict:
+        # 角色闸门在这里（写时）：非法角色**不落事件** —— 与 `stage` 的写时校验同纪律。
+        if role not in SPEC_ROLES:
+            raise EngineError(
+                f"非法角色：{role!r}（应为 {SPEC_ROLES}）")
+        return self._write_spec("spec.link", spec_id,
+                                prepare=lambda _: {"spec": spec_id, "asset": asset,
+                                                   "role": role})
+
+    def spec_unlink(self, spec_id: str, asset: str) -> dict:
+        def guard(spec: dict) -> None:
+            if asset not in (spec.get("assets") or {}):
+                raise EngineError(f"{spec_id} 没有关联资产：{asset}")
+        return self._write_spec("spec.unlink", spec_id, guard=guard,
+                                prepare=lambda _: {"spec": spec_id, "asset": asset})
+
+    def spec_deliver(self, spec_id: str, asset: str) -> dict:
+        return self._write_spec("spec.deliver", spec_id,
+                                prepare=lambda _: {"spec": spec_id, "asset": asset})
+
+    def spec_undeliver(self, spec_id: str, asset: str) -> dict:
+        def guard(spec: dict) -> None:
+            if asset not in (spec.get("delivers") or []):
+                raise EngineError(f"{spec_id} 未声明交付：{asset}")
+        return self._write_spec("spec.undeliver", spec_id, guard=guard,
+                                prepare=lambda _: {"spec": spec_id, "asset": asset})
+
+    def spec_close(self, spec_id: str, dry_run: bool = False) -> dict:
+        def guard(spec: dict) -> None:
+            if spec.get("closed"):
+                raise EngineError(f"Spec 已关闭：{spec_id}")
+        return self._write_spec("spec.close", spec_id, dry_run=dry_run, guard=guard,
+                                prepare=lambda _: {"spec": spec_id,
+                                                   "at": store.now_iso()})
+
+    def spec_reopen(self, spec_id: str, reason: str = "") -> dict:
+        def guard(spec: dict) -> None:
+            if not spec.get("closed"):
+                raise EngineError(f"Spec 未关闭：{spec_id}")
+        return self._write_spec("spec.reopen", spec_id, guard=guard,
+                                prepare=lambda _: {"spec": spec_id, "reason": reason,
+                                                   "at": store.now_iso()})
 
     def tree(self, name: str, state: dict | None = None) -> dict:
         state = self.load() if state is None else state

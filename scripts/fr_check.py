@@ -389,6 +389,31 @@ def fr16_no_daemon() -> tuple[bool, str]:
     return True, "无 daemon/cron；无常驻服务启动点"
 
 
+def fr33_spec_entity() -> tuple[bool, str]:
+    """FR-33 Spec 是一等公民：**引擎级**实体（事件类型 + 顶层投影 + CLI）。
+
+    为何这三样都要查（ADR 0006 的「独立顶层实体」定义）：
+
+    - **事件类型**在闭集里：`spec.*` 进了 `vocab.EVENT_KINDS` —— 否则事件不可重放；
+    - **顶层投影**：`state.empty()` 带 `specs` 键，**与 `trees` 并列** ——
+      退化成树的字段就违背「独立顶层」（那时删树会连带删 Spec，跨交付复用就没了）；
+    - **CLI 可达**：`specs` 动词在解析器里 —— 实体不能只有数据没入口。
+
+    反面对照（为何这三条抓得住「假实现」）：只在 `state.py` 加个字典而没进事件闭集 ⇒
+    第一条红；把 `specs` 塞进 `state["trees"][X]` ⇒ 第二条红；只有库函数没 CLI ⇒ 第三条红。
+    """
+    rc, out = _git_grep(r'"spec\.(init|link|close)"', "disflow/vocab.py")
+    if rc != 0 or not out.strip():
+        return False, f"`spec.*` 未进事件闭集（vocab.EVENT_KINDS）—— git grep rc={rc}"
+    rc, out = _git_grep(r'\{"trees": \{\}, "specs": \{\}\}', "disflow/state.py")
+    if rc != 0 or not out.strip():
+        return False, f"投影顶层未带并列的 `specs` 键（state.empty）—— git grep rc={rc}"
+    rc, out = _git_grep(r'add\("specs"', "disflow/cli.py")
+    if rc != 0 or not out.strip():
+        return False, f"`specs` 未接进 CLI（build_parser）—— git grep rc={rc}"
+    return True, "spec.* 事件闭集 + 顶层 specs 投影 + CLI 入口均在场"
+
+
 def fr18_acceptance_gate() -> tuple[bool, str]:
     """FR-18 done 前必须过验收门：验收失败必须拒，验收通过才放行。
 
@@ -597,6 +622,7 @@ MACHINE: list[tuple[str, str, Check]] = [
     ("FR-14", "drive 只推不跑、不 spawn", fr14_no_spawn),
     ("FR-15", "brief 写全 + collect 不写 node-done", fr15_brief_collect),
     ("FR-16", "引擎不内置常驻进程", fr16_no_daemon),
+    ("FR-33", "Spec 是一等公民（事件类型 + 顶层投影 + CLI）", fr33_spec_entity),
     ("FR-18", "done 前必须过验收门", fr18_acceptance_gate),
     ("FR-19", "证据元数据由引擎自算", fr19_evidence_selfcomputed),
     ("FR-20", "拒收给缺项清单 + 契约片段", fr20_reject_lists_missing),
@@ -658,11 +684,11 @@ UNJUDGEABLE: list[tuple[str, str, str]] = [
 ]
 
 # [未实现]：实现里找不到对应能力。（编号, 标题, 缺什么, 若要做验收点）
-UNIMPLEMENTED: list[tuple[str, str, str, str]] = [
-    ("FR-33", "Spec 是一等公民（独立交付单元实体）",
-     "无**引擎级** Spec 实体：交付单元仍靠资产登记的 `spec` 块代位，无独立 id/生命周期/事件流。",
-     "Spec 成为 disflow 一等实体（事件类型 + 投影），可登记为资产；一条端到端测试。"),
-]
+#
+# 2026-10-12：FR-33 由 `fr33_spec_entity` 接管（Spec 已落成引擎级实体）——
+# 本条从「未实现」移入机检。曾在此处的文字（「无引擎级 Spec 实体…」）已成历史事实，
+# 保留在 `docs/decisions/0006` 的「待实现」段落里（ADR 记当时状态，不改写）。
+UNIMPLEMENTED: list[tuple[str, str, str, str]] = []
 
 # ◐ 部分缺口：整条机检通过，但**子句**在实现里找不到。（编号, 子句, 缺什么, 验收点）
 # 判据：子句必须在**需求原文里真的写着**，且确实没实现——报告不得替需求发明子句（否则计数与正文自相矛盾，

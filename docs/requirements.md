@@ -151,8 +151,8 @@ disflow 是一个**任务分发流引擎**：以**看板**为一等实体（固�
 - **FR-34**：**Spec 关联资产，不是归属**：`Spec → 资产` 是**多对多、可带类型**的关联
   （一份资产可被多个 Spec 引用）；资产独立存在，**无** `asset.parent = spec`。Spec 声明它交付的
   **角色清单**（requirement/design/implementation/verification/documentation），「全量交付」= 角色齐全。
-  （**资产层已实现**：`assets/registry.json` 的 `spec` 块 + `assets_scan.py delivery` 门；
-  引擎层的 Spec 实体属 FR-33，未实现。）
+  （**两层均已落地**：资产层 = `assets/registry.json` 的 `spec` 块 + `assets_scan.py delivery` 门；
+  引擎层 = `spec.*` 事件 + 顶层 `specs` 投影 + CLI，见 FR-33。）
 
 ---
 
@@ -221,7 +221,7 @@ disflow 是一个**任务分发流引擎**：以**看板**为一等实体（固�
 | **FR-30 WIP 分发策略** | ✅ | 看板列 `wip` 在 `drive` 生效（列满则其余就绪者进 `deferred`）；`tests/test_board_policy.py::WipPolicyTest` |
 | **FR-31 看板默认验收** | ✅ | 节点未自带 `acceptance` 时由该列派生（节点优先）；`done` 内同源；`tests/test_board_policy.py::AcceptancePolicyTest` |
 | FR-32 动态看板 | ✅ | 板定义可逐树覆盖（`init --boards` / `set_boards`）；`tests/test_boards_per_tree.py` |
-| **FR-33 Spec 一等公民（引擎级实体）** | ❌ | **未实现**：无引擎级 Spec 实体（事件/投影）；现由资产登记的 `spec` 块代位（`decisions/0006`） |
+| **FR-33 Spec 一等公民（引擎级实体）** | ✅ | `specs` 与 `trees` **并列**的顶层实体：`spec.*` 事件闭集（init/goal/gate/link/unlink/deliver/undeliver/close/reopen）+ 投影 + 7 个 CLI 动词；`tests/test_spec_entity.py`（21 项：实体/重放/拒收/硬边界/CLI） |
 | **FR-34 Spec 关联资产（非归属）** | ✅ | 资产层：`assets/registry.json` 的 `spec.required_roles`/`delivers` + `assets_scan.py delivery` 门；`fr_check` 机检 FR-34 |
 | FR-24/25 上下文与写面 | ✅ | `brief` 祖先链注入；`pack_waves` 冲突排队；`tests/test_core.py` |
 | **FR-26 租约** | ✅ | 带 `expires_at`；`reap` 显式回收；`tests/test_lease.py`（**本轮补齐**） |
@@ -235,6 +235,6 @@ disflow 是一个**任务分发流引擎**：以**看板**为一等实体（固�
 
 **新增门**：**`tree_coverage`**——每个叶子任务要「需求已登记」（`goal` 非空）且「有可跑判据」（`acceptance.cmd` 或 `waiver`），非根容器必须有子节点；与 `tree_closure` 在 `close` 串联。逃生口：树根 `context.coverage = "not_applicable: <理由>"`。
 
-**未实现（❌）**：FR-33 —— 引擎级 Spec 一等公民实体（资产层 `spec` 块已落地，见 FR-34）。
+**未实现（❌）**：无 —— FR-33 已由本轮落地（`spec.*` 事件 + 顶层 `specs` 投影 + CLI）。
 
-**未覆盖（◐）**：无 —— 除 FR-33 外，FR-1..32、FR-34 与 NFR-1..7 全覆盖。
+**未覆盖（◐）**：无 —— FR-1..34 与 NFR-1..7 全覆盖。

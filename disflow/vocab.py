@@ -153,6 +153,12 @@ EVENT_KINDS: tuple[str, ...] = (
     "node.acceptance",
     "node.rescope",
     "asset.produce", "asset.consume",
+    # Spec（交付单元）—— 独立**顶层**实体（ADR 0006 / FR-33）。
+    # 为什么是顶层而不是 tree 的字段：Spec 自身要能登记为资产、跨交付可复用；
+    # 挂在树下会让「删树」连带删 Spec，与可复用矛盾（0006 的「关联 vs 归属」判据）。
+    "spec.init", "spec.goal", "spec.gate", "spec.link", "spec.unlink",
+    "spec.deliver", "spec.undeliver",
+    "spec.close", "spec.reopen",
     "node.start", "node.collect", "node.done",
     "node.fail", "node.retry", "node.skip", "node.reclaim",
     "tree.close", "tree.reopen",

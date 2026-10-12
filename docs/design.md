@@ -299,6 +299,23 @@ drive ──▶ ready_wave ──▶ brief ──▶ [宿主 spawn worker] ─�
 | `disflow close <tree>` | 终止树（跑 `tree_closure` + `tree_coverage` 门） | 供跨树 `awaits` 信号 |
 | `disflow reopen <tree> [--reason S]` | 显式撤销 `closed`（落 `tree.reopen`，理由进 `reopen_log`） | 关错了 / 漏了活时的正路：不至于要么造新树、要么静默失效 |
 
+**Spec（交付单元）—— 独立顶层实体（ADR 0006 / FR-33）**：
+
+| 命令 | 作用 | 关键约束 |
+| --- | --- | --- |
+| `disflow specs` | 列出 Spec + 角色覆盖 | 投影，不是第二存储 |
+| `disflow spec <spec> [--json]` | 看一个 Spec 详情（逐资产角色） | 缺角色是**报告**，不拦（与 `check` 同纪律） |
+| `disflow spec-init <spec> --goal G` | 建 Spec（`spec.init`） | 重名拒收；配 `--dry-run` |
+| `disflow spec-link <spec> <asset> <role>` | **关联**一个资产（多对多、带角色） | 角色是 `choices`（参数错 ⇒ 2）；非法角色不落事件 |
+| `disflow spec-unlink <spec> <asset>` | 取消关联 | 未关联 ⇒ 拒收（exit 1） |
+| `disflow spec-close <spec> [--dry-run]` | 关闭（`spec.close`） | 已关 ⇒ 拒收；配 `--dry-run` |
+| `disflow spec-reopen <spec> --reason S` | 重开（`spec.reopen`，理由进 `reopen_log`） | 未关 ⇒ 拒收 |
+
+**硬边界（ADR 0006，勿顺手改）**：`specs` 与 `trees` **并列**（顶层），Spec **不是**树的字段、
+**不是**节点的字段；`Spec → 资产` 是**关联**（多对多）不是归属 —— **无** `asset.parent = spec`，
+删树不连带删 Spec。Spec **不得成第二真相源**：它不定义资产刷新顺序（派生自 `premises` 拓扑序），
+也不复制 node 的状态/就绪（归引擎）。
+
 ### 5.3 spawn 归宿主
 
 引擎**不内置常驻进程**（FR-16）。宿主可以是：人、父 agent、编排器、`run` 命令。

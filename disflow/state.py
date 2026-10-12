@@ -13,7 +13,14 @@ ROOT_ID = "root"
 
 
 def empty() -> dict:
-    return {"trees": {}}
+    # `specs` 与 `trees` **并列**（ADR 0006：Spec 是独立顶层实体，不是树的字段）。
+    # 两面各自独立：删树不动 Spec（可复用），删 Spec 不动资产（关联非归属）。
+    return {"trees": {}, "specs": {}}
+
+
+def specs(state: dict) -> dict:
+    """Spec 表（顶层）。缺键时惰性补 —— 旧投影/旧事件流没有 `specs` 键仍能读。"""
+    return state.setdefault("specs", {})
 
 
 def project(events: list[dict]) -> dict:
@@ -256,6 +263,103 @@ def _on_node_unrelate(state: dict, event: dict) -> None:
     node["relates"] = [item for item in node["relates"] if item != other]
 
 
+def _spec(state: dict, spec_id: str) -> dict:
+    spec = specs(state).get(spec_id)
+    if spec is None:
+        raise ValueError(f"Spec 不存在：{spec_id}")
+    return spec
+
+
+# 交付角色的闭集（ADR 0006：全量交付 = 角色齐全）。
+# 与资产层 `assets_scan.CATEGORIES` 同口径 —— 但**不 import 它**：
+# 引擎不得依赖 scripts/（NFR-1/分层）。两边靠测试对账（tests/test_spec_entity.py）。
+SPEC_ROLES: tuple[str, ...] = (
+    "requirement", "design", "implementation", "verification", "documentation",
+)
+
+
+def _require_role(role: str) -> None:
+    if role not in SPEC_ROLES:
+        raise ValueError(f"非法角色：{role!r}（应为 {SPEC_ROLES}）")
+
+
+def _on_spec_init(state: dict, event: dict) -> None:
+    spec_id = str(event["spec"])
+    if spec_id in specs(state):
+        raise ValueError(f"Spec 已存在：{spec_id}")
+    specs(state)[spec_id] = {
+        "goal": str(event.get("goal") or ""),
+        "gate": None,        # 完成判据（形状同节点 acceptance）
+        "assets": {},        # {asset_id: role} —— 关联，多对多、可带类型
+        "delivers": [],      # 声明的交付资产 id（与 assets 同源，保留插入序供人读）
+        "closed": False,
+        "reopen_log": [],
+    }
+
+
+def _on_spec_goal(state: dict, event: dict) -> None:
+    _spec(state, event["spec"])["goal"] = str(event.get("goal") or "")
+
+
+def _on_spec_gate(state: dict, event: dict) -> None:
+    _spec(state, event["spec"])["gate"] = event.get("gate")
+
+
+def _on_spec_link(state: dict, event: dict) -> None:
+    """关联一个资产（**多对多**，带角色）。资产不因 Spec 而生灭（ADR 0006）。"""
+    spec = _spec(state, event["spec"])
+    asset = str(event["asset"])
+    role = str(event["role"])
+    _require_role(role)
+    # 同一资产换了角色 = 覆盖（一个 Spec 对同一资产只记一个角色：多对多指跨 Spec，
+    # 不是同一对内多角色——后者会造出「到底算哪个角色」的歧义）。
+    spec["assets"][asset] = role
+    if asset not in spec["delivers"]:
+        spec["delivers"].append(asset)
+
+
+def _on_spec_unlink(state: dict, event: dict) -> None:
+    spec = _spec(state, event["spec"])
+    asset = str(event["asset"])
+    if asset not in spec["assets"]:
+        raise ValueError(f"{event['spec']} 没有关联资产：{asset}")
+    del spec["assets"][asset]
+    spec["delivers"] = [a for a in spec["delivers"] if a != asset]
+
+
+def _on_spec_deliver(state: dict, event: dict) -> None:
+    """声明「本 Spec 交付这个资产」（不带角色时用；带角色请用 `spec.link`）。"""
+    spec = _spec(state, event["spec"])
+    asset = str(event["asset"])
+    if asset not in spec["delivers"]:
+        spec["delivers"].append(asset)
+
+
+def _on_spec_undeliver(state: dict, event: dict) -> None:
+    spec = _spec(state, event["spec"])
+    asset = str(event["asset"])
+    if asset not in spec["delivers"]:
+        raise ValueError(f"{event['spec']} 未声明交付：{asset}")
+    spec["delivers"] = [a for a in spec["delivers"] if a != asset]
+
+
+def _on_spec_close(state: dict, event: dict) -> None:
+    spec = _spec(state, event["spec"])
+    if spec["closed"]:
+        raise ValueError(f"Spec 已关闭：{event['spec']}")
+    spec["closed"] = True
+    spec["closed_at"] = event.get("at") or ""
+
+
+def _on_spec_reopen(state: dict, event: dict) -> None:
+    spec = _spec(state, event["spec"])
+    if not spec["closed"]:
+        raise ValueError(f"Spec 未关闭：{event['spec']}")
+    spec["closed"] = False
+    spec["reopen_log"].append({"reason": event.get("reason") or "",
+                               "at": event.get("at") or ""})
+
+
 def _on_asset_produce(state: dict, event: dict) -> None:
     tree = state["trees"][event["slug"]]
     _append_unique(_node(state, event["slug"], event["node"]), "produces", event["name"])
@@ -439,4 +543,13 @@ _HANDLERS = {
     "tree.close": _on_tree_close,
     "tree.reopen": _on_tree_reopen,
     "node.reclaim": _on_node_reclaim,
+    "spec.init": _on_spec_init,
+    "spec.goal": _on_spec_goal,
+    "spec.gate": _on_spec_gate,
+    "spec.link": _on_spec_link,
+    "spec.unlink": _on_spec_unlink,
+    "spec.deliver": _on_spec_deliver,
+    "spec.undeliver": _on_spec_undeliver,
+    "spec.close": _on_spec_close,
+    "spec.reopen": _on_spec_reopen,
 }

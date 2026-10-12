@@ -39,7 +39,7 @@
 | FR-30 | 分发器是看板的附属（逐列 WIP 上限） | [测试] | tests/test_board_policy.py::WipPolicyTest |
 | FR-31 | 验收器是看板的附属（逐列默认验收） | [测试] | tests/test_board_policy.py::AcceptancePolicyTest |
 | FR-32 | 动态看板：结构可预设、逐树覆盖 | [测试] | tests/test_boards_per_tree.py::PerTreeBoardsTest::test_two_trees_can_have_different_boards |
-| FR-33 | Spec 是一等公民（独立交付单元实体） | [未实现] | 见下节 |
+| FR-33 | Spec 是一等公民（事件类型 + 顶层投影 + CLI） | [机检] | `python3 scripts/fr_check.py` 的 `[FR-33]` 行 |
 | FR-34 | Spec 关联资产（多对多、非归属） | [机检] | `python3 scripts/fr_check.py` 的 `[FR-34]` 行 |
 | NFR-1 | 零第三方依赖 | [机检] | `python3 scripts/fr_check.py` 的 `[NFR-1]` 行 |
 | NFR-2 | 核心语言中立（业务词不进 core） | [测试] | tests/test_layering.py::LayeringTest::test_core_has_no_business_nouns |
@@ -49,13 +49,11 @@
 | NFR-6 | 规模预算，超预算即拒 | [机检] | `python3 scripts/fr_check.py` 的 `[NFR-6]` 行 |
 | NFR-7 | 不静默降级 | [机检] | `python3 scripts/fr_check.py` 的 `[NFR-7]` 行 |
 
-`[机检]` 共 30 条，全部真跑并打印原始观测；`[测试]` 9 条；`[未实现]` 1 条；`[不可机检]` 1 条；另有 `[◐ 部分缺口]` 0 条。
+`[机检]` 共 31 条，全部真跑并打印原始观测；`[测试]` 9 条；`[未实现]` 0 条；`[不可机检]` 1 条；另有 `[◐ 部分缺口]` 0 条。
 
 ## [未实现]（实现里找不到对应能力——最有价值的输出）
 
-- **FR-33**：Spec 是一等公民（独立交付单元实体）
-  - 缺什么：无**引擎级** Spec 实体：交付单元仍靠资产登记的 `spec` 块代位，无独立 id/生命周期/事件流。
-  - 若要做，验收点：Spec 成为 disflow 一等实体（事件类型 + 投影），可登记为资产；一条端到端测试。
+**（空）**：34 FR + 7 NFR 里没有整条未实现的。**◐ 部分缺口** 0 条（整条机检通过、子句在实现里找不到）；**已复核·非缺口** 2 条（曾标 ◐、复核后确认需求已满足）。
 
 ## [不可机检]（语义判断，不冒充通过）
 

@@ -25,7 +25,7 @@ from .engine import Engine, EngineError, GateReject
 from .import_mgt import apply_import, build_import, load_mgt
 from .metrics import parse_deadline
 from .ready import lease_overdue_seconds
-from .state import expands_after_close, project
+from .state import SPEC_ROLES, expands_after_close, project
 
 
 def _dump(payload, file=None) -> None:
@@ -1006,6 +1006,87 @@ def cmd_trees(engine: Engine, args) -> int:
     return 0
 
 
+def cmd_specs(engine: Engine, args) -> int:
+    """列 Spec（交付单元）：角色覆盖是**报告**，不是门（缺角色只提示，不拦）。"""
+    ids = engine.specs()
+    if not ids:
+        print("（无 Spec）")
+        return 0
+    state = engine.load()
+    for spec_id in ids:
+        spec = engine.spec(spec_id, state)
+        roles = sorted(set((spec.get("assets") or {}).values()))
+        mark = "●" if spec.get("closed") else "·"
+        print(f"{mark} {spec_id}: 交付 {len(spec.get('delivers') or [])} 条"
+              f" · 角色 {len(roles)}/{len(SPEC_ROLES)}"
+              f" · {spec.get('goal', '')}")
+    return 0
+
+
+def cmd_spec(engine: Engine, args) -> int:
+    """看一个 Spec 的详情（含逐资产角色）——`--json` 给机器读。"""
+    state = engine.load()
+    spec = engine.spec(args.spec, state)
+    if args.json:
+        _dump(spec)
+        return 0
+    print(f"Spec {args.spec}：{spec.get('goal', '')}")
+    print(f"状态：{'已关闭' if spec.get('closed') else '开着'}")
+    print(f"完成判据：{spec.get('gate') or '（未定）'}")
+    assets = spec.get('assets') or {}
+    if not assets:
+        print("关联资产：（无）")
+        return 0
+    print("关联资产（资产 ← 角色）：")
+    for asset, role in sorted(assets.items(), key=lambda kv: (kv[1], kv[0])):
+        print(f"  {asset:24s} {role}")
+    missing = [r for r in SPEC_ROLES if r not in set(assets.values())]
+    if missing:
+        print(f"缺角色（**报告**，不拦）：{', '.join(missing)}")
+    else:
+        print("角色齐全（5/5）")
+    return 0
+
+
+def cmd_spec_init(engine: Engine, args) -> int:
+    dry = bool(getattr(args, "dry_run", False))
+    # 不直调私有写点：`spec_init` 没有 dry_run 参数（它是写动词），
+    # 故预演走 `--dry-run` 时用同一 prepare 重算一次但不落盘。
+    if dry:
+        engine._write_spec("spec.init", args.spec, existing=False,
+                           prepare=lambda _: {"spec": args.spec, "goal": args.goal},
+                           dry_run=True)
+        print(f"✓ 预演：建 Spec {args.spec}（**未落事件**）")
+        return 0
+    engine.spec_init(args.spec, args.goal)
+    print(f"✓ 建 Spec {args.spec}：{args.goal}")
+    return 0
+
+
+def cmd_spec_link(engine: Engine, args) -> int:
+    engine.spec_link(args.spec, args.asset, args.role)
+    print(f"✓ {args.spec} 关联 {args.asset}（角色 {args.role}）")
+    return 0
+
+
+def cmd_spec_unlink(engine: Engine, args) -> int:
+    engine.spec_unlink(args.spec, args.asset)
+    print(f"✓ {args.spec} 取消关联 {args.asset}")
+    return 0
+
+
+def cmd_spec_close(engine: Engine, args) -> int:
+    engine.spec_close(args.spec, dry_run=bool(getattr(args, "dry_run", False)))
+    print(f"✓ Spec {args.spec} 已关闭")
+    return 0
+
+
+def cmd_spec_reopen(engine: Engine, args) -> int:
+    engine.spec_reopen(args.spec, args.reason)
+    print(f"✓ Spec {args.spec} 已重开（理由：{args.reason or '未填'}）")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="disflow", description="任务分发流引擎（只推不跑）")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1234,6 +1315,38 @@ def build_parser() -> argparse.ArgumentParser:
                            "并把将丢弃的项记进输出；仅 reap 接受")
 
     add("trees", cmd_trees)
+
+    # ── Spec（交付单元：独立顶层实体，ADR 0006 / FR-33）──────────────────
+    # 命名不叫 `spec`（那是动词别名不好读）也不叫 `speckit`（那是外部工具）——
+    # `specs` 列、`spec <id>` 看详情，与 `trees`/`status` 同一形状。
+    node = add("specs", cmd_specs)
+    node = add("spec", cmd_spec)
+    node.add_argument("spec")
+    node.add_argument("--json", action="store_true", help="机器可读输出")
+
+    node = add("spec-init", cmd_spec_init)
+    node.add_argument("spec")
+    node.add_argument("--goal", default="", help="这个交付单元要达成什么")
+    node.add_argument("--dry-run", action="store_true", help="预演：不落事件")
+
+    node = add("spec-link", cmd_spec_link)
+    node.add_argument("spec")
+    node.add_argument("asset")
+    node.add_argument("role", choices=list(SPEC_ROLES),
+                      help="这个资产在本交付里扮的角色（角色齐全 = 全量交付）")
+
+    node = add("spec-unlink", cmd_spec_unlink)
+    node.add_argument("spec")
+    node.add_argument("asset")
+
+    node = add("spec-close", cmd_spec_close)
+    node.add_argument("spec")
+    node.add_argument("--dry-run", action="store_true", help="预演：不落事件")
+
+    node = add("spec-reopen", cmd_spec_reopen)
+    node.add_argument("spec")
+    node.add_argument("--reason", default="", help="为何重开（空也落，但事后查不到原因）")
+
     add("doctor", cmd_doctor)
     return parser
 
