@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -46,6 +47,22 @@ TYPES = {"code", "test", "script", "doc", "board", "report", "config"}
 CATEGORIES = {"requirement", "design", "implementation", "verification",
               "process", "documentation", "config"}
 TIERS = ("verified", "asserted", "stub")
+# **要求等级**（normative vs informative）—— 回答「冲突时以谁为准」。
+#
+# 出处（业界标准，已查原文）：RFC 2119 开篇那句话——
+#   "the force of these words is modified by **the requirement level of the document**
+#    in which they are used."
+# 即：文档**本身有等级**，冲突时**高等级为准**。W3C 的 normative/non-normative 章节、
+# ISO 的 informative annex 都是同一机制。
+#
+# 为何必须有这个字段：没有它就答不出「以谁为基础」。本仓现状（2026-10-12 实测）：
+# 16 条资产**全部平级**，`premises` 只表达「我依据它」，**不表达「我承诺什么 / 我不许超什么」**。
+LEVELS = ("normative", "informative")
+# 等级强弱（数字大 = 更权威）。冲突仲裁用这个序，不用字符串比较。
+# 为何只有两档而不到 RFC 的 MUST/SHOULD/MAY 三档：那是**句内的断言强度**（另一根轴），
+# 与「文档级要求等级」不是一回事（RFC 2119 §6 也明说 imperatives 要节制使用）。
+# 先只做文档级——它才是「以谁为准」的直接答案；句内强度是第二个字段（待做）。
+LEVEL_RANK = {"informative": 0, "normative": 1}
 REQUIRED = ("type", "path", "purpose", "tier")
 # **依据边的类型**（关系分型，借鉴 SPDX 的 typed relationships）：`premises` 条目可为纯 id
 # （默认 `anchors`）或 `{"id": .., "kind": ..}`。`kind` 是**语义标签**（本资产如何依赖它：
@@ -153,6 +170,9 @@ def validate(assets: dict[str, dict]) -> None:
             errors.append(f"{aid}: tier 非法 {a.get('tier')!r}（应为 {list(TIERS)}）")
         if a.get("tier") == "verified" and not a.get("evidence"):
             errors.append(f"{aid}: tier=verified 必须给 evidence（可跑命令）")
+        # 要求等级（选填；缺省 = 不声明，不编造默认）。
+        if a.get("level") is not None and a["level"] not in LEVELS:
+            errors.append(f"{aid}: level 非法 {a['level']!r}（应为 {list(LEVELS)} 或省略）")
         path = a.get("path")
         if isinstance(path, str) and path and not (ROOT / path).exists():
             errors.append(f"{aid}: path 不存在 {path!r}")
@@ -168,6 +188,25 @@ def validate(assets: dict[str, dict]) -> None:
             if isinstance(item, dict) and premise_kind(item) not in RELATION_KINDS:
                 errors.append(f"{aid}: premise kind 非法 {premise_kind(item)!r}"
                               f"（应为 {list(RELATION_KINDS)}）")
+        # **等级序不变式**：高等级资产的正确性**不得**锚在低等级资产上。
+        #
+        # 这是 RFC 2119「the force of these words is modified by the requirement level」
+        # 的机械形式，也是「谁违反了原则」的第一个可机检判据：
+        # 若 normative 的依据里有 informative，则「上层的正确性靠下层的记述来保证」——
+        # 一旦那份记述（报告/草案/上手文）失准，上层却无任何依据能把它拉回来。
+        #
+        # 反向（informative 依据 normative）是**正常**的（低等级锚在高等级上）——
+        # 实测本仓 16 条里 6 条属此，不该报。
+        for item in a.get("premises") or []:
+            pid = premise_id(item)
+            peer = assets.get(pid) or {}
+            mine = LEVEL_RANK.get(a.get("level") or "", -1)
+            theirs = LEVEL_RANK.get(peer.get("level") or "", -1)
+            if mine > theirs >= 0:
+                errors.append(
+                    f"{aid}: level 序违反——{a['level']} 资产把 {peer.get('level')} 资产 "
+                    f"{pid!r} 当依据（上层的正确性不得锚在下层上；"
+                    f"若确实如此，应改 level 或打掉这条依据边）")
         # spec（一等交付单元）：带 spec 块的资产就是 Spec（它本身仍是资产）。
         spec = a.get("spec")
         if spec is not None:
@@ -237,6 +276,7 @@ def derive(assets: dict[str, dict]) -> list[dict]:
             "path": a["path"],
             "purpose": a["purpose"],
             "tier": a["tier"],
+            "level": a.get("level", ""),          # normative / informative / ""（未声明）
             "evidence": a.get("evidence", ""),
             "premises": list(a.get("premises") or []),
             "hash": content_hash(a["path"]),
@@ -255,7 +295,30 @@ def derive(assets: dict[str, dict]) -> list[dict]:
                 basis.append(pid)
         r["stale_basis"] = basis
         r["trust"] = "stale" if basis else r["tier"]
+    # 逐行补「与依据物冲突时以谁为准」——这是 level 字段的**用途**（不只存着好看）。
+    # 为何放在这里而不是另开命令：仲裁所需的全部事实（依据边 + level）在 derived 行里都有，
+    # 另算一遍就是第二把尺子。
+    for r in rows:
+        r["overrides"] = _outranks(r, by_id)
     return rows
+
+
+def _outranks(row: dict, by_id: dict[str, dict]) -> list[str]:
+    """本资产**有权覆盖**的依据物 id（高等级压低等级）——RFC 2119 那条的机械形式。
+
+    只清点**双方都声明了** level 且本资产更高级的依据物；任一方未声明 ⇒ 不列
+    （判据：缺声明时不得假装知道谁赢；宁可不报，也不编一个默认等级）。
+    """
+    mine = LEVEL_RANK.get(row.get("level") or "", -1)
+    if mine < 0:
+        return []
+    out: list[str] = []
+    for pid in premise_ids(row["premises"]):
+        peer = by_id.get(pid) or {}
+        theirs = LEVEL_RANK.get(peer.get("level") or "", -1)
+        if theirs >= 0 and mine > theirs:
+            out.append(pid)
+    return out
 
 
 def topo_order(assets: dict[str, dict]) -> list[str]:
@@ -360,6 +423,50 @@ def spec_coverage(assets: dict[str, dict]) -> list[dict]:
             "unverified": sorted(unverified),
         })
     return out
+
+
+def assertion_gaps(assets: dict[str, dict]) -> list[dict]:
+    """找「**断言了但审计表未覆盖**」的 FR/NFR —— 这是「谁违反了原则」的第二个可机检判据。
+
+    为何需要它（用户原话直译）：一句断言写进需求文档就有了约束力，但若第 §7 覆盖审计表
+    里没有它，就没有任何东西回答「它做到了吗」——无验收的断言是**无声的命令**。
+    它不是数据冲突（两份文档不一致），而是**单边越界**：声明了义务却没交代履行方式。
+
+    只需从 `docs/requirements.md` 读两个面，不需新机制（与 `spec_coverage` 同层）：
+      断言面：`- **FR-11**：…`（列表式）与 `| NFR-1 | …`（表格式）
+      审计面：`| FR-11/12 就绪 | ✅ | … |`（含合并写法）
+
+    返回缺审计的条目（空 = 全量覆盖）；只报**断言面有、审计面无**这个方向——
+    反过来（审计表列了未定义的号）由 `test_docs` 的文档一致性守，不在此重复。
+    """
+    dep = assets.get("requirements")
+    path = ROOT / (dep or {}).get("path", "")
+    if not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    declared: set[str] = set()
+    audited: set[str] = set()
+    in_audit_section = False
+    for line in lines:
+        # 断言面（两种书写形式都要认，否则会漏报/误报）
+        m = re.match(r"\s*-\s+\*\*(FR|NFR)-(\d+)\*\*", line)
+        if m:
+            declared.add(f"{m.group(1)}-{m.group(2)}")
+        m = re.match(r"\s*\|\s*(FR|NFR)-(\d+)\s*\|", line)
+        if m and not in_audit_section:
+            declared.add(f"{m.group(1)}-{m.group(2)}")
+        if "实现覆盖审计" in line:
+            in_audit_section = True
+            continue
+        if not in_audit_section:
+            continue
+        # 审计面：展开 `FR-1/2/3` 这类合并写法（本仓实际就在用）
+        for mm in re.finditer(r"(FR|NFR)-(\d+(?:/\d+)*)", line):
+            for n in mm.group(2).split("/"):
+                audited.add(f"{mm.group(1)}-{n}")
+    missing = sorted(declared - audited,
+                     key=lambda x: (x.split("-")[0], int(x.split("-")[1])))
+    return [{"assertion": x} for x in missing]
 
 
 # --------------------------------------------------------------------------- 渲染
@@ -529,10 +636,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {r['id']} ← {', '.join(r['stale_basis'])}")
     if no_evidence:
         print(f"✗ 声称 verified 但缺 evidence：{no_evidence}")
-    if args.cmd == "check" and (stale or no_evidence):
+    # 断言无审计：「谁违反了原则」的第二个可机检面（与 level 序同族）。
+    # 与 stale 不同：stale 是**维护队列**（依据物变了，不拦）；这里是**契约违约**（声明了义务却没交代履行方式）。
+    gaps = assertion_gaps(assets)
+    if gaps:
+        print(f"✗ {len(gaps)} 条断言无实现覆盖审计（有声的命令）：")
+        for g in gaps:
+            print(f"  - {g['assertion']}")
+    if args.cmd == "check" and (stale or no_evidence or gaps):
         return 1
     if args.cmd == "check":
-        print("✓ 资产登记一致，无 stale")
+        print("✓ 资产登记一致，无 stale，断言均已被审计覆盖")
     return 0
 
 

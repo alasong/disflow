@@ -11,7 +11,8 @@
       "premises": [
         "design",
         "pkg"
-      ]
+      ],
+      "level": "normative"
     },
     "requirements": {
       "type": "doc",
@@ -19,7 +20,8 @@
       "path": "docs/requirements.md",
       "purpose": "FR/NFR 需求基线（FR-1..29 + NFR-1..7），一切验收的源头",
       "tier": "asserted",
-      "premises": []
+      "premises": [],
+      "level": "normative"
     },
     "design": {
       "type": "doc",
@@ -30,7 +32,8 @@
       "premises": [
         "requirements",
         "pkg"
-      ]
+      ],
+      "level": "normative"
     },
     "architecture": {
       "type": "doc",
@@ -41,7 +44,8 @@
       "premises": [
         "pkg",
         "design"
-      ]
+      ],
+      "level": "normative"
     },
     "backlog": {
       "type": "doc",
@@ -49,7 +53,8 @@
       "path": "docs/v0.2-backlog.md",
       "purpose": "v0.2 未完成缺口清单（唯一放行依据）",
       "tier": "asserted",
-      "premises": []
+      "premises": [],
+      "level": "informative"
     },
     "board-entity": {
       "type": "doc",
@@ -76,7 +81,8 @@
           "tests",
           "readme"
         ]
-      }
+      },
+      "level": "normative"
     },
     "fr-gap": {
       "type": "report",
@@ -90,7 +96,8 @@
           "id": "scripts",
           "kind": "generated_from"
         }
-      ]
+      ],
+      "level": "informative"
     },
     "design-draft": {
       "type": "doc",
@@ -98,7 +105,8 @@
       "path": "docs/design-dispatch-tree-graph.md",
       "purpose": "分发器/树/图设计草稿（标注未实现）",
       "tier": "stub",
-      "premises": []
+      "premises": [],
+      "level": "informative"
     },
     "readme": {
       "type": "doc",
@@ -108,7 +116,8 @@
       "tier": "asserted",
       "premises": [
         "pkg"
-      ]
+      ],
+      "level": "informative"
     },
     "pkg": {
       "type": "code",
@@ -117,7 +126,8 @@
       "purpose": "引擎包：状态/树/图/门/视图/CLI + web 入口（唯一实现面）",
       "tier": "verified",
       "evidence": "python3 -m unittest discover -s tests -t tests",
-      "premises": []
+      "premises": [],
+      "level": "normative"
     },
     "tests": {
       "type": "test",
@@ -129,7 +139,8 @@
       "premises": [
         "requirements",
         "pkg"
-      ]
+      ],
+      "level": "normative"
     },
     "scripts": {
       "type": "script",
@@ -139,7 +150,8 @@
       "tier": "asserted",
       "premises": [
         "pkg"
-      ]
+      ],
+      "level": "informative"
     },
     "config": {
       "type": "config",
@@ -147,7 +159,8 @@
       "path": "pyrightconfig.json",
       "purpose": "类型检查范围与 Python 版本",
       "tier": "asserted",
-      "premises": []
+      "premises": [],
+      "level": "normative"
     },
     "lens-config": {
       "type": "config",
@@ -155,7 +168,8 @@
       "path": ".pi-lens.json",
       "purpose": "pi-lens 静态检查规则开关",
       "tier": "asserted",
-      "premises": []
+      "premises": [],
+      "level": "normative"
     },
     "kaa-comparison": {
       "type": "report",
@@ -166,7 +180,8 @@
       "premises": [
         "pkg",
         "design"
-      ]
+      ],
+      "level": "informative"
     },
     "spec-pdca-template": {
       "type": "doc",
@@ -177,7 +192,8 @@
       "premises": [
         "readme",
         "pkg"
-      ]
+      ],
+      "level": "informative"
     }
   }
 }

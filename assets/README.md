@@ -18,8 +18,64 @@
 | **资产 / 档案** | 人 | — | 有下次消费者、可被引用 → **资产**（进本登记）；一次性过程文件 → **档案**（不进） |
 | `tier` | 人（自估） | `verified` / `asserted` / `stub` | 对应 `playbooks/claim-tiering.md` 的 `[跑]` / `[读·推]` / 未实现 |
 | `trust` | **派生**，不手写 | `verified` / `asserted` / `stub` / `stale` | 由 `premises` 保鲜度决定 |
+| `level` | 人（自估，可省） | `normative` / `informative` | **要求等级**——回答「冲突时以谁为准」 |
 
 **`tier` 是自称，`trust` 是实得。** `tier=verified` 必须给 `evidence`（可跑命令），否则 `scan` 拒收。
+
+### `level`：冲突时以谁为准（RFC 2119 的机械形式）
+
+`tier` 回答「它可不可信」，`level` 回答**另一个问题**：「它和别的东西冲突时听谁的」。
+两者正交——一份 `tier=verified` 的报告（跑过、可信）依旧只是 `informative`（错了不影响别人怎么做）。
+
+出处（已查 RFC 原文）：RFC 2119 开篇——
+
+> the force of these words is modified by **the requirement level of the document** in which they are used.
+
+W3C 的 normative/non-normative 章节、ISO 的 informative annex 都是同一机制。
+
+| 取值 | 含义 | 本仓现例 |
+| --- | --- | --- |
+| `normative` | 它说什么，**别人必须照做 / 照它验收** | `requirements` · `design` · `pkg` · `tests` · `config` |
+| `informative` | 它**描述/记录/说明**现状，可以错而不影响别人怎么做 | `readme` · `fr-gap`（报告）· `design-draft`（草案）· `backlog` |
+| （省略） | 未声明 ⇒ **不参与仲裁**（不编默认值） | — |
+
+**等级序不变式**（`check` 当错报，非提示）：**`normative` 资产的依据不得是 `informative`**。
+判据：否则「上层的正确性靠下层的记述来保证」——那份报告/草案一失准，上层无任何依据能把它拉回来。
+反向（`informative` 依据 `normative`）是**正常**的：低等级锚在高等级上（本仓 16 条里 6 条属此）。
+
+反例（`check` 实际拦下）：`design` 依据 `readme` →
+
+```text
+- design: level 序违反——normative 资产把 informative 资产 'readme' 当依据
+```
+
+### 「谁违反了原则」——两个可机检面
+
+`level` 回答「以谁为准」，落实为两条**机械判据**（都在 `check` 里，非提示）：
+
+| # | 判据 | 拦什么 | 出处 |
+| --- | --- | --- | --- |
+| ① | **等级序不变式**：`normative` 资产不得以 `informative` 为据 | 上层的正确性锚在下层的记述上 | RFC 2119（等级修正词的力量） |
+| ② | **断言覆盖**：需求里断言的 FR/NFR 必须在 §7 覆盖审计表里有条目 | 声明了义务却没交代履行方式 | 本仓 `docs/requirements.md` §7 |
+
+**判据 ② 与本仓实际语法对齐**（不另立格式）：断言面认两种写法（`- **FR-11**：…` 与 `| NFR-1 | …`），
+审计面**展开 `FR-1/2/3` 合并写法**（本仓真在用）；正文里 `| FR-1 |` 形表格**不被当审计面**（有测试钉住）。
+
+实测反例（`check` 拦下）：从审计表删掉一行 `FR-26` →
+
+```text
+✗ 1 条断言无实现覆盖审计（有声的命令）：
+  - FR-26
+```
+
+**与 `stale` 的区别**：`stale` 是**维护队列**（依据物变了，只报不拦）；上述两条是**契约违约**（拦）。
+
+**两轴正交表**（别把 `level` 当 `tier` 的别名）：
+
+| | `tier=verified` | `tier=asserted` |
+| --- | --- | --- |
+| **`level=normative`** | 需求基线（跑过验收、且必须照做） | 设计现状（未逐条跑，但实现必须遵） |
+| **`level=informative`** | 生成报告（脚本跑出的读数，但只是记述） | 草案 / 上手文档 |
 
 ## Spec 与资产：**关联**，不是归属（ADR 0006）
 
@@ -112,10 +168,16 @@ python3 scripts/assets_scan.py check    # 收尾门（有 stale / 缺证据 → 
 | 2026-10-11 | 加 `plan` 命令（改动→要刷的资产集，一步出范围+顺序） | jev `choice` conf 0.97 | **加** |
 | 2026-10-11 | `premises` 支持**关系分型**（`anchors`/`generated_from`/`verifies`/`documents`）+ 资产带 **`spec` 块** + `delivery` 交付门（缺角色 rc=1） | 四词皆**驱动 stale**（kind 只作语义标签）；交付门判「角色齐不齐」与成熟度（`tier`）**两轴不混** | **加** |
 | 2026-10-11 | `dev-board` / `lessons` 归为**档案**、移出登记 | jev `choice` conf 0.77；两者是过程记录，被测试当**夹具**读（非可复用资产）；其 premises 挂活 `pkg`/`tests` ⇒ 任何代码改动都令它们 stale ⇒ `check` 永久红（正是「把档案当资产」反模式）。活耦合已由 `test_typecheck`/`test_docs` 直接守，不靠 stale 提醒 | **移除** |
+| 2026-10-12 | 加 `level` 字段（`normative`/`informative`）+ **等级序不变式** | RFC 2119 原文「the force of these words is modified by **the requirement level of the document** in which they are used」+ W3C normative/non-normative 同机制；1.00 判「这属于哪类冲突」= **实现违反规格（违规判定）**，不是数据冲突 ⇒ 需要的是**等级**而非**分数**；实测业界（SPDX/SLSA/in-toto）**无人做传递信任系数** | **加字段 + 挡反例** |
+| 2026-10-12 | 加「断言覆盖」检查（§7 审计表未覆盖的 FR/NFR ⇒ `check` rc=1） | 补完事实后 jev `choice` **conf 1.00**（0.77→1.00，靠实测：`RELATION_KINDS` 四型**全是上游语义、无一表达范围**；但 ③ **不需要新边型**——复用已有 §7 审计表即可，成本远低于原估的「需先 ADR」）；用户「谁违反了原则」的直译 | **加检查** |
 
 ## 已知局限（诚实声明，别当没有）
 
 - 用 **git 提交时间 + 工作区脏**判 stale，不追踪语义变化：浅层改动也会触发 stale（**宁可误报**，
   不放过漂移）；未 commit 的新文件依赖 `git status` 而非 mtime。
 - 不建跨项目/企业级聚合（YAGNI，无真实信号；出现再议）。
+- **`derive` 是 `~60ms/条`（全是 git 子进程）**：16 条 ≈ 1s，可忽略；外推 100 条约 6s、1000 条约 60s。**实测批量取 git 事实可省 ~93%**（16 次调用 231ms vs 单次 13ms）——
+  但**不做**（jev `choice` conf 0.92）：当前资产是**人工精挑**（`由人定`）而非自动增长，
+  **增长率未知**（`registry.json` 仅 9 次提交且同日）；真疼时再批量取，届时形态可能已变。
+  判据不是「优化不好」，是**为一条没有信号的成本曲线改动 `derive` 核心路径不划算**。
 - 不接 disflow 引擎自动消费（`tree.assets` 是**任务产出物**，本登记是**项目资产**，两者不同层）。
