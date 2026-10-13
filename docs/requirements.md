@@ -157,6 +157,13 @@ disflow 是一个**任务分发流引擎**：以**看板**为一等实体（固�
   「这可能是它的下一阶段」并给出可照抄的 `reopen` + `expand`；`doctor` 报出声明了 `awaits`
   指向另一棵树的树对（`awaits` = 承认依赖 ⇒ 本该是同树内的 `requires`）。
   **只提示不拒收**（目标是否独立是语义问题，词面/结构信号都有假阳性）。见 `design.md` §6.3。
+- **FR-36**：**节点可追溯（`why`）**：给定 `(树, 节点)`，把事件流里与它相关的记录
+  **按原序**一屏打出（树级背景 `tree.init/close` + `require/start/collect/rescope/acceptance/`
+  `retry/skip/fail/done`），含「谁执行（`lease.holder`）/ 干了什么（`result.summary`）/
+  为何当口改（`reason`）/ 拿什么验（`acceptance.cmd`）/ 过没过（`evidence.exit`）」。
+  **纯读**：不产生新事实、不落事件；无记录时**明说没有**（不打白屏）。
+  为何要：事件流已是唯一真相，但「出问题找谁去」原本要把散在多个 kind 里的字段**人工拼**——
+  手拼只有会写 Python 的人能看。见 `design.md` §6 `views.trace_node`。
 
 ---
 
@@ -228,6 +235,7 @@ disflow 是一个**任务分发流引擎**：以**看板**为一等实体（固�
 | **FR-33 Spec 一等公民（引擎级实体）** | ✅ | `specs` 与 `trees` **并列**的顶层实体：`spec.*` 事件闭集（init/goal/gate/link/unlink/deliver/undeliver/close/reopen）+ 投影 + 7 个 CLI 动词；`tests/test_spec_entity.py`（21 项：实体/重放/拒收/硬边界/CLI） |
 | **FR-34 Spec 关联资产（非归属）** | ✅ | 资产层：`assets/registry.json` 的 `spec.required_roles`/`delivers` + `assets_scan.py delivery` 门；`fr_check` 机检 FR-34 |
 | **FR-35 建树判据 / 跨树等待自检** | ✅ | 结构信号（非词面）：存在 `closed` 树 ⇒ `init` 提示 + 可照抄 `reopen`/`expand` 命令；`doctor` 报声明了 `awaits` 的树对（`awaits` = 承认依赖 ⇒ 本该是同树内 `requires`）；`tests/test_tree_cardinality.py`（6 项：提示/可照抄命令/词面仅附加/doctor advisory 不判红/不误报/干净 state） |
+| **FR-36 节点可追溯（`why`）** | ✅ | `views.trace_node` 按原序收本节点的 `require/start/collect/rescope/acceptance/retry/skip/fail/done` + 树级背景（`tree.init/close`）；`why <tree> <node> [--json]` 纯读；无记录明说；`tests/test_why.py`（8 项：原序/只收本树本节点/六关键 kind 全收/空 summary 不崩/缺 payload 不崩/无记录明说/done 打勾/纯读不改事件流与投影） |
 | FR-24/25 上下文与写面 | ✅ | `brief` 祖先链注入；`pack_waves` 冲突排队；`tests/test_core.py` |
 | **FR-26 租约** | ✅ | 带 `expires_at`；`reap` 显式回收；`tests/test_lease.py`（**本轮补齐**） |
 | FR-27 卡死 | ✅ | `is_stuck`；`tests/test_core.py` |

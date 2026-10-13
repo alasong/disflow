@@ -675,6 +675,27 @@ def cmd_tree(engine: Engine, args) -> int:
     return 0
 
 
+def cmd_why(engine: Engine, args) -> int:
+    """追溯一个节点：把它在事件流里的完整链子按**原序**打出来。
+
+    为何要这个动词（不是“便利功能”）：事件流是唯一真相，但“出问题找谁去”要把散在
+    `start`(lease.holder) / `collect`(result) / `rescope`(reason) / `acceptance`(reason) /
+    `done`(evidence) 里的字段**人工拼起来** —— 手拼只有会写 Python 的人能看。
+    本动词不产生新事实、不落事件（纯读，与 `board` 同一条纪律）。
+
+    节点不存在于投影时**不拒收**：可能它只出现在事件里（如 `node.require` 的 dep），
+    或名字拼错 —— 都交给 `views.why_lines` 明说“没有记录”，不静默给白屏。
+    """
+    events = store.load_events(engine.storage)
+    rows = views.trace_node(events, args.tree, args.node)
+    if args.json:
+        _dump({"tree": args.tree, "node": args.node, "events": rows})
+        return 0
+    for line in views.why_lines(rows, tree=args.tree, node=args.node):
+        print(line)
+    return 0
+
+
 def cmd_graph(engine: Engine, args) -> int:
     target = engine.tree(args.tree)
     print(views.to_dot(target, args.tree) if args.dot else "\n".join(views.graph_lines(target)))
@@ -1332,6 +1353,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     node = add("tree", cmd_tree)
     node.add_argument("tree")
+
+    node = add("why", cmd_why)
+    node.add_argument("tree")
+    node.add_argument("node")
+    node.add_argument("--json", action="store_true",
+                      help="机器读态：原样事件链（含 fields），不渲染")
 
     node = add("graph", cmd_graph)
     node.add_argument("tree")

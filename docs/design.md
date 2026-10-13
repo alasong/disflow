@@ -439,6 +439,7 @@ disflow host-next <tree> [--json]
 disflow board <tree> [--stage S] [--all] [--all-columns] [--json]   # 看板：按 stage 分列 × 列内树层级 × 状态分组
 disflow tree  <tree>                        # 树：按 parent 缩进
 disflow graph <tree> [--dot]                # 图：requires/relates
+disflow why   <tree> <node> [--json]        # 追溯：该节点的事件链（原序；纯读，FR-36）
 ```
 
 **看板布局只有一处实现**（`views.board_layout`，2026-10-11 用户要求「按阶段列出来 + 按树结构的
@@ -533,6 +534,28 @@ disflow close <tree>                 # 跑 tree_closure 门 → 标记该树 clo
 
 共同内容词仍会打印，但**只作附加信息、明确标注「非判据」**。判据：`tests/test_tree_cardinality.py`
 （6 项：提示/命令/不误报；doctor 的 awaits 对/不误报/悬空不报）。
+
+### 6.4 追溯：`why` 把「这个节点发生了什么」捞回来（FR-36，2026-10-13）
+
+**问题**：事件流是唯一真相，但「出问题找谁去」原本要把散在多个 kind 里的字段**人工拼**
+——`start` 的 `lease.holder`（谁执行）、`collect` 的 `result.summary`（干了什么）、
+`rescope`/`acceptance` 的 `reason`（为何当口改）、`done` 的 `evidence`（拿什么验、过没过）。
+手拼只有会写 Python 的人能看。
+
+**实现**：`views.trace_node(events, tree, node)` —— **纯读**，不碰 IO（事件流由调用方给），
+按**事件流原序**（顺序本身就是「何时发生」的线索）收三类行：
+
+| 收什么 | kind |
+| --- | --- |
+| 本节点的事件 | `require` / `start` / `collect` / `rescope` / `acceptance` / `retry` / `skip` / `fail` / `done` / `expand` / `produce` / `consume` / …（`TRACE_KINDS`） |
+| **树级背景**（`node` 为空） | `tree.init`（目标是什么）/ `tree.close` / `tree.reopen`（`TREE_KINDS`） |
+
+**为何必须收树级背景**：实测 `tree.init` 的 `node` 是 **`None`**（开发时踩到：只按节点名过滤会把它们全丢）
+——而「**为什么要做这个节点**」就写在 `tree.init` 的 goal 里，滤掉后追溯就只剩「做了什么」、没有「为了什么」。
+
+**输出**：`why <tree> <node> [--json]`（人读一屏 / 机器原样事件链）。无记录时**明说没有**。
+判据：`tests/test_why.py`（8 项：原序 / 只收本树本节点 / 六关键 kind 全收 / 空 summary 不崩 /
+缺 payload 不崩 / 无记录明说 / done 打勾 / 纯读不改事件流与投影）。
 
 ---
 
@@ -822,7 +845,7 @@ disflow import mgt <path> --tree <T>               # 迁移（§10）
 disflow doctor                                     # 自检
 ```
 
-> 共 36 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
+> 共 43 个动词，与 `--help` 一致；新增动词时同步本表。架构图见 `docs/architecture.md` §7。
 
 ### 9.1 边界：`apply` 执行、`reap` 只计划
 

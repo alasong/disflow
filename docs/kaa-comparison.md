@@ -16,23 +16,23 @@
 
 ```bash
 # disflow
-wc -l disflow/*.py | tail -1          # 7534 行
+wc -l disflow/*.py | tail -1          # 8331 行
 ls disflow/*.py | wc -l               # 20 模块
-grep -c 'node = add("' disflow/cli.py # 35 动词
-python3 -c "import sys;sys.path.insert(0,'.');from disflow.vocab import EVENT_KINDS;print(len(EVENT_KINDS))"  # 25
+grep -c 'node = add("' disflow/cli.py # 43 动词
+python3 -c "import sys;sys.path.insert(0,'.');from disflow.vocab import EVENT_KINDS;print(len(EVENT_KINDS))"  # 34
 # kaa
-wc -l ~/.pi/agent/skills/kaa/kaa.py ~/.pi/agent/skills/kaa/engine/*.py | tail -1  # 4343 行
-wc -l ~/.pi/agent/skills/kaa/spec/kaa.toml                                       # 1288 行
+wc -l ~/.pi/agent/skills/kaa/kaa.py ~/.pi/agent/skills/kaa/engine/*.py | tail -1  # 4351 行
+wc -l ~/.pi/agent/skills/kaa/spec/kaa.toml                                       # 1290 行
 ```
 
 | 维度 | disflow | kaa | 差 |
 | --- | --- | --- | --- |
-| 代码行数 | **7534** / 20 模块 | 4343 / 7 模块 | disflow **1.7×** |
-| 规格文件 | 0（配置散在 `boards.json`/`disflow.json`） | **1288 行** `spec/kaa.toml` | kaa 独有 |
-| CLI 动词 | **35** | 15 | disflow 多 20 |
-| 事件 kind | 25 | 28 | 相当 |
-| 门 | 7 类（+本轮三新门） | 7 道 | 数量相当 |
-| 测试用例 | **852+** | 302 | disflow 2.8× |
+| 代码行数 | **8331** / 20 模块 | 4351 / 7 模块 | disflow **1.9×** |
+| 规格文件 | 0（配置散在 `boards.json`/`disflow.json`） | **1290 行** `spec/kaa.toml` | kaa 独有 |
+| CLI 动词 | **43** | 15 | disflow 多 28 |
+| 事件 kind | 34 | 28 | 相当 |
+| 门 | 7 类（+三新门） | 7 道 | 数量相当 |
+| 测试用例 | **943** | 302 | disflow 3.1× |
 | 规模预算 | `size_budget=400`（软，可 `size_waiver`） | `loc_hard=4222` + `reserve=100`（硬，上修需三步记账） | **机制差最大的一项** |
 
 ## 2. disflow 有、kaa 没有（实测）

@@ -472,3 +472,129 @@ def to_dot(tree: dict, name: str = "disflow") -> str:
             lines.append(f'  "{src}" -> "{dst}" [{style.get(kind, "")}];')
     lines.append("}")
     return "\n".join(lines)
+
+
+# ── 追溯（`why`）：把「这个节点发生了什么」从事件流里捡回来 ────────────────
+#
+# **为何需要**：事件流已是唯一真相，但“出问题找谁去”要把散在多个 kind 里的字段
+# 人工拼起来（start 的 lease.holder / collect 的 result / rescope 的 reason /
+# acceptance 的 reason / done 的 evidence）。手拼 = 只有会写 Python 的人能看。
+#
+# **为何在 views**：它不产生新事实，只把**已有事件**重排成一屏——与看板/树/图同一类
+# （同一事实的不同渲染）。零新存储、零新事件、不参与就绪判定。
+
+# 与节点直接相关的 kind（按事件流原序呈现，不重排：顺序本身就是“何时发生”的线索）。
+TRACE_KINDS: tuple[str, ...] = (
+    "node.expand", "node.require", "node.unrequire", "node.relate", "node.unrelate",
+    "node.produce", "node.consume", "node.context", "node.stage",
+    "node.start", "node.collect", "node.rescope", "node.acceptance",
+    "node.retry", "node.skip", "node.fail", "node.done",
+)
+
+# 每条事件里值得单独拎出来的一行摘要（人读态“一眼看到关键”）。
+# 缺字段就给同一套回退：不猜、不静默——空就明说空。
+_WHY_SUMMARY: dict[str, str] = {
+    "node.start":    "开工（holder={holder} lease→{expires}）",
+    "node.collect":  "自报结果：{status} —— {summary}",
+    "node.rescope":  "当口改写面：{touch_plan}（理由：{reason}）",
+    "node.acceptance": "当口补挂验收：{cmd} expect={expect}（理由：{reason}）",
+    "node.done":     "过门（验收 exit={exit}；本节点引入 {introduced} 处改动）",
+    "node.skip":     "跳过（理由：{reason}）",
+    "node.fail":     "失败（理由：{reason}）",
+    "node.retry":    "重试（理由：{reason}）",
+    "node.expand":   "分解出 {children}",
+    "node.require":  "加依赖 → {dep}",
+    "node.produce":  "登记产出物：{asset}",
+    "node.consume":  "消费产物：{asset}",
+    "tree.init":     "树建立（目标：{summary}）",
+    "tree.close":    "树关闭（终止门过）",
+    "tree.reopen":   "树重开",
+}
+
+
+def _first_line(text: object, limit: int = 120) -> str:
+    """取首行并截断。**空串返回空串**（不能写 `splitlines()[0]` —— 空串时越界）。"""
+    lines = str(text or "").splitlines()
+    return (lines[0] if lines else "")[:limit]
+
+
+def _why_fields(event: dict) -> dict:
+    """把一条事件压成一行的字段字典（缺失项填空串，**不猜**）。"""
+    raw = event.get("payload")
+    payload: dict = raw if isinstance(raw, dict) else event
+    if payload is None:  # 事件体异常（None）——不崩，按空处理
+        payload = {}
+    lease = payload.get("lease") or {}
+    result = payload.get("result") or {}
+    evidence = payload.get("evidence") or {}
+    acceptance = payload.get("acceptance") or {}
+    children = payload.get("children") or []
+    introduced = evidence.get("introduced") or []
+    return {
+        "holder": str(lease.get("holder") or ""),
+        "expires": str(lease.get("expires_at") or ""),
+        "status": str(result.get("status") or ""),
+        "summary": _first_line(result.get("summary") or payload.get("goal")),
+        "touch_plan": ",".join(payload.get("touch_plan") or []),
+        "reason": _first_line(payload.get("reason")),
+        "cmd": str(acceptance.get("cmd") or ""),
+        "expect": str(acceptance.get("expect") or "exit0"),
+        "exit": str((evidence.get("acceptance") or {}).get("exit", "")),
+        "introduced": str(len(introduced)),
+        "children": ",".join(str(c.get("id")) for c in children if isinstance(c, dict)),
+        "dep": str(payload.get("dep") or ""),
+        "asset": str(payload.get("asset") or payload.get("name") or ""),
+    }
+
+
+# 与树本身相关的事件（`node` 为空）——追溯节点时**也要看得到树级背景**
+# （`tree.init` 的 goal、`tree.close` 的终止）。实测：`tree.init` 的 `node` 是 `None`，
+# 只按节点名过滤会把它们全部丢掉，而“为什么要做这个节点”往往在 goal 里。
+TREE_KINDS: tuple[str, ...] = ("tree.init", "tree.boards", "tree.close", "tree.reopen")
+
+
+def trace_node(events: list[dict], tree: str, node: str,
+               include_tree: bool = True) -> list[dict]:
+    """该节点的完整事件链（**原序**，不重排）。
+
+    入参是**已读好的事件流**（调用方给 `store.load_events` 的结果）——本函数不碰 IO，
+    保视图层“纯读 + 可单测”。`tree` 必筛；节点行按 `node` 筛。
+
+    `include_tree=True`（默认）：**树级事件（`node` 为空）也收**——它们是该节点的背景
+    （goal 是什么、树何时关闭），而滤掉后“为什么要做”就丢了。仅按 kind 白名单收，
+    避免把别的节点的事混进来。
+    """
+    rows: list[dict] = []
+    for event in events:
+        if str(event.get("slug") or "") != tree:
+            continue
+        kind = str(event.get("kind") or "")
+        event_node = str(event.get("node") or "")
+        if event_node == node:
+            pass
+        elif include_tree and not event_node and kind in TREE_KINDS:
+            pass                                   # 树级背景行
+        else:
+            continue
+        fields = _why_fields(event)
+        tmpl = _WHY_SUMMARY.get(kind)
+        try:
+            text = tmpl.format(**fields) if tmpl else ""
+        except KeyError:
+            text = ""
+        rows.append({"ts": str(event.get("ts") or ""), "kind": kind,
+                     "text": text, "fields": fields})
+    return rows
+
+
+def why_lines(rows: list[dict], *, tree: str, node: str) -> list[str]:
+    """人读态：一节点一屏追溯。空就**明说**空（不静默给一张白屏）。"""
+    if not rows:
+        return [f"{tree}/{node}：事件流里没有该节点的记录"
+                "（名字拼错？或该节点还没被任何写动词碰过）"]
+    lines = [f"{tree}/{node} —— {len(rows)} 条事件（原序）"]
+    for row in rows:
+        mark = "✓" if row["kind"] == "node.done" else "·"
+        body = row["text"] or "（本 kind 无摘要模板，见 --json）"
+        lines.append(f"  {mark} {row['ts'][11:19]} {row['kind']:16s} {body}")
+    return lines
