@@ -40,7 +40,7 @@ wc -l ~/.pi/agent/skills/kaa/spec/kaa.toml                                      
 | 能力 | 依据 | 为何 kaa 无 |
 | --- | --- | --- |
 | **多树 + 跨树 `awaits` 信号** | FR-22/23；`disflow/engine.py` `closed_trees` | kaa 是单树（`slug` 维度） |
-| **看板是一等实体** | [ADR 0005](decisions/0005-看板提升为一等实体.md)；`views.board_layout` | kaa 无「板」概念 |
+| **看板策略挂在列上** | [ADR 0005](decisions/0005-看板提升为一等实体.md) 策略层（WIP/默认验收）+ `views.board_layout`；**结构层已由 [ADR 0015](decisions/0015-板非顶层实体.md) 降级**（板非顶层实体） | kaa 无「板」概念 |
 | **WIP 逐列并发上限** | FR-30；`dispatch.drive` 的 `deferred` | kaa 无并发上限 |
 | **验收策略挂在板上（逐列默认）** | FR-31；`Engine._effective_acceptance` | kaa 的门由 `node_type` 决定 |
 | **web 入口** | [ADR 0011](decisions/0011-web入口-实现.md)；`disflow/web.py` | kaa 无 |

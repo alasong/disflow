@@ -57,6 +57,7 @@
 | `docs/decisions/0012-防漂移三门.md` | decision | active | 0012：**防漂移三门**（goal_align/code_quality/verify_real）—— 硬门 + 逃生口，理由过质量门 |
 | `docs/decisions/0013-NFR3-FR16边界.md` | decision | active | 0013：NFR-3/FR-16 边界 —— 禁「常驻」而非禁「入口」；机检判据与需求措辞对齐 |
 | `docs/decisions/0014-本质与未来形态.md` | decision | active | 0014：**本质与未来形态** —— 四个不可动原子 + 「消费还是复制判据」的替换判据 + 「能不能只用树」的裁决（jev conf 0.88） |
+| `docs/decisions/0015-板非顶层实体.md` | decision | active | 0015：**板不是顶层实体** —— 降级 ADR 0005 结构层（保留策略层）；「多块板 = 多棵树」，D6 关闭（jev conf 1.00） |
 | `docs/decisions/0009-步骤准入-软门槛.md` | decision | active | 0009：步骤准入**软门槛** —— 允许说明性步骤但必须显式标注「无判据」；skill 要保证准确性必须有可执行入口 |
 | `docs/decisions/0010-kaa融合-声明式.md` | decision | active | 0010：kaa 与 disflow 融合 —— 只取**互补判据**进现有扩展点（`weak_reason`/`claim_mismatch` 已落地），**不做双引擎** |
 
